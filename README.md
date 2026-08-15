@@ -7,6 +7,7 @@ RailwayではWebサービスではなく、常駐Workerとして起動します�
 - [設計・開発ガイド](docs/ARCHITECTURE.md)
 - [Discord Intent・使用情報一覧](docs/DISCORD_SETTINGS.md)
 - [RAGNA Online ギルド・ギルドバトル仕様](docs/GAME_SPEC.md)
+- [RAGNA Online 使い魔マスターデータ](docs/FAMILIAR_MASTER.md)
 
 ## 必要な設定
 
