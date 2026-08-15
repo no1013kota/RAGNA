@@ -88,7 +88,7 @@ Cog側を変更せずに済みます。
 - 1機能だけで使う複雑な計算・判定が増えた場合は、その機能内に `service.py` を追加します。
 - 新しい常設ボタンには固定の `custom_id` を付け、Cog読込時にViewを再登録します。
 - 新しいSlash Commandは対象Guildを明示し、必要な権限を設定します。
-- 利用者向けの変更は `docs/FEATURES.md`、配置変更はこの資料も更新します。
+- 公開済みの利用者向け機能は `docs/FEATURES.md` へ記載します。未公開機能は各仕様書へ「公開予定」と明記し、本番公開後に `FEATURES.md` へ移します。配置変更はこの資料も更新します。
 - 変更後は `python scripts/check_project.py` と `python -m unittest discover -s tests` を実行します。
 
 ## 大きなファイルをさらに分ける基準
