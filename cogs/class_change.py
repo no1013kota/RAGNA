@@ -8,7 +8,7 @@ import config
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
-from database import (
+from database.trial_member import (
     get_trial_member,
     get_trial_member_thread,
     get_class_change_candidates,

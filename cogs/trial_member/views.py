@@ -5,14 +5,14 @@ import logging
 import discord
 import config
 
-from database import (
+from database.trial_member import (
     add_evaluator_review,
     get_trial_member_end_survey,
     delete_trial_member_end_survey,
     get_trial_member,
     get_evaluated_trial_member_ids,
-    get_vc_time
 )
+from database.xp import get_vc_time
 
 
 logger = logging.getLogger(__name__)

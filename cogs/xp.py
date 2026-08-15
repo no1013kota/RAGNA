@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from discord.ext import commands, tasks
 from discord import app_commands
 from utils import format_time
-from database import (
+from database.xp import (
     get_vc_time,
     add_vc_time,
     add_vc_time_batch,

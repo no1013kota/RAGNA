@@ -8,12 +8,13 @@ import asyncio
 from discord.ext import commands, tasks
 from discord import app_commands
 from datetime import datetime, timedelta
-from .trial_member_views import (
+from .views import (
     EvaluationPanelView,
     TrialMemberEndSurveyView
 )
-from database import (
-    add_balance,
+from database.coin import add_balance
+from database.member import remove_start_ticket
+from database.trial_member import (
     add_trial_member,
     add_evaluation,
     add_comment,
@@ -31,8 +32,7 @@ from database import (
     add_trial_member_end_survey,
     get_expired_trial_member_end_surveys,
     delete_trial_member_end_survey,
-    remove_start_ticket,
-    clear_trial_member_evaluations
+    clear_trial_member_evaluations,
 )
 from utils import ensure_panel_message
 

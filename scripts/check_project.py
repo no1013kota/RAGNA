@@ -15,11 +15,19 @@ REQUIRED_FILES = (
     ".env.example",
     "bot.py",
     "config.py",
-    "database.py",
+    "database/__init__.py",
+    "database/core.py",
     "discord_settings.py",
     "schema.sql",
     "requirements.txt",
     "railway.json",
+)
+FEATURE_PACKAGES = (
+    "coin",
+    "hotel",
+    "member",
+    "ticket",
+    "trial_member",
 )
 
 
@@ -29,6 +37,16 @@ def check_required_files(errors: list[str]) -> None:
     for relative_path in REQUIRED_FILES:
         if not (ROOT / relative_path).is_file():
             errors.append(f"必須ファイルがありません: {relative_path}")
+
+
+def check_feature_packages(errors: list[str]) -> None:
+    """大きな機能がCogとDiscord UIに分離されているか確認する。"""
+
+    for package_name in FEATURE_PACKAGES:
+        for filename in ("__init__.py", "cog.py", "views.py"):
+            relative_path = Path("cogs") / package_name / filename
+            if not (ROOT / relative_path).is_file():
+                errors.append(f"機能パッケージのファイルがありません: {relative_path}")
 
 
 def check_python_syntax(errors: list[str]) -> None:
@@ -92,6 +110,7 @@ def check_database(errors: list[str]) -> None:
 def main() -> int:
     errors: list[str] = []
     check_required_files(errors)
+    check_feature_packages(errors)
     check_python_syntax(errors)
     check_configuration(errors)
     check_database(errors)

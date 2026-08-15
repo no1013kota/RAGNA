@@ -8,7 +8,7 @@ import config
 from discord.ext import commands
 from discord import app_commands
 from utils import format_time
-from database import (
+from database.ranking import (
     get_balance_ranking,
     get_vc_ranking,
     get_xp_ranking,

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import closing
@@ -14,19 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_database_module(database_path: Path):
-    """本番DBに触れないよう、一時DBを参照するdatabaseモジュールを読み込む。"""
+    """本番DBに触れないよう、一時DBを参照するdatabaseパッケージを読み込む。"""
 
     previous_path = os.environ.get("DATABASE_PATH")
     os.environ["DATABASE_PATH"] = str(database_path)
     try:
-        spec = importlib.util.spec_from_file_location(
-            "database_under_test", ROOT / "database.py"
-        )
-        if spec is None or spec.loader is None:
-            raise RuntimeError("database.pyを読み込めません")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        # DB_PATHはimport時に確定するため、テストごとに関連モジュールを読み直す。
+        for module_name in list(sys.modules):
+            if module_name == "database" or module_name.startswith("database."):
+                sys.modules.pop(module_name)
+        return importlib.import_module("database")
     finally:
         if previous_path is None:
             os.environ.pop("DATABASE_PATH", None)

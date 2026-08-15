@@ -11,7 +11,7 @@ import discord
 import config
 
 from discord.ext import commands
-from database import init_database
+from database.connection import init_database
 from discord_settings import (
     REQUIRED_INTENT_NAMES,
     create_allowed_mentions,

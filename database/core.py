@@ -1,7 +1,7 @@
-"""RAGNA BotのSQLite永続化レイヤー。
+"""RAGNA BotのSQLite永続化レイヤーの共通実装。
 
 CogからSQLを分離し、Railway Volume上のDBを安全に扱うための関数を提供します。
-すべての書き込みは、このモジュールの関数を経由させてください。
+外部からは ``database.coin`` など、機能別の公開窓口を経由して利用してください。
 """
 
 import logging
@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 # パス設定
 # ==================================================
 
-BASE_DIR = Path(__file__).parent
-SCHEMA_PATH = BASE_DIR / "schema.sql"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SCHEMA_PATH = PROJECT_ROOT / "schema.sql"
 
 
 def _resolve_database_path() -> Path:
@@ -33,7 +33,7 @@ def _resolve_database_path() -> Path:
     if railway_volume_path:
         return Path(railway_volume_path) / "ragna.db"
 
-    return BASE_DIR / "data" / "ragna.db"
+    return PROJECT_ROOT / "data" / "ragna.db"
 
 
 DB_PATH = _resolve_database_path()
