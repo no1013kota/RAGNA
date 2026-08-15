@@ -387,7 +387,11 @@ class XP(commands.Cog):
     @tasks.loop(minutes=5)
     async def save_loop(self):
 
-        await self.flush_sessions()
+        try:
+            await self.flush_sessions()
+        except Exception:
+            # pending値は保存成功まで消さないため、次回ループで再試行できる。
+            logger.exception("VC時間・XPの定期保存に失敗しました。5分後に再試行します")
 
     # ==================================================
     # 毎日0時の月替わり確認
@@ -395,7 +399,10 @@ class XP(commands.Cog):
     @tasks.loop(time=datetime_time(hour=0,minute=0,second=0,tzinfo=JST))
     async def monthly_reset_loop(self):
 
-        await self.ensure_current_month()
+        try:
+            await self.ensure_current_month()
+        except Exception:
+            logger.exception("VC月次リセットの確認に失敗しました")
 
     # ==================================================
     # Bot起動時の月間データ確認

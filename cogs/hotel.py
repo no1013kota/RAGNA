@@ -423,7 +423,13 @@ class HotelCog(commands.Cog):
 
         now = datetime.now(timezone.utc)
 
-        for hotel in get_all_hotels():
+        try:
+            hotels = get_all_hotels()
+        except Exception:
+            logger.exception("期限切れ宿屋の一覧取得に失敗しました")
+            return
+
+        for hotel in hotels:
 
             channel_id = hotel[0]
             text_channel_id = hotel[1]
@@ -444,14 +450,29 @@ class HotelCog(commands.Cog):
                     await text_channel.delete()
                 except discord.NotFound:
                     pass
+                except discord.HTTPException:
+                    logger.exception(
+                        "期限切れ宿屋のテキストチャンネル削除に失敗しました: %s",
+                        text_channel_id,
+                    )
+                    continue
 
             if vc:
                 try:
                     await vc.delete()
                 except discord.NotFound:
                     pass
+                except discord.HTTPException:
+                    logger.exception(
+                        "期限切れ宿屋のVC削除に失敗しました: %s",
+                        channel_id,
+                    )
+                    continue
 
-            delete_hotel_room(channel_id)
+            try:
+                delete_hotel_room(channel_id)
+            except Exception:
+                logger.exception("期限切れ宿屋のDB削除に失敗しました: %s", channel_id)
 
     @hotel_delete_task.before_loop
     async def before_hotel_delete(self):

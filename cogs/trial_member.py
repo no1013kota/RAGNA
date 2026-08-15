@@ -1191,7 +1191,12 @@ class TrialMember(commands.Cog):
     async def check_trial_member_end(self):
 
         now = datetime.now()
-        trial_members = get_all_trial_member_end_dates()
+        try:
+            trial_members = get_all_trial_member_end_dates()
+        except Exception:
+            logger.exception("自動転生の対象者一覧を取得できませんでした")
+            return
+
         guild = self.bot.get_guild(config.GUILD_ID)
 
         if guild is None:
@@ -1212,10 +1217,14 @@ class TrialMember(commands.Cog):
             if member is None:
                 continue
 
-            await self.execute_trial_member_end(
-                member=member,
-                reason="自動転生"
-            )
+            try:
+                await self.execute_trial_member_end(
+                    member=member,
+                    reason="自動転生"
+                )
+            except Exception:
+                # 1人の失敗で他の対象者や次回の定期確認まで停止させない。
+                logger.exception("自動転生に失敗しました: user_id=%s", user_id)
 
     @check_trial_member_end.before_loop
     async def before_check_trial_member_end(self):
@@ -1227,7 +1236,11 @@ class TrialMember(commands.Cog):
     @tasks.loop(hours=1)
     async def check_trial_member_end_surveys(self):
 
-        surveys = get_expired_trial_member_end_surveys()
+        try:
+            surveys = get_expired_trial_member_end_surveys()
+        except Exception:
+            logger.exception("期限切れアンケートの一覧を取得できませんでした")
+            return
 
         for ended_trial_member_id, channel_id, message_id in surveys:
             try:
@@ -1244,8 +1257,16 @@ class TrialMember(commands.Cog):
 
             except discord.HTTPException as e:
                 logger.warning(f"アンケート削除失敗：{ended_trial_member_id} / {e}")
+                # 一時的な失敗ならDB記録を残し、次回ループで再試行する。
+                continue
 
-            delete_trial_member_end_survey(ended_trial_member_id)
+            try:
+                delete_trial_member_end_survey(ended_trial_member_id)
+            except Exception:
+                logger.exception(
+                    "期限切れアンケートのDB記録を削除できませんでした: user_id=%s",
+                    ended_trial_member_id,
+                )
 
     @check_trial_member_end_surveys.before_loop
     async def before_check_trial_member_end_surveys(self):

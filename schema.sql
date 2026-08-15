@@ -117,6 +117,21 @@ id INTEGER PRIMARY KEY CHECK (id = 1),
 year_month TEXT NOT NULL
 );
 
+-- 月次報酬をユーザー・ロール単位で一度だけ支給するための記録
+CREATE TABLE IF NOT EXISTS monthly_reward_grants (
+year_month TEXT NOT NULL,
+user_id INTEGER NOT NULL,
+role_id INTEGER NOT NULL,
+amount INTEGER NOT NULL,
+created_at TEXT NOT NULL,
+
+PRIMARY KEY (
+    year_month,
+    user_id,
+    role_id
+)
+);
+
 -- ==================================================
 -- coin残高
 -- ==================================================

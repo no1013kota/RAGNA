@@ -6,7 +6,7 @@ import config
 
 from discord.ext import commands, tasks
 from discord import app_commands
-from datetime import datetime, time, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from discord.app_commands import Choice
 from database import (
     get_balance,
@@ -14,8 +14,9 @@ from database import (
     add_transaction,
     transfer_balance,
     get_monthly_reward_state,
-    set_monthly_reward_state
-    )
+    set_monthly_reward_state,
+    grant_monthly_reward,
+)
 from utils import ensure_panel_message
 
 JST = timezone(timedelta(hours=9))
@@ -328,15 +329,30 @@ class Coin(commands.Cog):
 
         await self.bot.wait_until_ready()
 
-    @tasks.loop(time=time(hour=0,minute=0,tzinfo=JST))
+    @tasks.loop(hours=1)
     async def monthly_reward(self):
+        """未処理の月次報酬を確認し、停止期間があっても現在月へ追いつく。"""
+
+        try:
+            await self.process_monthly_rewards()
+        except Exception:
+            # 一時的なDB・Discord障害でループ自体が永久停止しないよう、次回再試行する。
+            logger.exception("月次報酬の処理に失敗しました。1時間後に再試行します")
+
+    async def process_monthly_rewards(self):
+        """現在月の未支給分だけを処理する。"""
 
         today = datetime.now(JST)
-        if today.day != 1:
+        year_month = today.strftime("%Y-%m")
+        saved_year_month = get_monthly_reward_state()
+
+        # 新規DBでは過去分を遡って支給せず、現在月を開始地点として記録する。
+        if saved_year_month is None:
+            set_monthly_reward_state(year_month)
+            logger.info("月次報酬の管理年月を初期化しました: %s", year_month)
             return
 
-        year_month = today.strftime("%Y-%m")
-        if get_monthly_reward_state() == year_month:
+        if saved_year_month == year_month:
             return
 
         guild = self.bot.get_guild(config.GUILD_ID)
@@ -347,51 +363,69 @@ class Coin(commands.Cog):
 
             role = guild.get_role(role_id)
             if role is None:
-                continue
+                raise RuntimeError(f"月次報酬の対象ロールが見つかりません: role_id={role_id}")
 
             for member in role.members:
                 if member.bot:
                     continue
 
-                add_balance(member.id, amount)
-
-                await self.update_debt_status(guild,member)
-
-                add_transaction(
-                    transaction_type="月次支給",
-                    executor_id=None,
-                    target_id=member.id,
+                granted = grant_monthly_reward(
+                    year_month=year_month,
+                    user_id=member.id,
+                    role_id=role.id,
                     amount=amount,
-                    note=role.name
+                    role_name=role.name,
                 )
+                if not granted:
+                    continue
 
                 try:
-                    balance = get_balance(member.id)
-
-                    action = "支給" if amount >= 0 else "徴収"
-
-                    embed = discord.Embed(
-                        title="RAGNA Bank",
-                        description=(
-                            f"月次報酬（{role.name}）\n\n"
-                            f"{abs(amount):,} coin を{action}しました。\n"
-                            f"現在の残高：**{balance:,} coin**"
-                        ),
-                        color=config.COLOR_YELLOW
+                    await self.update_debt_status(guild,member)
+                except Exception:
+                    logger.exception(
+                        "月次報酬後の負債ロール更新に失敗しました: user_id=%s role_id=%s",
+                        member.id,
+                        role.id,
                     )
-                    embed.set_thumbnail(url=member.display_avatar.url)
 
+                balance = get_balance(member.id)
+                action = "支給" if amount >= 0 else "徴収"
+                embed = discord.Embed(
+                    title="RAGNA Bank",
+                    description=(
+                        f"月次報酬（{role.name}）\n\n"
+                        f"{abs(amount):,} coin を{action}しました。\n"
+                        f"現在の残高：**{balance:,} coin**"
+                    ),
+                    color=config.COLOR_YELLOW
+                )
+                embed.set_thumbnail(url=member.display_avatar.url)
+
+                try:
                     await member.send(embed=embed)
-
                 except discord.Forbidden:
+                    # DMを閉じている利用者がいても、支給処理と運営ログは継続する。
                     pass
-
                 except discord.HTTPException:
-                    pass
+                    logger.exception("月次報酬DMの送信に失敗しました: user_id=%s", member.id)
 
-                await self.send_balance_log(guild,guild.me,member.mention,abs(amount),action)
+                try:
+                    await self.send_balance_log(
+                        guild,
+                        guild.me,
+                        member.mention,
+                        abs(amount),
+                        action,
+                    )
+                except discord.HTTPException:
+                    logger.exception("月次報酬ログの送信に失敗しました: user_id=%s", member.id)
 
         set_monthly_reward_state(year_month)
+        logger.info("月次報酬を処理しました: %s", year_month)
+
+    @monthly_reward.before_loop
+    async def before_monthly_reward(self):
+        await self.bot.wait_until_ready()
 
     #指定残高変更
     @app_commands.guilds(discord.Object(id=config.GUILD_ID))

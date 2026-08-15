@@ -1,6 +1,6 @@
 # RAGNA Bot 設計ガイド
 
-この資料は、新しく参加したメンバーが「どこを直せばよいか」を短時間で判断するための案内です。
+この資料は、新しく参加したエンジニアが「どこを直せばよいか」を短時間で判断するための案内です。
 
 ## 起動から稼働まで
 
@@ -16,8 +16,9 @@
 | --- | --- |
 | `bot.py` | 起動、Cog読込、コマンド同期、安全な終了 |
 | `config.py` | 環境変数、Discordのロール・チャンネルID、料金などの設定 |
+| `discord_settings.py` | 使用するDiscord Intentとメンション送信ルール |
 | `database.py` | SQLite接続、テーブル操作、複数更新のトランザクション |
-| `schema.sql` | 新規DBで作成するテーブル定義 |
+| `schema.sql` | 新規DBの作成と既存DBへの不足テーブル追加に使う定義 |
 | `utils.py` | 時間表示や常設パネル確認など、業務ルールを持たない共通処理 |
 | `cogs/*.py` | Discord上の個別機能 |
 | `railway.json` | Railwayでの起動・再起動設定 |
@@ -50,3 +51,7 @@
 ## データの扱い
 
 本番DBはRailway Volumeの `/data/ragna.db` です。SQLiteは1つのBotプロセスから利用する前提なので、RailwayのReplicaは必ず1にします。既存DBを移す場合は `/data/ragna.db.import` としてアップロードし、起動時の整合性確認とバックアップを経由して取り込みます。
+
+`schema.sql` は起動のたびに `CREATE TABLE IF NOT EXISTS` として適用されます。
+今回追加した月次報酬の重複防止テーブルも、Railway上の既存DBへ自動追加されるため、
+手動のDB移行作業は不要です。

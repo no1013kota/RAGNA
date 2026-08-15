@@ -5,12 +5,13 @@ RailwayではWebサービスではなく、常駐Workerとして起動します�
 
 - [機能一覧](docs/FEATURES.md)
 - [設計・開発ガイド](docs/ARCHITECTURE.md)
+- [Discord Intent・使用情報一覧](docs/DISCORD_SETTINGS.md)
 
 ## 必要な設定
 
 - Python 3.12
 - Discord Bot Token
-- DiscordのServer Members Intent
+- DiscordのServer Members IntentとMessage Content Intent
 - Railway Volume（SQLite永続化用）
 
 ## ローカル実行
@@ -55,7 +56,11 @@ python -m unittest discover -s tests
 Volumeが接続されている場合、DBは自動的に/data/ragna.dbへ保存されます。
 Volumeがないローカル環境ではdata/ragna.dbが使用されます。
 
-## 現在のDBをRailwayへ移す
+## 既存DBをRailwayへ移す場合のみ
+
+新規運用で引き継ぐDBがない場合、この手順は不要です。Railway Volumeの
+`/data/ragna.db` が初回起動時に自動作成されます。PC側の `data/ragna.db` は
+Gitの対象外なので、そのままローカルのバックアップとして残して構いません。
 
 MacではRailway CLIをインストールしてログインします。
 
@@ -89,14 +94,16 @@ Bot起動時に整合性を確認して/data/ragna.dbへ取り込み、直前の
 - Botは1インスタンスだけ起動してください。SQLite Volumeは複数Replica向けではありません。
 - RailwayのRestart PolicyはAlwaysを使用します。
 - RailwayのBackups画面でVolumeの定期バックアップを有効にしてください。
-- コード更新はGitHubへpushすると自動デプロイされます。
+- Railway ServiceがGitHubの対象ブランチへ接続され、Autodeployが有効なら、
+  コード更新をそのブランチへpushすると自動デプロイされます。
 - Bot Tokenや.env、data/ragna.dbをGitHubへ追加しないでください。
 - Railwayへ切り替えた後は、PC上の同じBotを同時起動しないでください。
 
 ## Discord側で必要な権限
 
-Developer PortalのBot設定でServer Members Intentを有効にしてください。
-このBotは参加・退出、ロール、評価対象者一覧を扱うためMember情報が必要です。
+Developer PortalのBot設定でServer Members IntentとMessage Content Intentを有効にしてください。
+このBotは参加・退出、ロール、評価対象者一覧に加え、評価ログやスレッド本文の保存を
+扱うため、Member情報とメッセージ本文へのアクセスが必要です。
 
 Botには、使用するチャンネルで次の権限が必要です。
 

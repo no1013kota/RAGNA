@@ -9,6 +9,7 @@ import os
 import shutil
 import sqlite3
 
+from contextlib import closing
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -369,22 +370,6 @@ def add_comment(
     conn.commit()
     conn.close()
 
-def get_comments(trial_member_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT *
-        FROM comments
-        WHERE trial_member_id = ?
-        ORDER BY id DESC
-        """,
-        (trial_member_id,)
-    )
-    results = cur.fetchall()
-    conn.close()
-    return results
-
 def has_extension(trial_member_id: int,evaluator_id: int):
     conn = get_connection()
     cur = conn.cursor()
@@ -532,21 +517,6 @@ def add_evaluator_review(ended_trial_member_id: int,evaluator_id: int,comment: s
     )
     conn.commit()
     conn.close()
-
-def get_evaluator_review_count(evaluator_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT COUNT(*)
-        FROM evaluator_reviews
-        WHERE evaluator_id = ?
-        """,
-        (evaluator_id,)
-    )
-    result = cur.fetchone()
-    conn.close()
-    return result[0] if result else 0
 
 def add_trial_member_end_survey(ended_trial_member_id: int,channel_id: int,message_id: int,expires_at: str):
     conn = get_connection()
@@ -734,7 +704,8 @@ def get_class_change_candidates(trial_member_class: str | None = None):
 # ==================================================
 def get_evaluated_trial_member_ids(evaluator_id: int):
 
-    with get_connection() as conn:
+    # sqlite3.Connectionのwith文はcommit/rollbackだけでcloseしないため、明示的に閉じる。
+    with closing(get_connection()) as conn:
 
         rows = conn.execute(
             """
@@ -772,24 +743,6 @@ def get_balance(user_id: int):
     if result:
         return result[0]
     return 0
-
-def set_balance(user_id: int,balance: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO balances
-        (user_id,balance)
-        VALUES
-        (?, ?)
-        ON CONFLICT(user_id)
-        DO UPDATE SET
-        balance = excluded.balance
-        """,
-        (user_id,balance)
-    )
-    conn.commit()
-    conn.close()
 
 def add_balance(user_id: int,amount: int):
     conn = get_connection()
@@ -837,41 +790,43 @@ def transfer_balance(sender_id: int, target_id: int, amount: int, note: str = ""
     if amount <= 0 or sender_id == target_id:
         return False
 
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    # 送金完了・残高不足・例外のどの経路でも接続を確実に閉じる。
+    with closing(get_connection()) as conn:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
 
-        debit = conn.execute(
-            """
-            UPDATE balances
-            SET balance = balance - ?
-            WHERE user_id = ?
-              AND balance >= ?
-            """,
-            (amount, sender_id, amount),
-        )
+            debit = conn.execute(
+                """
+                UPDATE balances
+                SET balance = balance - ?
+                WHERE user_id = ?
+                  AND balance >= ?
+                """,
+                (amount, sender_id, amount),
+            )
 
-        if debit.rowcount == 0:
-            conn.rollback()
-            return False
+            if debit.rowcount == 0:
+                conn.rollback()
+                return False
 
-        conn.execute(
-            """
-            INSERT INTO balances (user_id, balance)
-            VALUES (?, ?)
-            ON CONFLICT(user_id)
-            DO UPDATE SET balance = balance + excluded.balance
-            """,
-            (target_id, amount),
-        )
-        conn.execute(
-            """
-            INSERT INTO transactions
-                (type, executor_id, target_id, amount, note, created_at)
-            VALUES
-                ('送金', ?, ?, ?, ?, datetime('now'))
-            """,
-            (sender_id, target_id, amount, note),
-        )
+            conn.execute(
+                """
+                INSERT INTO balances (user_id, balance)
+                VALUES (?, ?)
+                ON CONFLICT(user_id)
+                DO UPDATE SET balance = balance + excluded.balance
+                """,
+                (target_id, amount),
+            )
+            conn.execute(
+                """
+                INSERT INTO transactions
+                    (type, executor_id, target_id, amount, note, created_at)
+                VALUES
+                    ('送金', ?, ?, ?, ?, datetime('now'))
+                """,
+                (sender_id, target_id, amount, note),
+            )
 
     return True
 
@@ -904,6 +859,56 @@ def set_monthly_reward_state(year_month: str):
     conn.commit()
     conn.close()
 
+
+def grant_monthly_reward(
+    year_month: str,
+    user_id: int,
+    role_id: int,
+    amount: int,
+    role_name: str,
+) -> bool:
+    """月次報酬の記録・残高・取引履歴を原子的に更新する。
+
+    同じ年月・ユーザー・ロールの組み合わせは一度しか反映しません。
+    Railwayの再起動や一時的な通信失敗で処理が再実行されても二重支給を防ぎます。
+    """
+
+    with closing(get_connection()) as conn:
+        with conn:
+            inserted = conn.execute(
+                """
+                INSERT OR IGNORE INTO monthly_reward_grants
+                    (year_month, user_id, role_id, amount, created_at)
+                VALUES
+                    (?, ?, ?, ?, datetime('now'))
+                """,
+                (year_month, user_id, role_id, amount),
+            )
+
+            if inserted.rowcount == 0:
+                return False
+
+            conn.execute(
+                """
+                INSERT INTO balances (user_id, balance)
+                VALUES (?, ?)
+                ON CONFLICT(user_id)
+                DO UPDATE SET balance = balance + excluded.balance
+                """,
+                (user_id, amount),
+            )
+            conn.execute(
+                """
+                INSERT INTO transactions
+                    (type, executor_id, target_id, amount, note, created_at)
+                VALUES
+                    ('月次支給', NULL, ?, ?, ?, datetime('now'))
+                """,
+                (user_id, amount, role_name),
+            )
+
+    return True
+
 # ==================================================
 # 残高不足を確認して減算
 # ==================================================
@@ -912,7 +917,7 @@ def subtract_balance_if_enough(user_id: int,amount: int) -> bool:
     if amount <= 0:
         return False
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
 
     try:
         cur = conn.cursor()
@@ -1426,21 +1431,6 @@ def create_hotel_room(
     conn.commit()
     conn.close()
 
-def get_hotel_by_owner(owner_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT *
-        FROM hotel_rooms
-        WHERE owner_id = ?
-        """,
-        (owner_id,)
-    )
-    row = cur.fetchone()
-    conn.close()
-    return row
-
 def get_hotel_by_channel(channel_id: int):
     conn = get_connection()
     cur = conn.cursor()
@@ -1509,20 +1499,6 @@ def update_hotel_private(channel_id: int,is_private: bool):
         WHERE channel_id = ?
         """,
         (1 if is_private else 0,channel_id)
-    )
-    conn.commit()
-    conn.close()
-
-def update_hotel_expire(channel_id: int,expires_at: str):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE hotel_rooms
-        SET expires_at = ?
-        WHERE channel_id = ?
-        """,
-        (expires_at,channel_id)
     )
     conn.commit()
     conn.close()

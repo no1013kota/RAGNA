@@ -12,9 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
+    ".env.example",
     "bot.py",
     "config.py",
     "database.py",
+    "discord_settings.py",
     "schema.sql",
     "requirements.txt",
     "railway.json",
@@ -54,10 +56,12 @@ def check_configuration(errors: list[str]) -> None:
         except (json.JSONDecodeError, UnicodeError) as exc:
             errors.append(f"railway.jsonを読み込めません: {exc}")
 
-    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    for variable in ("DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID"):
-        if variable not in env_example:
-            errors.append(f".env.exampleに{variable}がありません")
+    env_example_path = ROOT / ".env.example"
+    if env_example_path.exists():
+        env_example = env_example_path.read_text(encoding="utf-8")
+        for variable in ("DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID"):
+            if variable not in env_example:
+                errors.append(f".env.exampleに{variable}がありません")
 
     # PythonコードにToken文字列を直接代入していないかを確認する。
     hardcoded_token = re.compile(r"^\s*TOKEN\s*=\s*['\"][^'\"]+['\"]", re.MULTILINE)
