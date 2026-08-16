@@ -19,6 +19,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any
 
+from .battle import renumber_battle_entries
 from .core import get_connection
 
 
@@ -949,10 +950,17 @@ def archive_guild(guild_id: int) -> dict[str, Any]:
                 (now, guild_id),
             )
 
-            # 出場者セットと所属を削除
+            # 出場者セット・使い魔セットと所属を削除
             conn.execute(
                 """
                 DELETE FROM guild_battle_members
+                WHERE guild_id = ?
+                """,
+                (guild_id,),
+            )
+            conn.execute(
+                """
+                DELETE FROM guild_battle_entries
                 WHERE guild_id = ?
                 """,
                 (guild_id,),
@@ -1193,6 +1201,7 @@ def remove_guild_member(guild_id: int, user_id: int) -> dict[str, Any]:
                 """,
                 (guild_id, user_id),
             )
+            # 出場者から外れるため、その人がセットしていた使い魔も解除する
             conn.execute(
                 """
                 DELETE FROM guild_battle_members
@@ -1201,6 +1210,15 @@ def remove_guild_member(guild_id: int, user_id: int) -> dict[str, Any]:
                 """,
                 (guild_id, user_id),
             )
+            conn.execute(
+                """
+                DELETE FROM guild_battle_entries
+                WHERE guild_id = ?
+                  AND user_id = ?
+                """,
+                (guild_id, user_id),
+            )
+            renumber_battle_entries(conn, guild_id)
 
     return {"ok": True, "error": None}
 

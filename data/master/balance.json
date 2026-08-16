@@ -22,15 +22,16 @@
       "S"
     ],
     "usable_rank_offset": 1,
+    "min_level": 1,
     "max_level": 10,
     "hp_growth_rate_per_level": 0.05,
     "atk_growth_rate_per_level": 0.05,
     "speed_growth_levels": [
-      2,
-      4,
-      6,
-      8,
-      10
+      1,
+      3,
+      5,
+      7,
+      9
     ],
     "speed_growth_value": 1,
     "speed_max": 100,
@@ -39,7 +40,8 @@
       "B": 5000,
       "A": 15000,
       "S": 50000
-    }
+    },
+    "sell_price_multiplier": 1.0
   },
   "battle": {
     "max_units": 5,

@@ -193,16 +193,16 @@ class GachaMasterTests(unittest.TestCase):
     def test_standard_pool_matches_the_spec(self) -> None:
         pool = MASTER.gacha_pools["standard"]
 
-        # 10.2節：単発10,000 coin、10回100,000 coin（割引なし）
-        self.assertEqual(pool.single_cost, 10_000)
-        self.assertEqual(pool.multi_cost, 100_000)
+        # 10.2節：単発30,000 coin、10回270,000 coin（1回分の割引あり）
+        self.assertEqual(pool.single_cost, 30_000)
+        self.assertEqual(pool.multi_cost, 270_000)
         self.assertEqual(pool.multi_count, 10)
-        self.assertEqual(pool.single_cost * pool.multi_count, pool.multi_cost)
+        self.assertEqual(pool.single_cost * (pool.multi_count - 1), pool.multi_cost)
 
         # 通常枠 C45% B45% A9% S1%
         self.assertEqual(pool.rates["normal"], {"C": 450, "B": 450, "A": 90, "S": 10})
-        # 10枠目の保証 B90% A9% S1%
-        self.assertEqual(pool.rates["guaranteed"], {"B": 900, "A": 90, "S": 10})
+        # 10枠目の保証 A90% S10%
+        self.assertEqual(pool.rates["guaranteed"], {"A": 900, "S": 100})
         self.assertEqual(pool.guaranteed_slot, 10)
 
     def test_rates_sum_to_one_thousand(self) -> None:
@@ -213,22 +213,26 @@ class GachaMasterTests(unittest.TestCase):
 
 class GrowthTests(unittest.TestCase):
     def test_hp_and_atk_growth(self) -> None:
-        # 10.2節：基本値 × (1 + 0.05 × レベル)、小数は四捨五入
+        # 10.2節：基本値 × (1 + 0.05 × (レベル - 1))、小数は四捨五入
         stats = MASTER.level_stats("loki", 10)
-        self.assertEqual(stats.max_hp, round_half_up(46 * 1.5))
-        self.assertEqual(stats.atk, round_half_up(8 * 1.5))
+        self.assertEqual(stats.max_hp, round_half_up(46 * 1.45))
+        self.assertEqual(stats.atk, round_half_up(8 * 1.45))
 
     def test_speed_grows_on_even_levels_only(self) -> None:
-        speeds = [MASTER.level_stats("loki", level).speed for level in range(11)]
-        self.assertEqual(speeds, [84, 84, 85, 85, 86, 86, 87, 87, 88, 88, 89])
+        speeds = [MASTER.level_stats("loki", level).speed for level in range(1, 11)]
+        self.assertEqual(speeds, [84, 85, 85, 86, 86, 87, 87, 88, 88, 89])
 
     def test_speed_never_exceeds_the_maximum(self) -> None:
         # 素のSPDが95のフェンリルは、Lv.10でも100を超えない。
         self.assertEqual(MASTER.level_stats("fenrir", 10).speed, 100)
 
-    def test_level_zero_keeps_base_values(self) -> None:
+    def test_initial_level_keeps_base_values(self) -> None:
+        # 初期レベルはLv.1で、そこが基本値になる（10.2節）。
+        self.assertEqual(MASTER.familiar.min_level, 1)
+        self.assertEqual(MASTER.familiar.max_level, 10)
+
         for familiar in MASTER.familiars.values():
-            stats = MASTER.level_stats(familiar.familiar_id, 0)
+            stats = MASTER.level_stats(familiar.familiar_id, MASTER.familiar.min_level)
             self.assertEqual(stats.max_hp, familiar.base_hp)
             self.assertEqual(stats.atk, familiar.base_atk)
             self.assertEqual(stats.speed, familiar.speed)
@@ -245,15 +249,16 @@ class GrowthTests(unittest.TestCase):
 class SellPriceTests(unittest.TestCase):
     def test_base_prices(self) -> None:
         # 10.2節：Cランク2,000、Bランク5,000、Aランク15,000、Sランク50,000
-        self.assertEqual(MASTER.sell_price("C", 0), 2_000)
-        self.assertEqual(MASTER.sell_price("B", 0), 5_000)
-        self.assertEqual(MASTER.sell_price("A", 0), 15_000)
-        self.assertEqual(MASTER.sell_price("S", 0), 50_000)
+        # 初期レベル（Lv.1）では基準価格そのまま。
+        self.assertEqual(MASTER.sell_price("C", 1), 2_000)
+        self.assertEqual(MASTER.sell_price("B", 1), 5_000)
+        self.assertEqual(MASTER.sell_price("A", 1), 15_000)
+        self.assertEqual(MASTER.sell_price("S", 1), 50_000)
 
     def test_level_multiplies_the_price(self) -> None:
-        # 基準価格 × (レベル + 1)
-        self.assertEqual(MASTER.sell_price("S", 3), 200_000)
-        self.assertEqual(MASTER.sell_price("B", 10), 55_000)
+        # 基準価格 × レベル
+        self.assertEqual(MASTER.sell_price("S", 3), 150_000)
+        self.assertEqual(MASTER.sell_price("B", 10), 50_000)
 
 
 class UsableRankTests(unittest.TestCase):

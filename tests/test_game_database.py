@@ -309,73 +309,140 @@ class FamiliarTests(GameDatabaseTestCase):
         self.assertEqual(self.balance(501), 5_000)
         self.assertEqual(self.familiar_db.get_owned_familiars(501), [])
 
-    def test_fusion_consumes_the_material_and_raises_the_level(self) -> None:
+    def test_gacha_starts_familiars_at_level_one(self) -> None:
+        self.add_coin(506, 30_000)
+        drawn = self.familiar_db.draw_gacha(
+            506, pool_id="standard", count=1, cost=30_000,
+            results=[("S", "loki")], initial_level=1,
+        )
+
+        self.assertEqual(drawn["instances"][0]["level"], 1)
+        self.assertEqual(
+            self.familiar_db.get_owned_familiars(506)[0]["level"], 1
+        )
+
+    def test_fusion_consumes_the_materials_and_raises_the_level(self) -> None:
         self.add_coin(502, 100_000)
         drawn = self.familiar_db.draw_gacha(
-            502, pool_id="standard", count=2, cost=20_000,
-            results=[("S", "loki"), ("S", "loki")],
+            502, pool_id="standard", count=3, cost=20_000,
+            results=[("S", "loki")] * 3, initial_level=1,
         )
-        base, material = (item["instance_id"] for item in drawn["instances"])
+        base, *materials = (item["instance_id"] for item in drawn["instances"])
 
         result = self.familiar_db.fuse_familiar(
-            502, base_instance_id=base, material_instance_id=material,
+            502, base_instance_id=base, material_count=2,
             max_level=10, locked_instance_ids=set(),
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["level"], 1)
-        self.assertEqual(self.familiar_db.get_owned_familiar(base)["level"], 1)
-        self.assertEqual(self.familiar_db.get_owned_familiar(material)["status"], "fused")
+        self.assertEqual(result["before_level"], 1)
+        self.assertEqual(result["level"], 3)
+        self.assertEqual(sorted(result["material_instance_ids"]), sorted(materials))
+        self.assertEqual(self.familiar_db.get_owned_familiar(base)["level"], 3)
+
+        for material in materials:
+            self.assertEqual(
+                self.familiar_db.get_owned_familiar(material)["status"], "fused"
+            )
+
         self.assertEqual(len(self.familiar_db.get_owned_familiars(502)), 1)
 
-    def test_fusion_requires_the_same_familiar(self) -> None:
+    def test_fusion_never_passes_the_maximum_level(self) -> None:
         self.add_coin(503, 100_000)
         drawn = self.familiar_db.draw_gacha(
-            503, pool_id="standard", count=2, cost=20_000,
-            results=[("S", "loki"), ("B", "garm")],
+            503, pool_id="standard", count=12, cost=20_000,
+            results=[("S", "loki")] * 12, initial_level=1,
         )
-        base, material = (item["instance_id"] for item in drawn["instances"])
+        base = drawn["instances"][0]["instance_id"]
 
-        result = self.familiar_db.fuse_familiar(
-            503, base_instance_id=base, material_instance_id=material,
+        over = self.familiar_db.fuse_familiar(
+            503, base_instance_id=base, material_count=10,
             max_level=10, locked_instance_ids=set(),
         )
-        self.assertEqual(result["error"], "different_familiar")
+        self.assertEqual(over["error"], "over_max_level")
+        self.assertEqual(over["available_levels"], 9)
+        self.assertEqual(self.familiar_db.get_owned_familiar(base)["level"], 1)
 
-    def test_selling_pays_coin_and_removes_the_familiar(self) -> None:
+        to_max = self.familiar_db.fuse_familiar(
+            503, base_instance_id=base, material_count=9,
+            max_level=10, locked_instance_ids=set(),
+        )
+        self.assertTrue(to_max["ok"])
+        self.assertEqual(to_max["level"], 10)
+
+    def test_fusion_needs_enough_materials(self) -> None:
+        self.add_coin(507, 100_000)
+        drawn = self.familiar_db.draw_gacha(
+            507, pool_id="standard", count=2, cost=20_000,
+            results=[("S", "loki"), ("B", "garm")], initial_level=1,
+        )
+        base = drawn["instances"][0]["instance_id"]
+
+        # 別の種類は素材にできないため、素材が足りない
+        result = self.familiar_db.fuse_familiar(
+            507, base_instance_id=base, material_count=1,
+            max_level=10, locked_instance_ids=set(),
+        )
+        self.assertEqual(result["error"], "not_enough_materials")
+        self.assertEqual(result["available_materials"], 0)
+
+    def test_selling_pays_coin_and_removes_the_familiars(self) -> None:
         self.add_coin(504, 10_000)
         drawn = self.familiar_db.draw_gacha(
-            504, pool_id="standard", count=1, cost=10_000, results=[("S", "loki")]
+            504, pool_id="standard", count=2, cost=10_000,
+            results=[("S", "loki")] * 2, initial_level=1,
         )
-        instance_id = drawn["instances"][0]["instance_id"]
+        instance_ids = [item["instance_id"] for item in drawn["instances"]]
 
-        result = self.familiar_db.sell_familiar(
-            504, instance_id=instance_id, price=50_000, locked_instance_ids=set()
+        result = self.familiar_db.sell_familiars(
+            504,
+            prices={instance_id: 50_000 for instance_id in instance_ids},
+            locked_instance_ids=set(),
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(self.balance(504), 50_000)
+        self.assertEqual(result["total"], 100_000)
+        self.assertEqual(len(result["sold"]), 2)
+        self.assertEqual(self.balance(504), 100_000)
         self.assertEqual(self.familiar_db.get_owned_familiars(504), [])
 
     def test_familiars_in_use_cannot_be_sold_or_fused(self) -> None:
         self.add_coin(505, 30_000)
         drawn = self.familiar_db.draw_gacha(
             505, pool_id="standard", count=2, cost=20_000,
-            results=[("S", "loki"), ("S", "loki")],
+            results=[("S", "loki"), ("S", "loki")], initial_level=1,
         )
         base, material = (item["instance_id"] for item in drawn["instances"])
 
-        sold = self.familiar_db.sell_familiar(
-            505, instance_id=base, price=50_000, locked_instance_ids={base}
+        sold = self.familiar_db.sell_familiars(
+            505, prices={base: 50_000}, locked_instance_ids={base}
         )
         fused = self.familiar_db.fuse_familiar(
-            505, base_instance_id=base, material_instance_id=material,
+            505, base_instance_id=base, material_count=1,
             max_level=10, locked_instance_ids={material},
         )
 
         self.assertEqual(sold["error"], "in_use")
-        self.assertEqual(fused["error"], "in_use")
+        self.assertEqual(fused["error"], "not_enough_materials")
         self.assertEqual(self.balance(505), 10_000)
+
+    def test_selling_is_all_or_nothing(self) -> None:
+        self.add_coin(508, 30_000)
+        drawn = self.familiar_db.draw_gacha(
+            508, pool_id="standard", count=2, cost=20_000,
+            results=[("S", "loki")] * 2, initial_level=1,
+        )
+        first, second = (item["instance_id"] for item in drawn["instances"])
+
+        result = self.familiar_db.sell_familiars(
+            508,
+            prices={first: 50_000, second: 50_000},
+            locked_instance_ids={second},
+        )
+
+        self.assertEqual(result["error"], "in_use")
+        self.assertEqual(self.balance(508), 10_000)
+        self.assertEqual(len(self.familiar_db.get_owned_familiars(508)), 2)
 
 
 # ==================================================
@@ -476,27 +543,34 @@ class BattleTests(GameDatabaseTestCase):
     def give_familiars(self, user_id: int, count: int) -> list[int]:
         """テスト用に使い魔を配り、instance_idを返す。"""
 
-        self.add_coin(user_id, 10_000 * count)
+        self.add_coin(user_id, 30_000 * count)
         drawn = self.familiar_db.draw_gacha(
             user_id,
             pool_id="standard",
             count=count,
-            cost=10_000 * count,
+            cost=30_000 * count,
             results=[("B", "garm")] * count,
+            initial_level=1,
         )
         self.assertTrue(drawn["ok"], drawn)
         return [item["instance_id"] for item in drawn["instances"]]
 
-    def add_entry(self, guild_id: int, user_id: int, instance_id: int, members: int):
+    def set_roster(self, guild_id: int, assignments):
+        return self.battle_db.set_battle_roster(guild_id, list(assignments))
+
+    def even_roster(self, guild_id: int, user_ids: list[int]):
+        """全員へ1体ずつ割り当てて出場者セットする。"""
+
+        return self.set_roster(guild_id, [(user_id, 1) for user_id in user_ids])
+
+    def add_entry(self, guild_id: int, user_id: int, instance_id: int):
         from game.master_data import load_master_data
 
-        master = load_master_data()
         return self.battle_db.add_battle_entry(
             guild_id,
             user_id,
             instance_id,
-            max_units=master.battle.max_units,
-            per_member_limit=master.familiar_limit_per_member(members),
+            max_units=load_master_data().battle.max_units,
         )
 
     def test_per_member_limit_follows_the_roster_size(self) -> None:
@@ -507,100 +581,213 @@ class BattleTests(GameDatabaseTestCase):
         self.assertEqual(self.familiar_limit(2), 3)
         self.assertEqual(self.familiar_limit(1), 5)
 
+    def test_the_master_decides_how_many_familiars_each_member_brings(self) -> None:
+        # 9節：出場者ごとの体数はギルドマスターが割り当てる
+        members = self.members_a[:3]
+        result = self.set_roster(
+            self.guild_a, [(members[0], 2), (members[1], 2), (members[2], 1)]
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            [row["familiar_count"] for row in self.battle_db.get_battle_roster(self.guild_a)],
+            [2, 2, 1],
+        )
+
+    def test_assignments_respect_the_per_member_and_guild_limits(self) -> None:
+        members = self.members_a[:3]
+
+        # 3人のときは1人2体まで
+        over_member = self.set_roster(
+            self.guild_a, [(members[0], 3), (members[1], 1), (members[2], 1)]
+        )
+        self.assertEqual(over_member["error"], "member_limit")
+
+        # 合計は5体まで
+        over_total = self.set_roster(
+            self.guild_a, [(members[0], 2), (members[1], 2), (members[2], 2)]
+        )
+        self.assertEqual(over_total["error"], "entries_full")
+
+        # 0体の割り当ては認めない
+        zero = self.set_roster(self.guild_a, [(members[0], 0)])
+        self.assertEqual(zero["error"], "invalid_count")
+
+    def test_registered_familiars_are_adopted_in_order(self) -> None:
+        # 9節：事前登録した順番のまま自動でセットする
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 5)
+
+        registered = self.battle_db.set_player_battle_familiars(
+            user_id, list(reversed(instances[:3]))
+        )
+        self.assertTrue(registered["ok"], registered)
+
+        result = self.set_roster(self.guild_a, [(user_id, 2)])
+        self.assertTrue(result["ok"], result)
+
+        entries = self.battle_db.get_battle_entries(self.guild_a)
+        self.assertEqual(
+            [int(entry["instance_id"]) for entry in entries],
+            [instances[2], instances[1]],
+        )
+        self.assertEqual(result["adopted"], [instances[2], instances[1]])
+
+    def test_registration_is_independent_of_guilds_and_locks(self) -> None:
+        # 出場者でなくても、編成ロック中でも登録できる
+        outsider = 9_001
+        instances = self.give_familiars(outsider, 2)
+
+        result = self.battle_db.set_player_battle_familiars(outsider, instances)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            [int(row["instance_id"]) for row in
+             self.battle_db.get_player_battle_familiars(outsider)],
+            instances,
+        )
+
+        self.guild_db.set_roster_locked(self.guild_a, True)
+        member = self.members_a[0]
+        member_instances = self.give_familiars(member, 1)
+
+        during_lock = self.battle_db.set_player_battle_familiars(
+            member, member_instances
+        )
+        self.assertTrue(during_lock["ok"], during_lock)
+        self.guild_db.set_roster_locked(self.guild_a, False)
+
+    def test_registration_rejects_familiars_the_player_does_not_own(self) -> None:
+        owner = self.members_a[0]
+        other = self.members_a[1]
+        instance_id = self.give_familiars(other, 1)[0]
+
+        result = self.battle_db.set_player_battle_familiars(owner, [instance_id])
+        self.assertEqual(result["error"], "not_owned")
+        self.assertEqual(self.battle_db.get_player_battle_familiars(owner), [])
+
+    def test_sold_familiars_drop_out_of_the_registration(self) -> None:
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 2)
+        self.battle_db.set_player_battle_familiars(user_id, instances)
+
+        self.familiar_db.sell_familiars(
+            user_id, prices={instances[0]: 5_000}, locked_instance_ids=set()
+        )
+
+        remaining = self.battle_db.get_player_battle_familiars(user_id)
+        self.assertEqual([int(row["instance_id"]) for row in remaining], [instances[1]])
+
     def test_a_single_member_can_set_five_familiars(self) -> None:
         user_id = self.members_a[0]
-        self.battle_db.set_battle_roster(self.guild_a, [user_id])
         instances = self.give_familiars(user_id, 6)
+        self.set_roster(self.guild_a, [(user_id, 5)])
 
         for instance_id in instances[:5]:
-            result = self.add_entry(self.guild_a, user_id, instance_id, 1)
+            result = self.add_entry(self.guild_a, user_id, instance_id)
             self.assertTrue(result["ok"], result)
 
         self.assertEqual(len(self.battle_db.get_battle_entries(self.guild_a)), 5)
 
         # 6体目は上限で拒否される（1人5体＝ギルド合計5体なので両方に該当する）
-        overflow = self.add_entry(self.guild_a, user_id, instances[5], 1)
+        overflow = self.add_entry(self.guild_a, user_id, instances[5])
         self.assertIn(overflow["error"], {"member_limit", "entries_full"})
 
     def test_five_members_can_set_one_familiar_each(self) -> None:
-        self.battle_db.set_battle_roster(self.guild_a, self.members_a)
+        self.even_roster(self.guild_a, self.members_a)
 
         for user_id in self.members_a:
             instances = self.give_familiars(user_id, 2)
-            first = self.add_entry(self.guild_a, user_id, instances[0], 5)
+            first = self.add_entry(self.guild_a, user_id, instances[0])
             self.assertTrue(first["ok"], first)
 
-            second = self.add_entry(self.guild_a, user_id, instances[1], 5)
+            second = self.add_entry(self.guild_a, user_id, instances[1])
             self.assertIn(second["error"], {"member_limit", "entries_full"})
 
         self.assertEqual(len(self.battle_db.get_battle_entries(self.guild_a)), 5)
 
-    def test_four_members_share_five_slots_first_come_first_served(self) -> None:
+    def test_members_can_only_fill_their_assigned_slots(self) -> None:
         members = self.members_a[:4]
-        self.battle_db.set_battle_roster(self.guild_a, members)
+        self.set_roster(
+            self.guild_a,
+            [(members[0], 2), (members[1], 1), (members[2], 1), (members[3], 1)],
+        )
 
         instances = {user_id: self.give_familiars(user_id, 3) for user_id in members}
 
-        # 全員1体ずつ
         for user_id in members:
-            self.assertTrue(self.add_entry(self.guild_a, user_id, instances[user_id][0], 4)["ok"])
+            self.assertTrue(self.add_entry(self.guild_a, user_id, instances[user_id][0])["ok"])
 
-        # 先に動いた1人だけが2体目を置ける
-        self.assertTrue(self.add_entry(self.guild_a, members[0], instances[members[0]][1], 4)["ok"])
+        # 2体割り当てられた人だけが2体目を置ける
+        self.assertTrue(
+            self.add_entry(self.guild_a, members[0], instances[members[0]][1])["ok"]
+        )
         self.assertEqual(len(self.battle_db.get_battle_entries(self.guild_a)), 5)
 
-        # 合計が埋まったので、本人の上限に余裕がある人でも追加できない
-        # （4人・上限2体なので、この人はまだ1体しかセットしていない）
-        blocked = self.add_entry(self.guild_a, members[1], instances[members[1]][1], 4)
-        self.assertEqual(blocked["error"], "entries_full")
+        # 1体しか割り当てられていない人は、合計に空きがあっても置けない
+        blocked = self.add_entry(self.guild_a, members[1], instances[members[1]][1])
+        self.assertEqual(blocked["error"], "member_limit")
+        self.assertEqual(blocked["limit"], 1)
 
-        # 3体目は本人の上限で拒否される
-        self.battle_db.remove_battle_entry(
-            self.guild_a, members[0], instances[members[0]][1]
-        )
-        self.assertTrue(self.add_entry(self.guild_a, members[0], instances[members[0]][1], 4)["ok"])
-        over = self.add_entry(self.guild_a, members[0], instances[members[0]][2], 4)
+        # 割り当て分を使い切った人も置けない
+        over = self.add_entry(self.guild_a, members[0], instances[members[0]][2])
         self.assertIn(over["error"], {"member_limit", "entries_full"})
+
+    def test_members_can_swap_their_own_familiars(self) -> None:
+        # 9節：本人は割り当ての範囲で自由に差し替えられる
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 3)
+        self.battle_db.set_player_battle_familiars(user_id, instances[:2])
+        self.set_roster(self.guild_a, [(user_id, 2)])
+
+        self.battle_db.remove_battle_entry(self.guild_a, user_id, instances[0])
+        self.assertTrue(self.add_entry(self.guild_a, user_id, instances[2])["ok"])
+
+        entries = self.battle_db.get_battle_entries(self.guild_a)
+        self.assertEqual(
+            sorted(int(entry["instance_id"]) for entry in entries),
+            sorted([instances[1], instances[2]]),
+        )
+        self.assertEqual([int(entry["entry_slot"]) for entry in entries], [1, 2])
 
     def test_the_same_familiar_cannot_be_set_twice(self) -> None:
         user_id = self.members_a[0]
-        self.battle_db.set_battle_roster(self.guild_a, [user_id])
         instance_id = self.give_familiars(user_id, 1)[0]
+        self.set_roster(self.guild_a, [(user_id, 5)])
 
-        self.assertTrue(self.add_entry(self.guild_a, user_id, instance_id, 1)["ok"])
-        again = self.add_entry(self.guild_a, user_id, instance_id, 1)
+        self.assertTrue(self.add_entry(self.guild_a, user_id, instance_id)["ok"])
+        again = self.add_entry(self.guild_a, user_id, instance_id)
 
         self.assertEqual(again["error"], "already_set")
 
     def test_only_selected_members_can_set_familiars(self) -> None:
         outsider = self.members_a[1]
-        self.battle_db.set_battle_roster(self.guild_a, [self.members_a[0]])
+        self.set_roster(self.guild_a, [(self.members_a[0], 1)])
         instance_id = self.give_familiars(outsider, 1)[0]
 
-        result = self.add_entry(self.guild_a, outsider, instance_id, 1)
+        result = self.add_entry(self.guild_a, outsider, instance_id)
         self.assertEqual(result["error"], "not_selected")
 
     def test_only_owned_familiars_can_be_set(self) -> None:
         user_id = self.members_a[0]
         other = self.members_a[1]
-        self.battle_db.set_battle_roster(self.guild_a, [user_id])
+        self.set_roster(self.guild_a, [(user_id, 1)])
         instance_id = self.give_familiars(other, 1)[0]
 
-        result = self.add_entry(self.guild_a, user_id, instance_id, 1)
+        result = self.add_entry(self.guild_a, user_id, instance_id)
         self.assertEqual(result["error"], "not_owned")
 
-    def test_shrinking_the_roster_releases_extra_familiars(self) -> None:
-        # 1人で5体セットしたあと5人へ広げると、上限1体を超えた分が解除される
+    def test_shrinking_the_assignment_releases_extra_familiars(self) -> None:
+        # 1人で5体セットしたあと5人へ広げると、割り当て1体を超えた分が解除される
         user_id = self.members_a[0]
-        self.battle_db.set_battle_roster(self.guild_a, [user_id])
         instances = self.give_familiars(user_id, 5)
+        self.set_roster(self.guild_a, [(user_id, 5)])
 
         for instance_id in instances:
-            self.add_entry(self.guild_a, user_id, instance_id, 1)
+            self.add_entry(self.guild_a, user_id, instance_id)
 
         self.assertEqual(len(self.battle_db.get_battle_entries(self.guild_a)), 5)
 
-        result = self.battle_db.set_battle_roster(self.guild_a, self.members_a)
+        result = self.even_roster(self.guild_a, self.members_a)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(len(result["released"]), 4, result)
@@ -608,14 +795,14 @@ class BattleTests(GameDatabaseTestCase):
 
     def test_removing_a_member_releases_their_familiars(self) -> None:
         members = self.members_a[:2]
-        self.battle_db.set_battle_roster(self.guild_a, members)
+        self.even_roster(self.guild_a, members)
 
         for user_id in members:
-            self.add_entry(self.guild_a, user_id, self.give_familiars(user_id, 1)[0], 2)
+            self.add_entry(self.guild_a, user_id, self.give_familiars(user_id, 1)[0])
 
         self.assertEqual(len(self.battle_db.get_battle_entries(self.guild_a)), 2)
 
-        self.battle_db.set_battle_roster(self.guild_a, [members[0]])
+        self.set_roster(self.guild_a, [(members[0], 1)])
         entries = self.battle_db.get_battle_entries(self.guild_a)
 
         self.assertEqual(len(entries), 1)
@@ -624,9 +811,9 @@ class BattleTests(GameDatabaseTestCase):
 
     def test_set_familiars_are_locked_from_fusion_and_selling(self) -> None:
         user_id = self.members_a[0]
-        self.battle_db.set_battle_roster(self.guild_a, [user_id])
         instance_id = self.give_familiars(user_id, 1)[0]
-        self.add_entry(self.guild_a, user_id, instance_id, 1)
+        self.set_roster(self.guild_a, [(user_id, 1)])
+        self.add_entry(self.guild_a, user_id, instance_id)
 
         # 編成ロック前は自由に売却できる
         self.assertNotIn(instance_id, self.battle_db.get_locked_instance_ids())
@@ -634,13 +821,45 @@ class BattleTests(GameDatabaseTestCase):
         self.guild_db.set_roster_locked(self.guild_a, True)
         self.assertIn(instance_id, self.battle_db.get_locked_instance_ids())
 
-    def test_roster_requires_guild_membership(self) -> None:
-        result = self.battle_db.set_battle_roster(
-            self.guild_a, self.members_a[:4] + [999]
+    def test_kicking_a_member_releases_their_entries(self) -> None:
+        members = self.members_a[:3]
+        owned = {user_id: self.give_familiars(user_id, 2) for user_id in members}
+
+        for user_id, instance_ids in owned.items():
+            self.battle_db.set_player_battle_familiars(user_id, instance_ids)
+
+        self.set_roster(
+            self.guild_a, [(members[0], 2), (members[1], 2), (members[2], 1)]
         )
+        self.assertEqual(len(self.battle_db.get_battle_entries(self.guild_a)), 5)
+
+        self.guild_db.remove_guild_member(self.guild_a, members[1])
+        entries = self.battle_db.get_battle_entries(self.guild_a)
+
+        self.assertTrue(all(int(e["user_id"]) != members[1] for e in entries), entries)
+        self.assertEqual(len(entries), 3)
+        # 枠番号を詰め直しておかないと、次の追加でIDが衝突する
+        self.assertEqual([int(e["entry_slot"]) for e in entries], [1, 2, 3])
+
+        # 事前登録は本人のものなので残る
+        self.assertEqual(
+            len(self.battle_db.get_player_battle_familiars(members[1])), 2
+        )
+
+        self.battle_db.remove_battle_entry(
+            self.guild_a, members[0], owned[members[0]][0]
+        )
+        added = self.add_entry(self.guild_a, members[0], owned[members[0]][0])
+        self.assertTrue(added["ok"], added)
+
+        slots = [int(e["entry_slot"]) for e in self.battle_db.get_battle_entries(self.guild_a)]
+        self.assertEqual(len(slots), len(set(slots)), slots)
+
+    def test_roster_requires_guild_membership(self) -> None:
+        result = self.even_roster(self.guild_a, self.members_a[:4] + [999])
         self.assertEqual(result["error"], "not_member")
 
-        duplicate = self.battle_db.set_battle_roster(
+        duplicate = self.even_roster(
             self.guild_a, self.members_a[:4] + [self.members_a[0]]
         )
         self.assertEqual(duplicate["error"], "duplicate_member")
@@ -712,8 +931,8 @@ class BattleTests(GameDatabaseTestCase):
     def test_finishing_a_battle_clears_both_rosters(self) -> None:
         # 26.2節「バトル終了後は出場者セットを解除し、一般出場者から
         # 出場者専用TCの閲覧権限を外します」
-        self.battle_db.set_battle_roster(self.guild_a, self.members_a)
-        self.battle_db.set_battle_roster(self.guild_b, self.members_b)
+        self.even_roster(self.guild_a, self.members_a)
+        self.even_roster(self.guild_b, self.members_b)
         self.assertEqual(len(self.battle_db.get_battle_roster(self.guild_a)), 5)
 
         battle_id = self.start_battle()

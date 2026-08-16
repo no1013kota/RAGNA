@@ -297,18 +297,21 @@ GUILD_MEMBER_RECRUITMENT_CHANNEL_ID = _optional_channel_env(
 # 使い魔の4パネルを置くチャンネル
 FAMILIAR_PANEL_CHANNEL_ID = _optional_channel_env("FAMILIAR_PANEL_CHANNEL_ID")
 
-# 公開バトル募集チャンネル（募集Embedとランキングパネル）
+# 公開バトル募集チャンネル（バトル募集Embed）
 GUILD_BATTLE_RECRUITMENT_CHANNEL_ID = _optional_channel_env(
     "GUILD_BATTLE_RECRUITMENT_CHANNEL_ID"
 )
+
+# ギルド受付チャンネル（ギルドランキングパネル）
+GUILD_RECEPTION_CHANNEL_ID = _optional_channel_env("GUILD_RECEPTION_CHANNEL_ID")
 
 # 運営操作ログの転送先（任意）。未設定でも game_admin_logs テーブルへは必ず記録します。
 # バトルの進行ログは、対戦成立時にギルドカテゴリー内へ自動生成する
 # バトル専用チャンネルへ投稿します（GAME_SPEC 34.14節）。
 GAME_ADMIN_LOG_CHANNEL_ID = _optional_channel_env("GAME_ADMIN_LOG_CHANNEL_ID")
 
-# ギルドを設立できるDiscordロール（騎士・七星・運営）
-GUILD_FOUNDER_ROLES = [ROLE_MEMBER, ROLE_SUB_MANAGER, ROLE_MANAGER]
+# ギルドを設立できるDiscordロール（騎士・七星）
+GUILD_FOUNDER_ROLES = [ROLE_MEMBER, ROLE_SUB_MANAGER]
 
 # プレイヤーランクの正式な参照元は player_roles テーブル。
 # ここではDiscordロールとゲーム内ランクの対応だけを定義します。

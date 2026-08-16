@@ -419,6 +419,7 @@ def draw_gacha(
     count: int,
     cost: int,
     results: list[tuple[str, str]],
+    initial_level: int = 1,
 ) -> dict[str, Any]:
     """coin減算と抽選結果の保存を1つのトランザクションで確定する（10.2節）。
 
@@ -480,9 +481,9 @@ def draw_gacha(
                     INSERT INTO player_familiars
                         (user_id, familiar_id, level, status, obtained_at, updated_at)
                     VALUES
-                        (?, ?, 0, 'owned', ?, ?)
+                        (?, ?, ?, 'owned', ?, ?)
                     """,
-                    (user_id, familiar_id, now, now),
+                    (user_id, familiar_id, initial_level, now, now),
                 )
                 instance_id = int(cursor.lastrowid)
 
@@ -492,9 +493,9 @@ def draw_gacha(
                         (user_id, type, instance_id, familiar_id, level,
                          coin_amount, material_instance_id, note, created_at)
                     VALUES
-                        (?, 'gacha', ?, ?, 0, 0, NULL, ?, ?)
+                        (?, 'gacha', ?, ?, ?, 0, NULL, ?, ?)
                     """,
-                    (user_id, instance_id, familiar_id, pool_id, now),
+                    (user_id, instance_id, familiar_id, initial_level, pool_id, now),
                 )
 
                 instances.append(
@@ -502,6 +503,7 @@ def draw_gacha(
                         "instance_id": instance_id,
                         "familiar_id": familiar_id,
                         "rank": rank,
+                        "level": initial_level,
                     }
                 )
 
@@ -511,22 +513,46 @@ def draw_gacha(
 # ==================================================
 # 合成
 # ==================================================
+def count_fusable_materials(
+    user_id: int,
+    *,
+    base_instance_id: int,
+    locked_instance_ids: set[int] | frozenset[int],
+) -> int:
+    """素材にできる同種の使い魔の体数を返す。"""
+
+    base = get_owned_familiar(base_instance_id)
+    if base is None or int(base["user_id"]) != user_id or base["status"] != "owned":
+        return 0
+
+    materials = get_same_familiars(
+        user_id, base["familiar_id"], exclude_instance_id=base_instance_id
+    )
+    return sum(
+        1
+        for row in materials
+        if int(row["instance_id"]) not in locked_instance_ids
+    )
+
+
 def fuse_familiar(
     user_id: int,
     *,
     base_instance_id: int,
-    material_instance_id: int,
+    material_count: int,
     max_level: int,
     locked_instance_ids: set[int] | frozenset[int],
 ) -> dict[str, Any]:
-    """同じ種類の使い魔を素材にしてレベルを1つ上げる（10.2節）。
+    """同じ種類の使い魔を素材にしてレベルを上げる（10.2節）。
 
-    素材は ``status = 'fused'`` にして残し、所有一覧から外します。編成
-    ロック中・進行中バトルで使用中の個体は合成できません。
+    ``material_count`` 体を一度に合成し、レベルはその体数だけ上がります。
+    素材はレベルの低い個体から自動で選び、``status = 'fused'`` にして
+    所有一覧から外します。編成ロック中・進行中バトルで使用中の個体は
+    素材にも土台にもできません。
     """
 
-    if base_instance_id == material_instance_id:
-        return {"ok": False, "error": "same_instance"}
+    if material_count < 1:
+        return {"ok": False, "error": "invalid_count"}
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -534,45 +560,72 @@ def fuse_familiar(
         with conn:
             conn.execute("BEGIN IMMEDIATE")
 
-            rows = conn.execute(
+            base = conn.execute(
                 """
                 SELECT instance_id, user_id, familiar_id, level, status
                 FROM player_familiars
-                WHERE instance_id IN (?, ?)
+                WHERE instance_id = ?
                 """,
-                (base_instance_id, material_instance_id),
-            ).fetchall()
-
-            found = {int(row["instance_id"]): dict(row) for row in rows}
-            base = found.get(base_instance_id)
-            material = found.get(material_instance_id)
-
-            for record in (base, material):
-                if (
-                    record is None
-                    or int(record["user_id"]) != user_id
-                    or record["status"] != "owned"
-                ):
-                    conn.rollback()
-                    return {"ok": False, "error": "not_owned"}
-
-            if base["familiar_id"] != material["familiar_id"]:
-                conn.rollback()
-                return {"ok": False, "error": "different_familiar"}
+                (base_instance_id,),
+            ).fetchone()
 
             if (
-                base_instance_id in locked_instance_ids
-                or material_instance_id in locked_instance_ids
+                base is None
+                or int(base["user_id"]) != user_id
+                or base["status"] != "owned"
             ):
+                conn.rollback()
+                return {"ok": False, "error": "not_owned"}
+
+            if base_instance_id in locked_instance_ids:
                 conn.rollback()
                 return {"ok": False, "error": "in_use"}
 
-            if int(base["level"]) >= max_level:
+            before_level = int(base["level"])
+            if before_level >= max_level:
                 conn.rollback()
                 return {"ok": False, "error": "max_level"}
 
+            if before_level + material_count > max_level:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "error": "over_max_level",
+                    "available_levels": max_level - before_level,
+                }
+
+            # 素材はレベルの低い個体から使う（強い個体を残す）。
+            candidates = conn.execute(
+                """
+                SELECT instance_id
+                FROM player_familiars
+                WHERE user_id = ?
+                  AND familiar_id = ?
+                  AND status = 'owned'
+                  AND instance_id != ?
+                ORDER BY
+                    level ASC,
+                    instance_id ASC
+                """,
+                (user_id, base["familiar_id"], base_instance_id),
+            ).fetchall()
+
+            material_ids = [
+                int(row["instance_id"])
+                for row in candidates
+                if int(row["instance_id"]) not in locked_instance_ids
+            ][:material_count]
+
+            if len(material_ids) < material_count:
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "error": "not_enough_materials",
+                    "available_materials": len(material_ids),
+                }
+
             now = _now()
-            new_level = int(base["level"]) + 1
+            new_level = before_level + material_count
 
             conn.execute(
                 """
@@ -583,57 +636,65 @@ def fuse_familiar(
                 """,
                 (new_level, now, base_instance_id),
             )
-            conn.execute(
-                """
-                UPDATE player_familiars
-                SET status = 'fused',
-                    updated_at = ?
-                WHERE instance_id = ?
-                """,
-                (now, material_instance_id),
-            )
-            conn.execute(
-                """
-                INSERT INTO familiar_transactions
-                    (user_id, type, instance_id, familiar_id, level,
-                     coin_amount, material_instance_id, note, created_at)
-                VALUES
-                    (?, 'fusion', ?, ?, ?, 0, ?, NULL, ?)
-                """,
-                (
-                    user_id,
-                    base_instance_id,
-                    base["familiar_id"],
-                    new_level,
-                    material_instance_id,
-                    now,
-                ),
-            )
+
+            for step, material_id in enumerate(material_ids, start=1):
+                conn.execute(
+                    """
+                    UPDATE player_familiars
+                    SET status = 'fused',
+                        updated_at = ?
+                    WHERE instance_id = ?
+                    """,
+                    (now, material_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO familiar_transactions
+                        (user_id, type, instance_id, familiar_id, level,
+                         coin_amount, material_instance_id, note, created_at)
+                    VALUES
+                        (?, 'fusion', ?, ?, ?, 0, ?, NULL, ?)
+                    """,
+                    (
+                        user_id,
+                        base_instance_id,
+                        base["familiar_id"],
+                        before_level + step,
+                        material_id,
+                        now,
+                    ),
+                )
 
     return {
         "ok": True,
         "error": None,
         "familiar_id": base["familiar_id"],
+        "before_level": before_level,
         "level": new_level,
+        "material_instance_ids": material_ids,
     }
 
 
 # ==================================================
 # 売却
 # ==================================================
-def sell_familiar(
+def sell_familiars(
     user_id: int,
     *,
-    instance_id: int,
-    price: int,
+    prices: dict[int, int],
     locked_instance_ids: set[int] | frozenset[int],
 ) -> dict[str, Any]:
-    """所有使い魔を売却し、coinを受け取る（10.2節）。
+    """所有使い魔をまとめて売却し、coinを受け取る（10.2節）。
 
-    売却額 ``price`` はサービス層が ``master_data.sell_price`` で計算した
-    値をそのまま使い、ここでは検算しません。状態変更・coin加算・履歴を
-    1つのトランザクションで確定します。
+    ``prices`` は ``{個体ID: 売却額}`` です。売却額はサービス層が
+    ``master_data.sell_price`` で計算した値をそのまま使い、ここでは検算
+    しません。1体でも売却できない場合は全体を取り消し、coinも増えません。
     """
+
+    if not prices:
+        return {"ok": False, "error": "invalid_count", "sold": [], "total": 0}
+
+    instance_ids = sorted(prices)
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -641,40 +702,76 @@ def sell_familiar(
         with conn:
             conn.execute("BEGIN IMMEDIATE")
 
-            row = conn.execute(
-                """
+            placeholders = ",".join("?" for _ in instance_ids)
+            rows = conn.execute(
+                f"""
                 SELECT instance_id, user_id, familiar_id, level, status
                 FROM player_familiars
-                WHERE instance_id = ?
+                WHERE instance_id IN ({placeholders})
                 """,
-                (instance_id,),
-            ).fetchone()
+                instance_ids,
+            ).fetchall()
 
-            if (
-                row is None
-                or int(row["user_id"]) != user_id
-                or row["status"] != "owned"
-            ):
-                conn.rollback()
-                return {"ok": False, "error": "not_owned"}
+            found = {int(row["instance_id"]): dict(row) for row in rows}
 
-            if instance_id in locked_instance_ids:
-                conn.rollback()
-                return {"ok": False, "error": "in_use"}
+            for instance_id in instance_ids:
+                record = found.get(instance_id)
+                if (
+                    record is None
+                    or int(record["user_id"]) != user_id
+                    or record["status"] != "owned"
+                ):
+                    conn.rollback()
+                    return {"ok": False, "error": "not_owned", "sold": [], "total": 0}
 
-            familiar_id = row["familiar_id"]
-            level = int(row["level"])
+                if instance_id in locked_instance_ids:
+                    conn.rollback()
+                    return {"ok": False, "error": "in_use", "sold": [], "total": 0}
+
             now = _now()
+            sold: list[dict[str, Any]] = []
+            total = 0
 
-            conn.execute(
-                """
-                UPDATE player_familiars
-                SET status = 'sold',
-                    updated_at = ?
-                WHERE instance_id = ?
-                """,
-                (now, instance_id),
-            )
+            for instance_id in instance_ids:
+                record = found[instance_id]
+                familiar_id = record["familiar_id"]
+                level = int(record["level"])
+                price = int(prices[instance_id])
+                total += price
+
+                conn.execute(
+                    """
+                    UPDATE player_familiars
+                    SET status = 'sold',
+                        updated_at = ?
+                    WHERE instance_id = ?
+                    """,
+                    (now, instance_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO familiar_transactions
+                        (user_id, type, instance_id, familiar_id, level,
+                         coin_amount, material_instance_id, note, created_at)
+                    VALUES
+                        (?, 'sell', ?, ?, ?, ?, NULL, NULL, ?)
+                    """,
+                    (user_id, instance_id, familiar_id, level, price, now),
+                )
+
+                sold.append(
+                    {
+                        "instance_id": instance_id,
+                        "familiar_id": familiar_id,
+                        "level": level,
+                        "price": price,
+                    }
+                )
+
+            note = f"{sold[0]['familiar_id']} Lv.{sold[0]['level']}"
+            if len(sold) > 1:
+                note = f"{note} 他{len(sold) - 1}体"
+
             conn.execute(
                 """
                 INSERT INTO balances (user_id, balance)
@@ -682,7 +779,7 @@ def sell_familiar(
                 ON CONFLICT(user_id)
                 DO UPDATE SET balance = balance + excluded.balance
                 """,
-                (user_id, price),
+                (user_id, total),
             )
             conn.execute(
                 """
@@ -691,35 +788,20 @@ def sell_familiar(
                 VALUES
                     ('使い魔売却', ?, ?, ?, ?, ?)
                 """,
-                (user_id, user_id, price, f"{familiar_id} Lv.{level}", now),
-            )
-            conn.execute(
-                """
-                INSERT INTO familiar_transactions
-                    (user_id, type, instance_id, familiar_id, level,
-                     coin_amount, material_instance_id, note, created_at)
-                VALUES
-                    (?, 'sell', ?, ?, ?, ?, NULL, NULL, ?)
-                """,
-                (user_id, instance_id, familiar_id, level, price, now),
+                (user_id, user_id, total, note, now),
             )
 
-    return {
-        "ok": True,
-        "error": None,
-        "familiar_id": familiar_id,
-        "level": level,
-        "price": price,
-    }
+    return {"ok": True, "error": None, "sold": sold, "total": total}
 
 
 __all__ = [
+    "count_fusable_materials",
     "count_owned_familiars",
     "draw_gacha",
     "fuse_familiar",
     "get_owned_familiar",
     "get_owned_familiars",
     "get_same_familiars",
-    "sell_familiar",
+    "sell_familiars",
     "sync_master_data",
 ]

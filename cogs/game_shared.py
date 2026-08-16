@@ -127,6 +127,7 @@ def missing_channel_settings() -> list[str]:
         ),
         "FAMILIAR_PANEL_CHANNEL_ID": config.FAMILIAR_PANEL_CHANNEL_ID,
         "GUILD_BATTLE_RECRUITMENT_CHANNEL_ID": config.GUILD_BATTLE_RECRUITMENT_CHANNEL_ID,
+        "GUILD_RECEPTION_CHANNEL_ID": config.GUILD_RECEPTION_CHANNEL_ID,
     }
     return [name for name, value in required.items() if not value]
 
@@ -195,7 +196,7 @@ def get_player_rank_info(user_id: int) -> dict | None:
 
 
 def can_found_guild_member(member: discord.Member) -> bool:
-    """騎士・七星・運営のいずれかを持つか（4節）。"""
+    """騎士・七星のいずれかを持つか（4節）。"""
 
     role_ids = {role.id for role in member.roles}
     return any(role_id in role_ids for role_id in config.GUILD_FOUNDER_ROLES)
@@ -768,21 +769,24 @@ async def game_admin_log(
     if channel is None or not hasattr(channel, "send"):
         return
 
+    lines = [detail or "—", ""]
+
+    if executor_id:
+        lines.append(item_line("実行者", f"<@{executor_id}>"))
+    if target_user_id:
+        lines.append(item_line("対象ユーザー", f"<@{target_user_id}>"))
+    if target_guild_id:
+        lines.append(item_line("対象ギルド", target_guild_id))
+    if target_battle_id:
+        lines.append(item_line("対象バトル", target_battle_id))
+    if reason:
+        lines.append(item_line("理由", reason[:1000]))
+
     embed = discord.Embed(
         title=f"RAGNA Online：{action}",
-        description=detail or "—",
+        description="\n".join(lines),
         color=config.COLOR_GREEN if success else config.COLOR_RED,
     )
-    if executor_id:
-        embed.add_field(name="実行者", value=f"<@{executor_id}>", inline=True)
-    if target_user_id:
-        embed.add_field(name="対象ユーザー", value=f"<@{target_user_id}>", inline=True)
-    if target_guild_id:
-        embed.add_field(name="対象ギルド", value=str(target_guild_id), inline=True)
-    if target_battle_id:
-        embed.add_field(name="対象バトル", value=str(target_battle_id), inline=True)
-    if reason:
-        embed.add_field(name="理由", value=reason[:1000], inline=False)
 
     try:
         await channel.send(embed=embed)
@@ -792,7 +796,18 @@ async def game_admin_log(
 
 # ==================================================
 # 表示
+# Embedはfieldを使わず、本文へ「【項目】結果」の形で並べる
 # ==================================================
+def item_line(label: str, value: object) -> str:
+    """「【項目】結果」の1行を作る。
+
+    Embedの ``field`` は列幅が端末やモバイルで大きく変わるため使わず、
+    項目はすべて本文へこの形で並べます。
+    """
+
+    return f"【{label}】{value}"
+
+
 def format_coin(amount: int) -> str:
     return f"{amount:,} coin"
 
@@ -865,6 +880,7 @@ __all__ = [
     "get_player_rank_info",
     "is_game_enabled",
     "is_manager",
+    "item_line",
     "member_overwrites",
     "missing_channel_settings",
     "rank_label",

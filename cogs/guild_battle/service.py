@@ -327,6 +327,11 @@ def check_guild_ready(
     if busy_players is None:
         busy_players = _players_in_active_battles()
 
+    set_counts: dict[int, int] = {}
+    for entry in battle_entries:
+        owner_id = int(entry["user_id"])
+        set_counts[owner_id] = set_counts.get(owner_id, 0) + 1
+
     # 出場者そのものの確認（使い魔をセットしていない人も対象にする）
     for member in roster:
         user_id = int(member["user_id"])
@@ -339,6 +344,15 @@ def check_guild_ready(
 
         if user_id in busy_players:
             issues.append(f"{mention} は他の進行中バトルへ参加しています。")
+
+        # 9節：マスターが割り当てた体数まで埋まっていること
+        assigned = int(member["familiar_count"] or 0)
+        current = set_counts.get(user_id, 0)
+        if current < assigned:
+            issues.append(
+                f"{mention} の割り当ては{assigned}体ですが、{current}体しか"
+                "セットされていません。"
+            )
 
     # セットされた使い魔ごとの確認
     for entry in battle_entries:
@@ -406,21 +420,22 @@ async def _notify_start_failure(
     if discord_guild is None:
         return
 
-    embed = discord.Embed(
-        title="⚔ ギルドバトルを開始できませんでした",
-        description="次の条件を満たしてから、改めて申請・募集してください。",
-        color=config.COLOR_RED,
-    )
+    lines = ["次の条件を満たしてから、改めて申請・募集してください。"]
 
     for guild_id in guild_ids:
         guild_row = get_guild(guild_id)
         name = guild_row["name"] if guild_row else f"ギルド{guild_id}"
         issues = problems.get(guild_id) or ["条件を満たしています。"]
-        embed.add_field(
-            name=name,
-            value="\n".join(f"・{issue}" for issue in issues)[:1024],
-            inline=False,
-        )
+
+        lines.append("")
+        lines.append(game_shared.item_line(name, ""))
+        lines.extend(f"・{issue}" for issue in issues)
+
+    embed = discord.Embed(
+        title="⚔ ギルドバトルを開始できませんでした",
+        description="\n".join(lines)[:4000],
+        color=config.COLOR_RED,
+    )
 
     for guild_id in guild_ids:
         guild_row = get_guild(guild_id)

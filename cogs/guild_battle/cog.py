@@ -40,6 +40,7 @@ class GuildBattle(commands.Cog):
 
         # 未設定チャンネルの警告を毎回出さないためのフラグ
         self._ranking_channel_warned = False
+        self._register_channel_warned = False
 
         # 復旧が終わるまで見張りタスクを動かさないための合図（22節・29節）
         self._recovered = asyncio.Event()
@@ -83,6 +84,7 @@ class GuildBattle(commands.Cog):
             return
 
         await self._ensure_ranking_panel(guild)
+        await self._ensure_register_panel(guild)
 
         for guild_row in get_active_guilds():
             try:
@@ -95,14 +97,14 @@ class GuildBattle(commands.Cog):
                 )
 
     async def _ensure_ranking_panel(self, guild: discord.Guild) -> None:
-        """ギルドバトル募集チャンネルへランキングパネルを設置する（26.2節）。"""
+        """ギルド受付チャンネルへギルドランキングパネルを設置する（26.2節）。"""
 
-        channel_id = config.GUILD_BATTLE_RECRUITMENT_CHANNEL_ID
+        channel_id = config.GUILD_RECEPTION_CHANNEL_ID
         if not channel_id:
             if not self._ranking_channel_warned:
                 logger.warning(
-                    "GUILD_BATTLE_RECRUITMENT_CHANNEL_ID が未設定のため、"
-                    "ランキングパネルを設置しません"
+                    "GUILD_RECEPTION_CHANNEL_ID が未設定のため、"
+                    "ギルドランキングパネルを設置しません"
                 )
                 self._ranking_channel_warned = True
             return
@@ -114,7 +116,34 @@ class GuildBattle(commands.Cog):
             panel_title=views.RANKING_PANEL_TITLE,
             embed=views.ranking_panel_embed(),
             view=views.BattleRankingPanelView(),
-            panel_name="ギルドバトルランキングパネル",
+            panel_name="ギルドランキングパネル",
+        )
+
+    async def _ensure_register_panel(self, guild: discord.Guild) -> None:
+        """使い魔チャンネルへバトル使い魔登録パネルを設置する（9節）。
+
+        出場者でなくても、ギルドに所属していなくても登録できるよう、
+        ギルド専用チャンネルではなく全員が見られる場所へ置きます。
+        """
+
+        channel_id = config.FAMILIAR_PANEL_CHANNEL_ID
+        if not channel_id:
+            if not self._register_channel_warned:
+                logger.warning(
+                    "FAMILIAR_PANEL_CHANNEL_ID が未設定のため、"
+                    "バトル使い魔登録パネルを設置しません"
+                )
+                self._register_channel_warned = True
+            return
+
+        await ensure_panel_message(
+            self.bot,
+            guild,
+            channel_id,
+            panel_title=views.REGISTER_PANEL_TITLE,
+            embed=views.register_panel_embed(),
+            view=views.BattleFamiliarPanelView(),
+            panel_name="バトル使い魔登録パネル",
         )
 
     @battle_panels.before_loop
@@ -291,5 +320,6 @@ async def setup(bot: commands.Bot) -> None:
     bot.add_view(views.BattleRecruitmentView())
     bot.add_view(views.BattleCommandView())
     bot.add_view(views.BattleRankingPanelView())
+    bot.add_view(views.BattleFamiliarPanelView())
 
     logger.info("GuildBattle Cog 登録完了")

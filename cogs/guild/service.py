@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 NO_MENTIONS = game_shared.NO_MENTIONS
 
 # ギルド紹介チャンネルの常設パネルのタイトル（ensure_panel_messageの識別キー）
-PANEL_TITLE = "RAGNA Online ギルド"
+PANEL_TITLE = "RAGNA Online"
 
 # マスター専用TC・ギルドTCへ設置する常設パネルのタイトル
 MANAGE_PANEL_TITLE = "ギルド管理"
@@ -194,10 +194,10 @@ def build_intro_panel_embed() -> discord.Embed:
             "**ギルド設立**\n"
             f"-# 設立費用：{game_shared.format_coin(balance.create_cost)}\n"
             f"-# 初期定員：{balance.initial_capacity}人（最大{balance.max_capacity}人）\n"
-            "-# 騎士・七星・運営のロールを持つプレイヤーだけが設立できます。\n"
-            "-# 既にギルドへ所属している場合は設立できません。\n\n"
+            "-# 騎士・七星だけが設立できます。\n"
+            "-# ※既にギルドへ所属している場合は設立できません。\n\n"
             "**申請確認・取消**\n"
-            "-# 自分が出している参加申請を確認し、取り消せます。"
+            "-# 自分の参加申請を確認・取消可能。"
         ),
         color=config.COLOR_WHITE,
     )
@@ -212,16 +212,22 @@ def build_manage_panel_embed() -> discord.Embed:
         title=MANAGE_PANEL_TITLE,
         description=(
             "​\n"
-            "**ギルドマスター専用の操作**\n"
-            "-# メンバー追放：一般メンバーをギルドから外します。\n"
-            "-# マスター譲渡：所属メンバー1人へマスターを譲ります。\n"
-            f"-# メンバー枠拡張：1枠 {game_shared.format_coin(balance.member_slot_cost)}"
-            f"（最大{balance.max_capacity}人）\n"
-            f"-# ギルド名変更：{game_shared.format_coin(balance.rename_cost)}\n"
-            f"-# ギルド説明変更：{balance.description_min_length}〜"
-            f"{balance.description_max_length}文字\n"
-            "-# メンバー募集：募集の開始・停止を切り替えます。\n"
-            "-# ギルド解散：確認のうえギルドを解散します。"
+            "**メンバー追放**\n"
+            "-# 一般メンバーをギルドから外します。\n\n"
+            "**マスター譲渡**\n"
+            "-# 所属メンバー1人へマスターを譲ります。\n\n"
+            "**メンバー枠拡張**\n"
+            f"-# 1枠 {game_shared.format_coin(balance.member_slot_cost)} 自動引き落としで"
+            f"拡張可能。（最大{balance.max_capacity}人）\n\n"
+            "**ギルド名変更**\n"
+            f"-# {game_shared.format_coin(balance.rename_cost)} 自動引き落としで変更可能。\n\n"
+            "**ギルド説明変更**\n"
+            f"-# {balance.description_min_length}〜{balance.description_max_length}文字で"
+            "変更可能。\n\n"
+            "**メンバー募集**\n"
+            "-# 募集の開始・停止を切り替えます。\n\n"
+            "**ギルド解散**\n"
+            "-# 再確認のうえギルドを解散します。"
         ),
         color=config.COLOR_WHITE,
     )
@@ -263,11 +269,18 @@ def build_recruitment_embed(guild_row: dict, member_count: int) -> discord.Embed
 
     description = str(guild_row.get("description") or "未登録")
 
-    embed = discord.Embed(title=RECRUITMENT_TITLE, color=color)
-    embed.add_field(name="ギルド名", value=str(guild_row["name"])[:1024], inline=False)
-    embed.add_field(name="説明", value=description[:1024], inline=False)
-    embed.add_field(name="メンバー", value=f"{member_count} / {capacity}", inline=False)
-    embed.add_field(name="状態", value=state, inline=False)
+    embed = discord.Embed(
+        title=RECRUITMENT_TITLE,
+        description="\n".join(
+            [
+                game_shared.item_line("ギルド名", str(guild_row["name"])[:200]),
+                game_shared.item_line("ギルド説明", description[:1000]),
+                game_shared.item_line("メンバー", f"{member_count} / {capacity}"),
+                game_shared.item_line("状態", state),
+            ]
+        ),
+        color=color,
+    )
     embed.set_footer(text=f"ギルドID：{int(guild_row['guild_id'])}")
 
     return embed
@@ -280,8 +293,11 @@ def build_join_request_embed(
 
     applicant_id = applicant if isinstance(applicant, int) else applicant.id
 
-    embed = discord.Embed(title=JOIN_REQUEST_TITLE, color=config.COLOR_BLUE)
-    embed.add_field(name="申請者", value=f"<@{applicant_id}>", inline=False)
+    embed = discord.Embed(
+        title=JOIN_REQUEST_TITLE,
+        description=game_shared.item_line("申請者", f"<@{applicant_id}>"),
+        color=config.COLOR_BLUE,
+    )
     embed.set_footer(text=f"ギルド：{str(guild_row['name'])[:80]}")
 
     return embed
@@ -311,31 +327,31 @@ def build_guild_info_embed(
         master_member.display_name if master_member is not None else f"ID:{master_id}"
     )
 
-    embed = discord.Embed(
-        title=str(guild_row["name"])[:256],
-        description=str(guild_row.get("description") or "説明は未登録です。")[:2000],
-        color=config.COLOR_WHITE,
-    )
-    embed.add_field(name="ギルドマスター", value=master_name, inline=False)
-    embed.add_field(name="メンバー", value=f"{len(members)} / {capacity}", inline=False)
-    embed.add_field(
-        name="メンバー一覧", value="\n".join(lines)[:1024] or "—", inline=False
-    )
-    embed.add_field(
-        name="戦績",
-        value=(
+    body = [
+        game_shared.item_line(
+            "ギルド説明", str(guild_row.get("description") or "未登録")[:1000]
+        ),
+        game_shared.item_line("ギルドマスター", master_name),
+        game_shared.item_line("メンバー", f"{len(members)} / {capacity}"),
+        game_shared.item_line(
+            "戦績",
             f"{int(guild_row.get('wins') or 0)}勝 "
             f"{int(guild_row.get('losses') or 0)}敗 "
-            f"{int(guild_row.get('draws') or 0)}分"
+            f"{int(guild_row.get('draws') or 0)}分",
         ),
-        inline=False,
-    )
-    embed.add_field(
-        name="募集状態",
-        value=RECRUITMENT_LABELS.get(
-            str(guild_row.get("recruitment_status")), RECRUITMENT_LABELS["closed"]
+        game_shared.item_line(
+            "募集状態",
+            RECRUITMENT_LABELS.get(
+                str(guild_row.get("recruitment_status")), RECRUITMENT_LABELS["closed"]
+            ),
         ),
-        inline=False,
+        game_shared.item_line("メンバー一覧", "\n" + ("\n".join(lines)[:1500] or "—")),
+    ]
+
+    embed = discord.Embed(
+        title=str(guild_row["name"])[:256],
+        description="\n".join(body),
+        color=config.COLOR_WHITE,
     )
     embed.set_footer(text=f"ギルドID：{guild_id}")
 

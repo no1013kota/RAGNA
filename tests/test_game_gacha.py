@@ -12,6 +12,7 @@ from collections import Counter
 os.environ.setdefault("DISCORD_BOT_TOKEN", "test-token")
 os.environ.setdefault("DISCORD_GUILD_ID", "1")
 
+from cogs import game_shared  # noqa: E402
 from cogs.familiar import service  # noqa: E402
 from game.master_data import load_master_data  # noqa: E402
 
@@ -54,7 +55,7 @@ class RankTableTests(unittest.TestCase):
         # 保証枠にはCランクが含まれないため、本文どおりの確率がそのまま使われる
         self.assertEqual(
             dict(service.build_rank_table(POOL, "guaranteed")),
-            {"B": 900, "A": 90, "S": 10},
+            {"A": 900, "S": 100},
         )
 
     def test_every_registered_rank_has_familiars(self) -> None:
@@ -77,9 +78,9 @@ class DrawTests(unittest.TestCase):
         results = service.draw_results(POOL, POOL.multi_count)
         self.assertEqual(len(results), POOL.multi_count)
 
-    def test_the_guaranteed_slot_is_never_below_b(self) -> None:
-        # 10.2節「10回実行の10枠目はBランク以上を保証」
-        allowed = {"B", "A", "S"}
+    def test_the_guaranteed_slot_is_never_below_a(self) -> None:
+        # 10.2節「10回実行の10枠目はAランク以上を保証」
+        allowed = {"A", "S"}
 
         for _ in range(200):
             results = service.draw_results(POOL, POOL.multi_count)
@@ -116,42 +117,44 @@ class RateListEmbedTests(unittest.TestCase):
     """ガチャパネルの「排出使い魔の確認」が出す一覧（10.2節・10.6節）。"""
 
     def setUp(self) -> None:
-        self.embed = service.build_rate_list_embed(POOL)
+        self.embed, self.has_familiars = service.build_rate_list_embed(POOL)
+        self.body = self.embed.description or ""
 
     def test_every_drawable_familiar_is_listed(self) -> None:
-        listed = "".join(field.value for field in self.embed.fields)
+        self.assertTrue(self.has_familiars)
 
         for rank, _ in service.build_rank_table(POOL, "normal"):
             for familiar in MASTER.familiars_by_rank(rank):
-                self.assertIn(familiar.name, listed, familiar.familiar_id)
+                self.assertIn(familiar.name, self.body, familiar.familiar_id)
 
     def test_unregistered_ranks_are_not_listed(self) -> None:
-        # Cランクは未登録なので、確率も名前も出さない
-        names = "".join(field.name for field in self.embed.fields)
-
-        self.assertNotIn("C", names.replace("COST", ""))
+        # Cランクは未登録なので、確率の行を出さない
+        self.assertNotIn("【C】", self.body)
 
     def test_rank_rate_and_per_familiar_rate_are_shown(self) -> None:
-        names = [field.name for field in self.embed.fields]
+        # 例：「【B】90.0%（20体・各4.50%）」
+        self.assertIn("【B】90.0%（20体・各4.50%）", self.body)
 
-        # 例：「🔷B　90.0%（20体・各4.50%）」
-        self.assertTrue(any("90.0%" in name and "4.50%" in name for name in names), names)
+    def test_rank_labels_have_no_emoji(self) -> None:
+        # 排出率の表示は絵文字を使わない
+        for rank in ("S", "A", "B"):
+            self.assertIn(f"【{rank}】", self.body)
+
+        for emoji in game_shared.RANK_EMOJIS.values():
+            self.assertNotIn(emoji, self.body)
 
     def test_the_guaranteed_slot_is_explained(self) -> None:
-        names = [field.name for field in self.embed.fields]
+        self.assertIn(f"【{POOL.multi_count}連{POOL.guaranteed_slot}枠目】", self.body)
 
-        self.assertTrue(any("保証枠" in name for name in names), names)
+    def test_the_embed_uses_no_fields(self) -> None:
+        # すべての項目は「【項目】結果」で本文へ並べる
+        self.assertEqual(self.embed.fields, [])
 
     def test_embed_stays_within_discord_limits(self) -> None:
-        total = len(self.embed.title or "") + len(self.embed.description or "")
-
-        for field in self.embed.fields:
-            self.assertLessEqual(len(field.name), 256)
-            self.assertLessEqual(len(field.value), 1024)
-            total += len(field.name) + len(field.value)
-
-        self.assertLessEqual(len(self.embed.fields), 25)
-        self.assertLessEqual(total, 6000)
+        self.assertLessEqual(len(self.body), 4096)
+        self.assertLessEqual(
+            len(self.embed.title or "") + len(self.body), 6000
+        )
 
     def test_per_familiar_rate_formatting(self) -> None:
         self.assertEqual(service.format_each_rate(900, 20), "4.50%")
@@ -160,9 +163,11 @@ class RateListEmbedTests(unittest.TestCase):
 
 
 class CostTests(unittest.TestCase):
-    def test_ten_draws_cost_ten_times_a_single_draw(self) -> None:
-        # 10.2節「10回実行に割引はありません」
-        self.assertEqual(POOL.single_cost * POOL.multi_count, POOL.multi_cost)
+    def test_ten_draws_cost_nine_single_draws(self) -> None:
+        # 10.2節：単発30,000 coin、10連270,000 coin（1回分だけ得になる）
+        self.assertEqual(POOL.single_cost, 30_000)
+        self.assertEqual(POOL.multi_cost, 270_000)
+        self.assertEqual(POOL.single_cost * (POOL.multi_count - 1), POOL.multi_cost)
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ RAGNA/
 │   ├── ticket/               # 同じ3層構成
 │   ├── trial_member/         # 同じ3層構成
 │   ├── guild/                # RAGNA Online：ギルド（cog/views/service）
-│   ├── familiar/             # RAGNA Online：ガチャ／使い魔管理パネル
+│   ├── familiar/             # RAGNA Online：ガチャ／使い魔管理（一覧・合成・売却・図鑑）
 │   ├── guild_battle/         # RAGNA Online：ギルドバトル
 │   ├── game_shared.py        # ゲーム3Cogの共通Discord処理（Cogではない）
 │   ├── xp.py                 # 比較的小さい単独Cog
@@ -61,7 +61,7 @@ RAGNA/
 │   ├── ticket.py             # 問い合わせデータの公開窓口
 │   ├── guild.py              # ギルド・所属・参加申請
 │   ├── familiar.py           # 使い魔マスター同期・所有・ガチャ・合成・売却
-│   ├── battle.py             # 出場者セット・対戦成立・戦闘状態・報酬
+│   ├── battle.py             # 事前登録・出場者セット・対戦成立・戦闘状態・報酬
 │   ├── player_rank.py        # Discordロールとゲーム内ランクの同期
 │   └── core.py               # 既存SQL実装と共通トランザクション
 ├── scripts/
@@ -110,8 +110,8 @@ Cog側を変更せずに済みます。
 | 問い合わせの作成・管理 | `cogs/ticket/` | `database.ticket` |
 | 自己紹介テンプレート | `cogs/introduction.py` | なし |
 | ギルド設立・募集・参加・管理 | `cogs/guild/` | `database.guild`、`database.player_rank` |
-| ガチャ・排出確認・一覧・合成・売却 | `cogs/familiar/` | `database.familiar` |
-| 出場者セット・対戦・バトル進行 | `cogs/guild_battle/` | `database.battle`、`game/` |
+| ガチャ・排出確認・一覧・合成・売却・図鑑 | `cogs/familiar/` | `database.familiar` |
+| 事前登録・出場者セット・対戦・バトル進行 | `cogs/guild_battle/` | `database.battle`、`game/` |
 
 ## RAGNA Onlineの構成
 
@@ -125,6 +125,16 @@ cogs/guild_battle/service.py 状態を読み、エンジンへ渡し、保存し
 game/battle_engine.py        Discordを知らない戦闘計算
         ↓
 database/battle.py           状態の保存と楽観ロック
+```
+
+バトルで使う使い魔は、次の2段階で決まります。
+
+```text
+player_battle_familiars      本人が優先順を付けて事前登録（ギルド・進行状況と無関係）
+        ↓ メンバーセット時に自動採用
+guild_battle_members         マスターが出場者と「1人あたりの体数」を割り当て
+        ↓
+guild_battle_entries         実際に出場する使い魔（本人が枠内で差し替え可能）
 ```
 
 ギルドのDiscordチャンネルは次のように分かれます。
@@ -141,6 +151,9 @@ database/battle.py           状態の保存と楽観ロック
   返した場合、Cogは**何も投稿せず**に処理を中断します。
 - 料金・確率・能力値は `data/master/` のJSONが唯一の定義です。値を変更するときは
   `docs/GAME_SPEC.md` と `tests/test_game_master_data.py` の期待値も同じ変更として更新します。
+- Embedでは `field` を使いません。項目は本文へ「【項目】結果」の形で並べます
+  （`cogs.game_shared.item_line`、`game.battle_embed.item_line`）。表示幅が端末によって
+  変わるうえ、項目が横に並ぶと読み順が崩れるためです。
 
 ## 変更時のルール
 

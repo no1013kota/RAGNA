@@ -61,6 +61,7 @@ EXPECTED_PERSISTENT_CUSTOM_IDS = {
     "evaluation_panel:evaluate",
     "evaluation_panel:target_list",
     "evaluation_user_select",
+    "familiar:codex",
     "familiar:fuse",
     "familiar:gacha_multi",
     "familiar:gacha_rates",
@@ -86,6 +87,7 @@ EXPECTED_PERSISTENT_CUSTOM_IDS = {
     "guild_battle:ranking",
     "guild_battle:recruit",
     "guild_battle:recruit_apply",
+    "guild_battle:register_familiars",
     "guild_battle:request",
     "guild_battle:request_approve",
     "guild_battle:request_reject",
@@ -225,6 +227,15 @@ class ProjectStructureTests(unittest.TestCase):
                 source = path.read_text(encoding="utf-8")
                 self.assertNotIn("get_connection", source, str(path))
                 self.assertNotIn("sqlite3", source, str(path))
+
+    def test_embeds_never_use_fields(self) -> None:
+        """Embedの項目は本文の「【項目】結果」へ統一する（34.16節）。"""
+
+        for directory in ("cogs", "game"):
+            for path in sorted((ROOT / directory).rglob("*.py")):
+                source = path.read_text(encoding="utf-8")
+                self.assertNotIn("add_field", source, str(path))
+                self.assertNotIn("set_field_at", source, str(path))
 
     def test_master_data_files_exist(self) -> None:
         for name in ("balance.json", "familiars.json", "skills.json", "gacha.json"):

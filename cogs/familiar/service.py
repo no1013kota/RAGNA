@@ -18,6 +18,7 @@ from typing import Any, Iterable
 import discord
 
 from cogs import game_shared
+from cogs.game_shared import item_line
 from game.battle_embed import thumbnail_file
 from game.master_data import GachaPool, load_master_data
 from game.models import GENDER_FEMALE, GENDER_MALE, GENDER_NONE
@@ -34,6 +35,9 @@ PERMILLE_TOTAL = 1000
 
 # 公開ガチャのプールID（10.2節では通常ガチャ1種類のみ）
 DEFAULT_POOL_ID = "standard"
+
+# セレクトの選択肢上限（Discordの仕様）
+PAGE_SIZE = 25
 
 # 排出率テーブルの種類
 SLOT_NORMAL = "normal"
@@ -240,7 +244,7 @@ def draw_results(pool: GachaPool, count: int) -> list[tuple[str, str]]:
 # 価格・候補の計算
 # ==================================================
 def sell_price(familiar_id: str, level: int) -> int:
-    """売却額を返す（10.2節：``ランク別基準価格 × (レベル + 1)``）。"""
+    """売却額を返す（10.2節：``ランク別基準価格 × レベル``）。"""
 
     master = load_master_data()
 
@@ -258,7 +262,8 @@ def fusable_bases(
     """合成のベースに選べる個体だけを絞り込む。
 
     素材にできる同種の個体が別に存在し、最大レベル未満で、編成ロック中・
-    進行中バトルで使用中でない個体だけを返します。
+    進行中バトルで使用中でない個体だけを返します。レベルの高い個体から
+    並べるので、そのまま選択肢にすると育成済みの個体が上に来ます。
     """
 
     master = load_master_data()
@@ -275,6 +280,40 @@ def fusable_bases(
     ]
 
 
+def fusable_count(
+    owned: list[dict[str, Any]],
+    locked_instance_ids: Iterable[int],
+    *,
+    base: dict[str, Any],
+) -> int:
+    """``base`` を土台にしたときに素材にできる体数を返す。"""
+
+    locked = set(locked_instance_ids)
+    base_id = int(base["instance_id"])
+
+    return sum(
+        1
+        for row in owned
+        if row["familiar_id"] == base["familiar_id"]
+        and int(row["instance_id"]) != base_id
+        and int(row["instance_id"]) not in locked
+    )
+
+
+def max_fusion_count(
+    owned: list[dict[str, Any]],
+    locked_instance_ids: Iterable[int],
+    *,
+    base: dict[str, Any],
+) -> int:
+    """一度に合成できる最大体数（素材数とレベル上限の小さい方）を返す。"""
+
+    master = load_master_data()
+
+    room = master.familiar.max_level - int(base["level"])
+    return max(0, min(room, fusable_count(owned, locked_instance_ids, base=base)))
+
+
 def exclude_locked(
     rows: list[dict[str, Any]],
     locked_instance_ids: Iterable[int],
@@ -287,6 +326,7 @@ def exclude_locked(
 
 # ==================================================
 # 表示の共通処理
+# Embedはfieldを使わず、本文へ「【項目】結果」の形で並べる
 # ==================================================
 def gender_label(gender: str | None) -> str:
     """性別を表示用の日本語へ変換する。未登録は推測せず「未登録」と返す。"""
@@ -321,8 +361,129 @@ def instance_title(row: dict[str, Any]) -> str:
     return f"{familiar_name(row['familiar_id'])} Lv.{int(row['level'])}"
 
 
+def stat_lines(familiar_id: str, level: int) -> list[str]:
+    """HP・ATK・SPDを縦に並べた行を返す。"""
+
+    master = load_master_data()
+
+    stats = master.level_stats(familiar_id, level)
+    if stats is None:
+        return []
+
+    return [
+        item_line("HP", stats.max_hp),
+        item_line("ATK", stats.atk),
+        item_line("SPD", stats.speed),
+    ]
+
+
+def skill_lines(familiar_id: str, *, with_description: bool = True) -> list[str]:
+    """パッシブ・アクティブスキルを種類ごとに並べた行を返す。"""
+
+    master = load_master_data()
+
+    lines: list[str] = []
+
+    for label, skills in (
+        ("パッシブ", master.passive_skills_of(familiar_id)),
+        ("アクティブ", master.active_skills_of(familiar_id)),
+    ):
+        if not skills:
+            lines.append(item_line(label, "なし"))
+            continue
+
+        lines.append(item_line(label, "／".join(skill.name for skill in skills)))
+
+        if with_description:
+            lines.extend(f"-# {skill.description}" for skill in skills)
+
+    return lines
+
+
+# ==================================================
+# 所有使い魔のまとめ表示
+# 同じ使い魔を何度も並べず「×n」でまとめる
+# ==================================================
+def group_instances(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """所有使い魔を「同じ種類・同じレベル」でまとめる。
+
+    戻り値は ``{"familiar_id", "level", "count", "instance_id", "instance_ids"}``
+    の一覧で、強いランク・高いレベルの順に並びます。``instance_id`` は代表
+    個体（最も小さいID）です。
+    """
+
+    master = load_master_data()
+    rank_order = list(master.familiar.rank_order)
+
+    groups: dict[tuple[str, int], dict[str, Any]] = {}
+
+    for row in rows:
+        familiar_id = str(row["familiar_id"])
+        level = int(row["level"])
+        key = (familiar_id, level)
+
+        group = groups.get(key)
+        if group is None:
+            groups[key] = {
+                "familiar_id": familiar_id,
+                "level": level,
+                "count": 1,
+                "instance_ids": [int(row["instance_id"])],
+            }
+            continue
+
+        group["count"] += 1
+        group["instance_ids"].append(int(row["instance_id"]))
+
+    ordered = sorted(
+        groups.values(),
+        key=lambda group: (
+            -_rank_strength(rank_order, familiar_rank(group["familiar_id"])),
+            group["familiar_id"],
+            -group["level"],
+        ),
+    )
+
+    for group in ordered:
+        group["instance_ids"].sort()
+        group["instance_id"] = group["instance_ids"][0]
+
+    return ordered
+
+
+def group_title(group: dict[str, Any]) -> str:
+    """「使い魔名 Lv.n ×3」の表記を作る。1体のときは「×n」を付けない。"""
+
+    text = f"{familiar_name(group['familiar_id'])} Lv.{group['level']}"
+    if int(group["count"]) > 1:
+        text = f"{text} ×{group['count']}"
+
+    return text
+
+
+def build_group_options(
+    groups: list[dict[str, Any]],
+) -> list[discord.SelectOption]:
+    """まとめた所有使い魔をセレクトの選択肢へ変換する。"""
+
+    options: list[discord.SelectOption] = []
+
+    for group in groups:
+        rank = familiar_rank(group["familiar_id"])
+
+        options.append(
+            discord.SelectOption(
+                label=group_title(group)[:100],
+                description=f"{game_shared.rank_label(rank)}／{group['count']}体所有"[:100],
+                value=str(group["instance_id"]),
+            )
+        )
+
+    return options
+
+
 def build_instance_options(rows: list[dict[str, Any]]) -> list[discord.SelectOption]:
-    """所有使い魔をセレクトの選択肢へ変換する（同じ種類も個体ごとに区別する）。"""
+    """所有使い魔をセレクトの選択肢へ変換する（個体ごとに区別する）。"""
 
     options: list[discord.SelectOption] = []
 
@@ -336,6 +497,120 @@ def build_instance_options(rows: list[dict[str, Any]]) -> list[discord.SelectOpt
                     f"{game_shared.rank_label(rank)}／個体ID {row['instance_id']}"
                 )[:100],
                 value=str(row["instance_id"]),
+            )
+        )
+
+    return options
+
+
+def codex_pages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """図鑑のページ一覧を作る。同じ使い魔は1ページにまとめる。
+
+    ページの能力値は所有している中で最も高いレベルのものを使い、``count``
+    はその使い魔の所有合計です。
+    """
+
+    master = load_master_data()
+    rank_order = list(master.familiar.rank_order)
+
+    pages: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        familiar_id = str(row["familiar_id"])
+        level = int(row["level"])
+
+        page = pages.get(familiar_id)
+        if page is None:
+            pages[familiar_id] = {
+                "familiar_id": familiar_id,
+                "level": level,
+                "count": 1,
+            }
+            continue
+
+        page["count"] += 1
+        page["level"] = max(int(page["level"]), level)
+
+    return sorted(
+        pages.values(),
+        key=lambda page: (
+            -_rank_strength(rank_order, familiar_rank(page["familiar_id"])),
+            page["familiar_id"],
+        ),
+    )
+
+
+def build_fusion_count_options(
+    base: dict[str, Any],
+    maximum: int,
+) -> list[discord.SelectOption]:
+    """合成する体数の選択肢を作る。選ぶ前に変化後の能力値が分かるようにする。"""
+
+    master = load_master_data()
+
+    familiar_id = str(base["familiar_id"])
+    before_level = int(base["level"])
+    before = master.level_stats(familiar_id, before_level)
+
+    options: list[discord.SelectOption] = []
+
+    for count in range(1, min(maximum, PAGE_SIZE) + 1):
+        after_level = before_level + count
+        after = master.level_stats(familiar_id, after_level)
+
+        description = f"Lv.{before_level}→Lv.{after_level}"
+        if before is not None and after is not None:
+            description = (
+                f"{description}　HP {before.max_hp}→{after.max_hp}"
+                f"　ATK {before.atk}→{after.atk}"
+            )
+
+        options.append(
+            discord.SelectOption(
+                label=f"{count}体",
+                description=description[:100],
+                value=str(count),
+            )
+        )
+
+    return options
+
+
+def guaranteed_floor_rank(pool: GachaPool) -> str:
+    """保証枠で確定する最低ランクを返す。"""
+
+    master = load_master_data()
+
+    table = build_rank_table(pool, SLOT_GUARANTEED)
+    if not table:
+        return ""
+
+    rank_order = list(master.familiar.rank_order)
+    return min(
+        (rank for rank, _ in table),
+        key=lambda rank: _rank_strength(rank_order, rank),
+    )
+
+
+def build_count_options(
+    maximum: int,
+    *,
+    unit_price: int | None = None,
+) -> list[discord.SelectOption]:
+    """「何体にするか」を選ぶ選択肢を1〜``maximum`` で作る。"""
+
+    options: list[discord.SelectOption] = []
+
+    for count in range(1, min(maximum, PAGE_SIZE) + 1):
+        description = None
+        if unit_price is not None:
+            description = f"受取額 {game_shared.format_coin(unit_price * count)}"
+
+        options.append(
+            discord.SelectOption(
+                label=f"{count}体",
+                description=description,
+                value=str(count),
             )
         )
 
@@ -372,6 +647,15 @@ def format_each_rate(permille: int, count: int) -> str:
     return f"{permille / 10 / count:.2f}%"
 
 
+def rate_lines(pool: GachaPool, slot_type: str = SLOT_NORMAL) -> list[str]:
+    """排出率を「【ランク】確率」の行で返す（絵文字は付けない）。"""
+
+    return [
+        item_line(rank, format_rate(permille))
+        for rank, permille in reversed(build_rank_table(pool, slot_type))
+    ]
+
+
 # ==================================================
 # Embedの組み立て
 # ==================================================
@@ -384,14 +668,11 @@ def build_rate_list_embed(pool: GachaPool) -> discord.Embed:
 
     master = load_master_data()
 
-    embed = discord.Embed(
-        title="排出使い魔一覧",
-        description=(
-            f"**{pool.name}** で入手できる使い魔です。\n"
-            "-# 同じランク内の使い魔は均等に排出されます。"
-        ),
-        color=game_shared.RANK_COLORS.get("S", 0xFEE75C),
-    )
+    lines = [
+        f"**{pool.name}** で入手できる使い魔です。",
+        "-# 同じランク内の使い魔は均等に排出されます。",
+        "",
+    ]
 
     # 表示順は使い魔マスターの登録順（docs/FAMILIAR_MASTER.md の掲載順）に合わせる
     document_order = {
@@ -399,6 +680,7 @@ def build_rate_list_embed(pool: GachaPool) -> discord.Embed:
     }
 
     table = build_rank_table(pool, SLOT_NORMAL)
+    listed = 0
 
     for rank, permille in reversed(table):
         familiars = sorted(
@@ -408,72 +690,70 @@ def build_rate_list_embed(pool: GachaPool) -> discord.Embed:
         if not familiars:
             continue
 
+        listed += 1
         names = "、".join(familiar.name for familiar in familiars)
-        if len(names) > 1000:
-            names = names[:1000] + "…"
+        if len(names) > 500:
+            names = names[:500] + "…"
 
-        embed.add_field(
-            name=(
-                f"{game_shared.rank_label(rank)}　{format_rate(permille)}"
-                f"（{len(familiars)}体・各{format_each_rate(permille, len(familiars))}）"
-            ),
-            value=names,
-            inline=False,
+        lines.append(
+            item_line(
+                rank,
+                f"{format_rate(permille)}"
+                f"（{len(familiars)}体・各{format_each_rate(permille, len(familiars))}）",
+            )
         )
+        lines.append(f"-# {names}")
 
     if pool.guaranteed_slot:
         guaranteed_table = build_rank_table(pool, SLOT_GUARANTEED)
         if guaranteed_table:
-            embed.add_field(
-                name=f"{pool.multi_count}連の{pool.guaranteed_slot}枠目（保証枠）",
-                value=" ／ ".join(
-                    f"{game_shared.rank_label(rank)} {format_rate(permille)}"
-                    for rank, permille in reversed(guaranteed_table)
-                ),
-                inline=False,
+            lines.append("")
+            lines.append(
+                item_line(
+                    f"{pool.multi_count}連{pool.guaranteed_slot}枠目",
+                    " ／ ".join(
+                        f"{rank} {format_rate(permille)}"
+                        for rank, permille in reversed(guaranteed_table)
+                    ),
+                )
             )
+
+    embed = discord.Embed(
+        title="排出使い魔一覧",
+        description="\n".join(lines) if listed else "排出できる使い魔が登録されていません。",
+        color=game_shared.RANK_COLORS.get("S", 0xFEE75C),
+    )
 
     notice = rank_table_notice(pool)
     if notice:
         embed.set_footer(text=notice)
 
-    return embed
+    return embed, listed > 0
 
 
 def build_gacha_confirm_embed(pool: GachaPool, *, count: int, cost: int) -> discord.Embed:
     """実行前の確認画面（料金・回数・排出率）を作る。"""
 
-    embed = discord.Embed(
-        title="ガチャ確認",
-        description=(
-            f"**{pool.name}** を **{count}回** 実行します。\n"
-            f"料金：**{game_shared.format_coin(cost)}**"
-        ),
-        color=game_shared.RANK_COLORS.get("S", 0xFEE75C),
-    )
-
-    normal_table = build_rank_table(pool, SLOT_NORMAL)
-    if normal_table:
-        embed.add_field(
-            name="排出率",
-            value="\n".join(
-                f"{game_shared.rank_label(rank)}：{format_rate(permille)}"
-                for rank, permille in reversed(normal_table)
-            ),
-            inline=True,
-        )
+    lines = [
+        item_line("ガチャ", pool.name),
+        item_line("回数", f"{count}回"),
+        item_line("料金", game_shared.format_coin(cost)),
+        "",
+        *rate_lines(pool, SLOT_NORMAL),
+    ]
 
     if count == pool.multi_count and pool.guaranteed_slot:
-        guaranteed_table = build_rank_table(pool, SLOT_GUARANTEED)
-        if guaranteed_table:
-            embed.add_field(
-                name=f"{pool.guaranteed_slot}枠目（保証枠）",
-                value="\n".join(
-                    f"{game_shared.rank_label(rank)}：{format_rate(permille)}"
-                    for rank, permille in reversed(guaranteed_table)
-                ),
-                inline=True,
-            )
+        guaranteed = rate_lines(pool, SLOT_GUARANTEED)
+        if guaranteed:
+            lines.append("")
+            lines.append(f"**{pool.guaranteed_slot}枠目（保証枠）**")
+            lines.extend(guaranteed)
+
+    embed = discord.Embed(
+        title="ガチャ確認",
+        description="\n".join(lines),
+        color=game_shared.RANK_COLORS.get("S", 0xFEE75C),
+    )
 
     notice = rank_table_notice(pool)
     if notice:
@@ -489,19 +769,53 @@ def build_gacha_result_embed(
     count: int,
     cost: int,
 ) -> discord.Embed:
-    """ガチャ結果をまとめて表示するEmbedを作る（演出はランク色と絵文字のみ）。"""
+    """ガチャ結果を1枚のEmbedへまとめる。
+
+    使い魔名だけでなく、その時点の能力値とスキル（パッシブ・アクティブ）も
+    表示します。同じ使い魔が複数出た場合は「×n」でまとめ、1種類だけの
+    ときはスキルの説明文まで載せます。
+    """
 
     master = load_master_data()
 
-    lines: list[str] = []
-    best_rank = None
     rank_order = list(master.familiar.rank_order)
+    ranks = {
+        (str(instance["familiar_id"]), int(instance.get("level", master.familiar.min_level))): str(
+            instance["rank"]
+        )
+        for instance in instances
+    }
 
-    for index, instance in enumerate(instances, start=1):
-        rank = str(instance["rank"])
-        name = familiar_name(str(instance["familiar_id"]))
+    groups = group_instances(
+        [
+            {
+                "instance_id": instance.get("instance_id", index),
+                "familiar_id": instance["familiar_id"],
+                "level": instance.get("level", master.familiar.min_level),
+            }
+            for index, instance in enumerate(instances)
+        ]
+    )
+    single = len(groups) == 1
 
-        lines.append(f"`{index:>2}` {game_shared.rank_label(rank)} **{name}**")
+    lines: list[str] = []
+    best_rank: str | None = None
+
+    for index, group in enumerate(groups):
+        familiar_id = str(group["familiar_id"])
+        level = int(group["level"])
+        rank = ranks.get((familiar_id, level), familiar_rank(familiar_id))
+
+        if index > 0:
+            lines.append("")
+
+        heading = f"{game_shared.rank_label(rank)} {familiar_name(familiar_id)} Lv.{level}"
+        if int(group["count"]) > 1:
+            heading = f"{heading} ×{group['count']}"
+
+        lines.append(f"**{heading}**")
+        lines.extend(stat_lines(familiar_id, level))
+        lines.extend(skill_lines(familiar_id, with_description=single))
 
         if best_rank is None or _rank_strength(rank_order, rank) > _rank_strength(
             rank_order, best_rank
@@ -515,16 +829,20 @@ def build_gacha_result_embed(
         if counts.get(rank)
     )
 
+    lines.append("")
+    lines.append(item_line("内訳", summary or "—"))
+    lines.append(
+        item_line("消費coin", f"{game_shared.format_coin(cost)}（{count}回）")
+    )
+
+    description = "\n".join(lines) if instances else "結果がありません。"
+    if len(description) > 4000:
+        description = description[:4000] + "\n-# 表示を省略しました。"
+
     embed = discord.Embed(
         title="ガチャ結果",
-        description="\n".join(lines) if lines else "結果がありません。",
+        description=description,
         color=rank_color(best_rank or "C"),
-    )
-    embed.add_field(name="内訳", value=summary or "—", inline=False)
-    embed.add_field(
-        name="消費coin",
-        value=f"{game_shared.format_coin(cost)}（{count}回）",
-        inline=False,
     )
 
     notice = rank_table_notice(pool)
@@ -534,12 +852,50 @@ def build_gacha_result_embed(
     return embed
 
 
+def build_owned_list_embed(rows: list[dict[str, Any]]) -> discord.Embed:
+    """所有使い魔の一覧を、同じ使い魔をまとめた形で表示する。"""
+
+    groups = group_instances(rows)
+
+    lines = [item_line("所有数", f"{len(rows)}体（{len(groups)}種類）"), ""]
+    shown = 0
+    hidden = 0
+
+    for group in groups:
+        rank = familiar_rank(group["familiar_id"])
+        line = item_line(
+            familiar_name(group["familiar_id"]),
+            f"{game_shared.rank_label(rank)} Lv.{group['level']}"
+            + (f" ×{group['count']}" if int(group["count"]) > 1 else ""),
+        )
+
+        # 本文の上限に収まる範囲だけ並べ、残りは体数だけ知らせる。
+        if shown >= 40 or sum(len(item) + 1 for item in lines) + len(line) > 3600:
+            hidden += int(group["count"])
+            continue
+
+        lines.append(line)
+        shown += 1
+
+    if hidden:
+        lines.append(f"-# ほか +{hidden}体")
+
+    return discord.Embed(
+        title="使い魔一覧",
+        description="\n".join(lines),
+        color=game_shared.RANK_COLORS.get("B", 0xBEDBFF),
+    )
+
+
 def build_familiar_detail_embed(
     row: dict[str, Any],
+    *,
+    count: int = 1,
 ) -> tuple[discord.Embed, discord.File | None]:
-    """所有使い魔1体の詳細Embedと、サムネイル用の画像ファイルを作る。
+    """所有使い魔1体の詳細Embedと、アイコン用の画像ファイルを作る。
 
-    ``discord.File`` は使い回せないため、表示のたびに開き直します。
+    画像はサムネイルではなく著者アイコンとして添えます。``discord.File`` は
+    使い回せないため、表示のたびに開き直します。
     """
 
     master = load_master_data()
@@ -556,88 +912,192 @@ def build_familiar_detail_embed(
         )
         return embed, None
 
-    stats = master.level_stats(familiar_id, level)
+    lines = [
+        item_line("ランク", game_shared.rank_label(familiar.rank)),
+        item_line("レベル", f"Lv.{level}／Lv.{master.familiar.max_level}"),
+        item_line("性別", gender_label(familiar.gender)),
+        *stat_lines(familiar_id, level),
+        item_line("COST", familiar.cost),
+        item_line("所有数", f"{count}体"),
+        "",
+        *skill_lines(familiar_id),
+    ]
+
+    if familiar.description:
+        lines.extend(["", f"-# {familiar.description}"])
 
     embed = discord.Embed(
-        title=f"{familiar.name} Lv.{level}",
-        description=familiar.description or "—",
+        description="\n".join(lines),
         color=rank_color(familiar.rank),
     )
-    embed.add_field(name="ランク", value=game_shared.rank_label(familiar.rank), inline=True)
-    embed.add_field(name="レベル", value=f"Lv.{level}／Lv.{master.familiar.max_level}", inline=True)
-    embed.add_field(name="性別", value=gender_label(familiar.gender), inline=True)
 
-    if stats is not None:
-        embed.add_field(name="HP", value=str(stats.max_hp), inline=True)
-        embed.add_field(name="ATK", value=str(stats.atk), inline=True)
-        embed.add_field(name="SPD", value=str(stats.speed), inline=True)
+    icon = thumbnail_file(familiar_id)
+    title = f"{familiar.name} Lv.{level}"
 
-    embed.add_field(name="COST", value=str(familiar.cost), inline=True)
-    embed.add_field(name="個体ID", value=str(row["instance_id"]), inline=True)
-
-    skills = master.skills_of(familiar_id)
-    if skills:
-        embed.add_field(
-            name="スキル",
-            value="\n".join(
-                f"**{skill.name}**（{'アクティブ' if skill.is_active else 'パッシブ'}）\n"
-                f"-# {skill.description}"
-                for skill in skills
-            )[:1024],
-            inline=False,
-        )
+    if icon is not None:
+        embed.set_author(name=title, icon_url=f"attachment://{icon.filename}")
     else:
-        embed.add_field(name="スキル", value="なし", inline=False)
+        embed.set_author(name=title)
 
-    thumbnail = thumbnail_file(familiar_id)
-    if thumbnail is not None:
-        embed.set_thumbnail(url=f"attachment://{thumbnail.filename}")
-
-    return embed, thumbnail
+    return embed, icon
 
 
-def build_fusion_result_embed(familiar_id: str, *, level: int) -> discord.Embed:
+def build_codex_embed(
+    groups: list[dict[str, Any]],
+    index: int,
+) -> tuple[discord.Embed, discord.File | None]:
+    """図鑑の1ページを作る。画像を大きく見せ、能力値とスキルも並べる。"""
+
+    master = load_master_data()
+
+    total = len(groups)
+    group = groups[index]
+
+    familiar_id = str(group["familiar_id"])
+    level = int(group["level"])
+    familiar = master.get_familiar(familiar_id)
+    rank = familiar_rank(familiar_id)
+
+    lines = [
+        item_line("ランク", game_shared.rank_label(rank)),
+        item_line("レベル", f"Lv.{level}／Lv.{master.familiar.max_level}"),
+        item_line("性別", gender_label(familiar.gender if familiar else None)),
+        *stat_lines(familiar_id, level),
+        item_line("COST", familiar.cost if familiar else "—"),
+        item_line("所有数", f"{group['count']}体"),
+        "",
+        *skill_lines(familiar_id),
+    ]
+
+    if familiar is not None and familiar.description:
+        lines.extend(["", f"-# {familiar.description}"])
+
+    embed = discord.Embed(
+        title=f"{familiar_name(familiar_id)} Lv.{level}",
+        description="\n".join(lines),
+        color=rank_color(rank),
+    )
+    embed.set_footer(text=f"図鑑 {index + 1}／{total}")
+
+    image = thumbnail_file(familiar_id)
+    if image is not None:
+        embed.set_image(url=f"attachment://{image.filename}")
+
+    return embed, image
+
+
+def _diff_lines(familiar_id: str, before_level: int, after_level: int) -> list[str]:
+    """``HP 27→29`` の形で能力値の変化を並べる。"""
+
+    master = load_master_data()
+
+    before = master.level_stats(familiar_id, before_level)
+    after = master.level_stats(familiar_id, after_level)
+
+    if before is None or after is None:
+        return []
+
+    return [
+        item_line("HP", f"{before.max_hp}→**{after.max_hp}**"),
+        item_line("ATK", f"{before.atk}→**{after.atk}**"),
+        item_line("SPD", f"{before.speed}→**{after.speed}**"),
+    ]
+
+
+def build_fusion_result_embed(
+    familiar_id: str,
+    *,
+    before_level: int,
+    level: int,
+    material_count: int,
+) -> tuple[discord.Embed, discord.File | None]:
     """合成成功時に、変化後の能力値を表示するEmbedを作る。"""
 
     master = load_master_data()
 
-    before = master.level_stats(familiar_id, max(level - 1, 0))
-    after = master.level_stats(familiar_id, level)
     rank = familiar_rank(familiar_id)
+
+    lines = [
+        item_line("レベル", f"Lv.{before_level}→**Lv.{level}**"),
+        *_diff_lines(familiar_id, before_level, level),
+        item_line("消費した素材", f"{material_count}体"),
+    ]
 
     embed = discord.Embed(
         title="合成成功",
-        description=f"**{familiar_name(familiar_id)}** が **Lv.{level}** になりました。",
+        description="\n".join(lines),
         color=rank_color(rank),
     )
-
-    if before is not None and after is not None:
-        embed.add_field(name="HP", value=f"{before.max_hp} → **{after.max_hp}**", inline=True)
-        embed.add_field(name="ATK", value=f"{before.atk} → **{after.atk}**", inline=True)
-        embed.add_field(name="SPD", value=f"{before.speed} → **{after.speed}**", inline=True)
 
     if level >= master.familiar.max_level:
         embed.set_footer(text="最大レベルに到達しました")
 
-    return embed
+    icon = thumbnail_file(familiar_id)
+    title = f"{familiar_name(familiar_id)} Lv.{level}"
+
+    if icon is not None:
+        embed.set_author(name=title, icon_url=f"attachment://{icon.filename}")
+    else:
+        embed.set_author(name=title)
+
+    return embed, icon
 
 
-def build_sell_confirm_embed(row: dict[str, Any], *, price: int) -> discord.Embed:
+def build_sell_confirm_embed(
+    row: dict[str, Any],
+    *,
+    count: int,
+    unit_price: int,
+    available: int,
+) -> discord.Embed:
     """売却確認のEmbedを作る（誤操作防止のため必ず挟む）。"""
 
-    rank = familiar_rank(str(row["familiar_id"]))
+    familiar_id = str(row["familiar_id"])
+    rank = familiar_rank(familiar_id)
+
+    lines = [
+        item_line("使い魔", f"{game_shared.rank_label(rank)} {instance_title(row)}"),
+        item_line("売却する体数", f"{count}体（所有 {available}体）"),
+        item_line("1体あたり", game_shared.format_coin(unit_price)),
+        item_line("受取額", f"**{game_shared.format_coin(unit_price * count)}**"),
+    ]
 
     embed = discord.Embed(
         title="売却確認",
-        description=(
-            f"**{instance_title(row)}**（{game_shared.rank_label(rank)}）を売却します。\n"
-            f"受取額：**{game_shared.format_coin(price)}**"
-        ),
+        description="\n".join(lines),
         color=rank_color(rank),
     )
     embed.set_footer(text="売却した使い魔は取り消しできません")
 
     return embed
+
+
+def build_sell_result_embed(outcome: dict[str, Any]) -> discord.Embed:
+    """売却結果のEmbedを作る。"""
+
+    sold = list(outcome.get("sold") or [])
+    total = int(outcome.get("total", 0))
+
+    first = sold[0] if sold else None
+    familiar_id = str(first["familiar_id"]) if first else ""
+    rank = familiar_rank(familiar_id) if first else "?"
+
+    lines = [
+        item_line(
+            "売却した使い魔",
+            f"{game_shared.rank_label(rank)} {familiar_name(familiar_id)} Lv.{first['level']}"
+            if first
+            else "—",
+        ),
+        item_line("体数", f"{len(sold)}体"),
+        item_line("受取額", f"**{game_shared.format_coin(total)}**"),
+    ]
+
+    return discord.Embed(
+        title="売却完了",
+        description="\n".join(lines),
+        color=rank_color(rank),
+    )
 
 
 __all__ = [
@@ -646,22 +1106,39 @@ __all__ = [
     "PERMILLE_TOTAL",
     "SLOT_GUARANTEED",
     "SLOT_NORMAL",
+    "build_codex_embed",
+    "codex_pages",
+    "build_count_options",
     "build_familiar_detail_embed",
+    "build_fusion_count_options",
     "build_fusion_result_embed",
     "build_gacha_confirm_embed",
     "build_gacha_result_embed",
+    "build_group_options",
     "build_instance_options",
+    "build_owned_list_embed",
     "build_rank_table",
+    "build_rate_list_embed",
     "build_sell_confirm_embed",
+    "build_sell_result_embed",
     "draw_results",
     "exclude_locked",
     "fusable_bases",
+    "fusable_count",
     "gacha_plan",
+    "guaranteed_floor_rank",
     "gender_label",
     "get_pool",
     "get_random",
+    "group_instances",
+    "group_title",
     "instance_title",
+    "item_line",
+    "max_fusion_count",
     "rank_table_notice",
+    "rate_lines",
     "sell_price",
     "set_random",
+    "skill_lines",
+    "stat_lines",
 ]

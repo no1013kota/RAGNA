@@ -26,6 +26,7 @@ from .models import (
     SkillEffect,
     TargetGroup,
     compute_level_stats,
+    round_half_up,
 )
 
 
@@ -61,6 +62,7 @@ class GuildBalance:
 class FamiliarBalance:
     rank_order: tuple[str, ...]
     usable_rank_offset: int
+    min_level: int
     max_level: int
     hp_growth_rate_per_level: float
     atk_growth_rate_per_level: float
@@ -68,6 +70,7 @@ class FamiliarBalance:
     speed_growth_value: int
     speed_max: int
     sell_base_prices: dict[str, int]
+    sell_price_multiplier: float
 
 
 @dataclass(frozen=True)
@@ -201,11 +204,12 @@ class MasterData:
         if familiar is None:
             return None
 
+        # 初期レベル（min_level）が基本値。そこからの上積み分で計算する。
         return compute_level_stats(
             familiar.base_hp,
             familiar.base_atk,
             familiar.speed,
-            level,
+            max(0, level - self.familiar.min_level),
             hp_rate=self.familiar.hp_growth_rate_per_level,
             atk_rate=self.familiar.atk_growth_rate_per_level,
             speed_levels=self.familiar.speed_growth_levels,
@@ -229,12 +233,18 @@ class MasterData:
         return -(-self.battle.max_units // member_count)
 
     def sell_price(self, rank: str, level: int) -> int:
-        """売却額を返す（10.2節）。``基準価格 × (レベル + 1)``。"""
+        """売却額を返す（10.2節）。``基準価格 × レベル``。
+
+        初期レベル（Lv.1）では基準価格そのままになり、合成でレベルが1上がるごとに
+        基準価格1つ分だけ増えます。
+        """
 
         base = self.familiar.sell_base_prices.get(rank)
         if base is None:
             return 0
-        return base * (level + 1)
+
+        levels = max(1, int(level))
+        return round_half_up(base * levels * self.familiar.sell_price_multiplier)
 
     def usable_ranks(
         self, player_rank: str | None, *, is_sub_manager: bool = False
@@ -319,6 +329,7 @@ def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, B
     familiar = FamiliarBalance(
         rank_order=tuple(familiar_raw["rank_order"]),
         usable_rank_offset=int(familiar_raw["usable_rank_offset"]),
+        min_level=int(familiar_raw.get("min_level", 1)),
         max_level=int(familiar_raw["max_level"]),
         hp_growth_rate_per_level=float(familiar_raw["hp_growth_rate_per_level"]),
         atk_growth_rate_per_level=float(familiar_raw["atk_growth_rate_per_level"]),
@@ -329,7 +340,11 @@ def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, B
             str(rank): int(price)
             for rank, price in familiar_raw["sell_base_prices"].items()
         },
+        sell_price_multiplier=float(familiar_raw.get("sell_price_multiplier", 1.0)),
     )
+
+    if not 1 <= familiar.min_level <= familiar.max_level:
+        raise MasterDataError("familiar.min_level / max_level の関係が不正です")
 
     if not familiar.rank_order:
         raise MasterDataError("familiar.rank_order が空です")

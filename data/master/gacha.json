@@ -5,15 +5,23 @@
     {
       "pool_id": "standard",
       "name": "通常ガチャ",
-      "single_cost": 10000,
-      "multi_cost": 100000,
+      "single_cost": 30000,
+      "multi_cost": 270000,
       "multi_count": 10,
       "guaranteed_slot": 10,
       "is_public": true,
       "missing_rank_fallback": "B",
       "rates": {
-        "normal": {"C": 450, "B": 450, "A": 90, "S": 10},
-        "guaranteed": {"B": 900, "A": 90, "S": 10}
+        "normal": {
+          "C": 450,
+          "B": 450,
+          "A": 90,
+          "S": 10
+        },
+        "guaranteed": {
+          "A": 900,
+          "S": 100
+        }
       }
     }
   ]

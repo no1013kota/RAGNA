@@ -386,7 +386,7 @@ CREATE TABLE IF NOT EXISTS player_familiars (
 instance_id INTEGER PRIMARY KEY AUTOINCREMENT,
 user_id INTEGER NOT NULL,
 familiar_id TEXT NOT NULL REFERENCES familiars(familiar_id),
-level INTEGER NOT NULL DEFAULT 0,
+level INTEGER NOT NULL DEFAULT 1,
 status TEXT NOT NULL DEFAULT 'owned'
     CHECK (status IN ('owned', 'fused', 'sold')),
 obtained_at TEXT NOT NULL,
@@ -541,6 +541,7 @@ CREATE TABLE IF NOT EXISTS guild_battle_members (
 guild_id INTEGER NOT NULL REFERENCES guilds(guild_id),
 user_id INTEGER NOT NULL,
 slot INTEGER NOT NULL,
+familiar_count INTEGER NOT NULL DEFAULT 0,
 instance_id INTEGER REFERENCES player_familiars(instance_id),
 updated_at TEXT NOT NULL,
 
@@ -552,6 +553,26 @@ PRIMARY KEY (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_guild_battle_members_slot
 ON guild_battle_members(guild_id, slot);
+
+-- ==================================================
+-- RAGNA Online：バトル用使い魔の事前登録（9節）
+-- ギルドに関係なく、誰でもいつでも順番付きで登録できる。
+-- 出場者セット時に、この順番どおりに自動採用する。
+-- ==================================================
+CREATE TABLE IF NOT EXISTS player_battle_familiars (
+user_id INTEGER NOT NULL,
+priority INTEGER NOT NULL,
+instance_id INTEGER NOT NULL REFERENCES player_familiars(instance_id),
+updated_at TEXT NOT NULL,
+
+PRIMARY KEY (
+    user_id,
+    priority
+)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_player_battle_familiars_instance
+ON player_battle_familiars(user_id, instance_id);
 
 -- ==================================================
 -- RAGNA Online：出場する使い魔（1ギルドあたり最大5体）

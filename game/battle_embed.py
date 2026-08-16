@@ -107,6 +107,16 @@ def thumbnail_file(familiar_id: str) -> discord.File | None:
 
 
 # ==================================================
+# 表示の共通処理
+# Embedはfieldを使わず、本文へ「【項目】結果」の形で並べる
+# ==================================================
+def item_line(label: str, value: object) -> str:
+    """「【項目】結果」の1行を作る。"""
+
+    return f"【{label}】{value}"
+
+
+# ==================================================
 # 行動ログ
 # ==================================================
 @dataclass
@@ -123,7 +133,8 @@ class _Group:
     color: int
     familiar_id: str | None = None
     lines: list[str] = field(default_factory=list)
-    fields: list[tuple[str, str]] = field(default_factory=list)
+    # 「【項目】結果」で本文の末尾へ並べる項目
+    items: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _player_label(player_names: dict[int, str] | None, player_id: int | None) -> str:
@@ -206,13 +217,17 @@ def build_action_log_messages(
         if group is None:
             return
 
+        body = list(group.lines)
+        if group.items:
+            if body:
+                body.append("")
+            body.extend(item_line(name, value or "—") for name, value in group.items)
+
         embed = discord.Embed(
             title=group.title,
-            description="\n".join(group.lines) if group.lines else None,
+            description="\n".join(body) if body else None,
             color=group.color,
         )
-        for name, value in group.fields:
-            embed.add_field(name=name, value=value or "—", inline=True)
 
         messages.append(LogMessage(embed=embed, familiar_id=group.familiar_id))
         group = None
@@ -247,10 +262,10 @@ def build_action_log_messages(
                 color=COLOR_ATTACK,
                 familiar_id=actor.familiar_id if actor else None,
             )
-            group.fields.append(
+            group.items.append(
                 ("使用者", _player_label(player_names, actor.player_id if actor else None))
             )
-            group.fields.append(("対象", unit_name(state, log.target_unit_id)))
+            group.items.append(("対象", unit_name(state, log.target_unit_id)))
             continue
 
         if event == BattleEvent.SKILL.value:
@@ -260,7 +275,7 @@ def build_action_log_messages(
                 familiar_id=actor.familiar_id if actor else None,
             )
             group.lines.append(detail.get("description", ""))
-            group.fields.append(
+            group.items.append(
                 ("使用者", _player_label(player_names, actor.player_id if actor else None))
             )
             targets = [
@@ -268,7 +283,7 @@ def build_action_log_messages(
                 for unit_id in detail.get("target_unit_ids") or ()
             ]
             if targets:
-                group.fields.append(("対象", "・".join(targets)))
+                group.items.append(("対象", "・".join(targets)))
             continue
 
         if event == BattleEvent.PASSIVE.value:
@@ -384,23 +399,19 @@ def build_status_embed(
 ) -> discord.Embed:
     """その時点の戦況をまとめたEmbedを作る（17節・24節）。"""
 
-    if state.current_unit_id:
-        description = (
-            f"ラウンド {state.current_round}　"
-            f"行動中：{unit_name(state, state.current_unit_id)}"
-        )
-        if turn_remaining_seconds is not None:
-            description += (
-                f"　自動攻撃まで {format_remaining_time(turn_remaining_seconds)}"
-            )
-    else:
-        description = f"ラウンド {state.current_round}"
+    header = [item_line("ラウンド", state.current_round)]
 
-    embed = discord.Embed(
-        title="【戦況】",
-        description=description,
-        color=COLOR_INFO,
-    )
+    if state.current_unit_id:
+        header.append(item_line("行動中", unit_name(state, state.current_unit_id)))
+
+        if turn_remaining_seconds is not None:
+            header.append(
+                item_line(
+                    "自動攻撃まで", format_remaining_time(turn_remaining_seconds)
+                )
+            )
+
+    sections: list[str] = []
 
     for guild_id in (state.guild_a_id, state.guild_b_id):
         name = guild_names.get(guild_id, f"ギルド{guild_id}")
@@ -412,17 +423,19 @@ def build_status_embed(
             for index, unit in enumerate(state.guild_units(guild_id))
         ]
 
-        value = "\n".join(blocks) if blocks else "—"
-        if len(value) > 1024:
-            value = value[:1010] + "\n…"
+        body = "\n".join(blocks) if blocks else "—"
+        if len(body) > 1500:
+            body = body[:1490] + "\n…"
 
-        embed.add_field(
-            name=f"{prefix}{name}（残り持ち時間 {remaining}）",
-            value=value,
-            inline=False,
+        sections.append(
+            item_line(f"{prefix}{name}", f"残り持ち時間 {remaining}") + "\n" + body
         )
 
-    return embed
+    return discord.Embed(
+        title="【戦況】",
+        description="\n\n".join(["\n".join(header), *sections])[:4000],
+        color=COLOR_INFO,
+    )
 
 
 # ==================================================
@@ -439,21 +452,25 @@ def build_turn_embed(
     ``turn_seconds`` は自動攻撃までの残り時間です（17節）。
     """
 
-    embed = discord.Embed(
+    return discord.Embed(
         title=f"{familiar_name(unit.familiar_id)}の行動順です",
-        description=(
-            f"ラウンド {state.current_round}　"
-            f"自動攻撃まで {format_remaining_time(turn_seconds)}\n"
-            f"残り持ち時間 {format_remaining_time(state.remaining_seconds.get(unit.guild_id, 0))}"
+        description="\n".join(
+            [
+                item_line("ラウンド", state.current_round),
+                item_line("自動攻撃まで", format_remaining_time(turn_seconds)),
+                item_line(
+                    "残り持ち時間",
+                    format_remaining_time(
+                        state.remaining_seconds.get(unit.guild_id, 0)
+                    ),
+                ),
+                item_line("現在HP", f"{unit.current_hp}/{unit.max_hp}"),
+                item_line("現在ATK", unit.current_atk),
+                item_line("SPD", unit.speed),
+            ]
         ),
         color=COLOR_ATTACK,
     )
-    embed.add_field(
-        name="現在HP", value=f"{unit.current_hp}/{unit.max_hp}", inline=True
-    )
-    embed.add_field(name="現在ATK", value=str(unit.current_atk), inline=True)
-    embed.add_field(name="SPD", value=str(unit.speed), inline=True)
-    return embed
 
 
 def build_result_embed(
@@ -491,16 +508,21 @@ def build_result_embed(
         "engine_stalled": "進行不能のため引き分け",
     }
 
-    embed = discord.Embed(title=title, description=description, color=COLOR_RESULT)
-    embed.add_field(name="対戦", value=f"{guild_a} vs {guild_b}", inline=False)
-    embed.add_field(
-        name="決着理由",
-        value=reasons.get(state.end_reason or "", state.end_reason or "—"),
-        inline=True,
-    )
-    embed.add_field(name="ラウンド数", value=str(state.current_round), inline=True)
+    lines = [
+        description,
+        "",
+        item_line("対戦", f"{guild_a} vs {guild_b}"),
+        item_line(
+            "決着理由", reasons.get(state.end_reason or "", state.end_reason or "—")
+        ),
+        item_line("ラウンド数", state.current_round),
+    ]
 
     if reward_text:
-        embed.add_field(name="報酬", value=reward_text, inline=False)
+        lines.append(item_line("報酬", reward_text))
 
-    return embed
+    return discord.Embed(
+        title=title,
+        description="\n".join(lines)[:4000],
+        color=COLOR_RESULT,
+    )

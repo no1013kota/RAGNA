@@ -103,7 +103,35 @@ ADDED_COLUMNS = (
     ("guild_battles", "guild_a_channel_id", "INTEGER"),
     ("guild_battles", "guild_b_channel_id", "INTEGER"),
     ("guild_battles", "channels_deleted_at", "TEXT"),
+    ("guild_battle_members", "familiar_count", "INTEGER NOT NULL DEFAULT 0"),
 )
+
+
+# 既存データの整合を取るための一度きりの補正。
+# (SQL, 説明) の順。何度実行しても結果が変わらない文だけを置くこと。
+DATA_FIXES = (
+    (
+        "UPDATE player_familiars SET level = 1 WHERE level < 1",
+        "使い魔の初期レベルを1に統一",
+    ),
+)
+
+
+def _apply_data_fixes(conn) -> None:
+    """既存データを現在の仕様に合わせて補正する。"""
+
+    for sql, description in DATA_FIXES:
+        table = sql.split()[1]
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if exists is None:
+            continue
+
+        changed = conn.execute(sql).rowcount
+        if changed > 0:
+            logger.info(f"データを補正しました: {description}（{changed}件）")
 
 
 def _apply_added_columns(conn) -> None:
@@ -154,6 +182,9 @@ def init_database():
     conn.commit()
 
     conn.executescript(schema)
+    conn.commit()
+
+    _apply_data_fixes(conn)
     conn.commit()
     conn.close()
     logger.info("DB初期化完了")

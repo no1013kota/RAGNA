@@ -3,6 +3,8 @@
 常設パネルのViewだけが固定 ``custom_id`` を持ち、押した先の一時的なView・
 セレクトには ``custom_id`` を付けません（discord.pyが自動採番します）。
 所有状態と使用中判定は、ボタンが見えていても必ずDBから再確認します。
+
+Embedは ``field`` を使わず、本文へ「【項目】結果」の形で並べます。
 """
 
 from __future__ import annotations
@@ -20,8 +22,7 @@ from database.familiar import (
     fuse_familiar,
     get_owned_familiar,
     get_owned_familiars,
-    get_same_familiars,
-    sell_familiar,
+    sell_familiars,
 )
 from game.master_data import load_master_data
 
@@ -70,19 +71,19 @@ def _own_instance(user_id: int, instance_id: int) -> dict[str, Any] | None:
 # ==================================================
 # 所有使い魔を選ぶ共通View（25件ずつページング）
 # ==================================================
-class _InstanceSelect(discord.ui.Select):
-    """所有使い魔を1体選ぶセレクト。一時Viewのため custom_id は付けない。"""
+class _GroupSelect(discord.ui.Select):
+    """所有使い魔を「同じ種類・同じレベル」でまとめて1つ選ばせるセレクト。"""
 
-    def __init__(self, rows: list[dict[str, Any]], *, placeholder: str):
+    def __init__(self, groups: list[dict[str, Any]], *, placeholder: str):
         super().__init__(
             placeholder=placeholder,
             min_values=1,
             max_values=1,
-            options=service.build_instance_options(rows),
+            options=service.build_group_options(groups),
         )
 
     async def callback(self, interaction: discord.Interaction):
-        view: InstancePageView = self.view  # type: ignore[assignment]
+        view: GroupPageView = self.view  # type: ignore[assignment]
         await view.on_select(interaction, int(self.values[0]))
 
 
@@ -99,21 +100,27 @@ class _PageButton(discord.ui.Button):
         self.delta = delta
 
     async def callback(self, interaction: discord.Interaction):
-        view: InstancePageView = self.view  # type: ignore[assignment]
+        view: GroupPageView = self.view  # type: ignore[assignment]
         await view.move_page(interaction, self.delta)
 
 
-class InstancePageView(discord.ui.View):
-    """所有使い魔をページングしながら1体選ばせる一時View。"""
+class GroupPageView(discord.ui.View):
+    """まとめた所有使い魔をページングしながら1つ選ばせる一時View。"""
 
     placeholder = "使い魔を選択してください"
-    header_label = "所有使い魔"
 
-    def __init__(self, *, user_id: int, rows: list[dict[str, Any]], timeout: float = 300):
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        rows: list[dict[str, Any]],
+        timeout: float = 300,
+    ):
         super().__init__(timeout=timeout)
 
         self.user_id = user_id
         self.rows = rows
+        self.groups = service.group_instances(rows)
         self.page = 0
 
         self._rebuild()
@@ -121,27 +128,23 @@ class InstancePageView(discord.ui.View):
     # ----- ページ操作 -----
     @property
     def page_count(self) -> int:
-        return max(1, -(-len(self.rows) // PAGE_SIZE))
+        return max(1, -(-len(self.groups) // PAGE_SIZE))
 
-    def page_rows(self) -> list[dict[str, Any]]:
+    def page_groups(self) -> list[dict[str, Any]]:
         start = self.page * PAGE_SIZE
-        return self.rows[start : start + PAGE_SIZE]
-
-    def header(self) -> str:
-        text = f"**{self.header_label}**：{len(self.rows)}体（{self.page + 1}/{self.page_count}ページ）"
-        return text
+        return self.groups[start : start + PAGE_SIZE]
 
     def _rebuild(self) -> None:
         self.clear_items()
-        self.add_item(_InstanceSelect(self.page_rows(), placeholder=self.placeholder))
+        self.add_item(_GroupSelect(self.page_groups(), placeholder=self.placeholder))
 
         if self.page_count > 1:
             self.add_item(
-                _PageButton(label="◀ 前の25件", delta=-1, disabled=self.page == 0)
+                _PageButton(label="◀ 前のページ", delta=-1, disabled=self.page == 0)
             )
             self.add_item(
                 _PageButton(
-                    label="次の25件 ▶",
+                    label="次のページ ▶",
                     delta=1,
                     disabled=self.page >= self.page_count - 1,
                 )
@@ -151,7 +154,10 @@ class InstancePageView(discord.ui.View):
         self.page = min(max(self.page + delta, 0), self.page_count - 1)
         self._rebuild()
 
-        await interaction.response.edit_message(content=self.header(), view=self)
+        try:
+            await interaction.response.edit_message(view=self)
+        except discord.HTTPException:
+            logger.warning("使い魔選択のページ送りに失敗しました")
 
     # ----- 共通の実行者確認 -----
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -161,7 +167,63 @@ class InstancePageView(discord.ui.View):
 
         return True
 
+    def group_of(self, instance_id: int) -> dict[str, Any] | None:
+        """代表個体IDからまとめた情報を引く。"""
+
+        for group in self.groups:
+            if int(group["instance_id"]) == instance_id:
+                return group
+
+        return None
+
     async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
+        raise NotImplementedError
+
+
+# ==================================================
+# 体数を選ぶ共通View
+# ==================================================
+class _CountSelect(discord.ui.Select):
+    """「何体にするか」を選ばせるセレクト。"""
+
+    def __init__(self, options: list[discord.SelectOption], *, placeholder: str):
+        super().__init__(
+            placeholder=placeholder,
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view: CountView = self.view  # type: ignore[assignment]
+        await view.on_count(interaction, int(self.values[0]))
+
+
+class CountView(discord.ui.View):
+    """体数を1つ選ばせる一時View。"""
+
+    placeholder = "体数を選択してください"
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        options: list[discord.SelectOption],
+        timeout: float = 300,
+    ):
+        super().__init__(timeout=timeout)
+
+        self.user_id = user_id
+        self.add_item(_CountSelect(options, placeholder=self.placeholder))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await game_shared.respond(interaction, "この操作は実行者だけが使用できます。")
+            return False
+
+        return True
+
+    async def on_count(self, interaction: discord.Interaction, count: int) -> None:
         raise NotImplementedError
 
 
@@ -219,13 +281,13 @@ class GachaPanelView(discord.ui.View):
             return
 
         try:
-            embed = service.build_rate_list_embed(pool)
+            embed, has_familiars = service.build_rate_list_embed(pool)
         except Exception:
             logger.exception("排出使い魔一覧の作成に失敗しました")
             await game_shared.respond(interaction, UNEXPECTED_ERROR_MESSAGE)
             return
 
-        if not embed.fields:
+        if not has_familiars:
             await game_shared.respond(
                 interaction, "排出できる使い魔が登録されていません。"
             )
@@ -319,6 +381,7 @@ class GachaConfirmView(discord.ui.View):
                 await game_shared.respond(interaction, "現在このガチャは利用できません。")
                 return
 
+            master = load_master_data()
             results = service.draw_results(pool, self.count)
 
             # coin減算と全抽選結果の保存は draw_gacha が1つのDB処理で確定する。
@@ -328,6 +391,7 @@ class GachaConfirmView(discord.ui.View):
                 count=self.count,
                 cost=self.cost,
                 results=results,
+                initial_level=master.familiar.min_level,
             )
 
             if not outcome["ok"]:
@@ -372,16 +436,16 @@ class GachaConfirmView(discord.ui.View):
 
 # ==================================================
 # 使い魔管理（10.2節）
-# 一覧・合成・売却を1つのパネルにまとめる
+# 一覧・合成・売却・図鑑を1つのパネルにまとめる
 # ==================================================
 class FamiliarManagePanelView(discord.ui.View):
-    """使い魔の一覧・合成・売却をまとめた常設View。"""
+    """使い魔の一覧・合成・売却・図鑑をまとめた常設View。"""
 
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="使い魔一覧",
+        label="一覧",
         style=discord.ButtonStyle.primary,
         custom_id="familiar:list",
     )
@@ -404,11 +468,18 @@ class FamiliarManagePanelView(discord.ui.View):
             await interaction.followup.send(NO_FAMILIAR_MESSAGE, ephemeral=True)
             return
 
-        view = FamiliarListView(user_id=interaction.user.id, rows=owned)
-        await interaction.followup.send(content=view.header(), view=view, ephemeral=True)
+        try:
+            embed = service.build_owned_list_embed(owned)
+            view = FamiliarListView(user_id=interaction.user.id, rows=owned)
+        except Exception:
+            logger.exception("使い魔一覧の作成に失敗しました: user_id=%s", interaction.user.id)
+            await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
+            return
+
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(
-        label="使い魔合成",
+        label="合成",
         style=discord.ButtonStyle.success,
         custom_id="familiar:fuse",
     )
@@ -418,7 +489,7 @@ class FamiliarManagePanelView(discord.ui.View):
         await _open_fusion(interaction)
 
     @discord.ui.button(
-        label="使い魔売却",
+        label="売却",
         style=discord.ButtonStyle.danger,
         custom_id="familiar:sell",
     )
@@ -427,12 +498,21 @@ class FamiliarManagePanelView(discord.ui.View):
     ):
         await _open_sell(interaction)
 
+    @discord.ui.button(
+        label="図鑑",
+        style=discord.ButtonStyle.secondary,
+        custom_id="familiar:codex",
+    )
+    async def open_codex(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await _open_codex(interaction)
 
-class FamiliarListView(InstancePageView):
+
+class FamiliarListView(GroupPageView):
     """所有使い魔を選んで詳細を表示する。"""
 
     placeholder = "詳細を見る使い魔を選択してください"
-    header_label = "所有使い魔"
 
     async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -444,17 +524,119 @@ class FamiliarListView(InstancePageView):
             )
             return
 
+        group = self.group_of(instance_id)
+
         try:
-            embed, thumbnail = service.build_familiar_detail_embed(row)
+            embed, icon = service.build_familiar_detail_embed(
+                row, count=int(group["count"]) if group else 1
+            )
         except Exception:
             logger.exception("使い魔詳細の作成に失敗しました: instance_id=%s", instance_id)
             await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
             return
 
-        if thumbnail is not None:
-            await interaction.followup.send(embed=embed, file=thumbnail, ephemeral=True)
+        if icon is not None:
+            await interaction.followup.send(embed=embed, file=icon, ephemeral=True)
         else:
             await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# ==================================================
+# 図鑑（10.2節）
+# 所有している使い魔の画像をめくって眺める
+# ==================================================
+async def _open_codex(interaction: discord.Interaction) -> None:
+    """図鑑の1ページ目を開く。"""
+
+    if not await _guard(interaction):
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        owned = get_owned_familiars(interaction.user.id)
+        pages = service.codex_pages(owned)
+    except Exception:
+        logger.exception("図鑑の作成に失敗しました: user_id=%s", interaction.user.id)
+        await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
+        return
+
+    if not pages:
+        await interaction.followup.send(NO_FAMILIAR_MESSAGE, ephemeral=True)
+        return
+
+    view = CodexView(user_id=interaction.user.id, pages=pages)
+    embed, image = view.current()
+
+    if image is not None:
+        await interaction.followup.send(
+            embed=embed, file=image, view=view, ephemeral=True
+        )
+    else:
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
+class _CodexPageButton(discord.ui.Button):
+    """図鑑をめくるボタン。"""
+
+    def __init__(self, *, label: str, delta: int):
+        super().__init__(label=label, style=discord.ButtonStyle.secondary)
+        self.delta = delta
+
+    async def callback(self, interaction: discord.Interaction):
+        view: CodexView = self.view  # type: ignore[assignment]
+        await view.turn(interaction, self.delta)
+
+
+class CodexView(discord.ui.View):
+    """図鑑をめくる一時View。前後のページへ循環して移動できる。"""
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        pages: list[dict[str, Any]],
+        timeout: float = 300,
+    ):
+        super().__init__(timeout=timeout)
+
+        self.user_id = user_id
+        self.pages = pages
+        self.index = 0
+
+        if len(pages) > 1:
+            self.add_item(_CodexPageButton(label="◀ 前の使い魔", delta=-1))
+            self.add_item(_CodexPageButton(label="次の使い魔 ▶", delta=1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await game_shared.respond(interaction, "この操作は実行者だけが使用できます。")
+            return False
+
+        return True
+
+    def current(self) -> tuple[discord.Embed, discord.File | None]:
+        return service.build_codex_embed(self.pages, self.index)
+
+    async def turn(self, interaction: discord.Interaction, delta: int) -> None:
+        self.index = (self.index + delta) % len(self.pages)
+
+        try:
+            embed, image = self.current()
+        except Exception:
+            logger.exception("図鑑ページの作成に失敗しました: index=%s", self.index)
+            await game_shared.respond(interaction, UNEXPECTED_ERROR_MESSAGE)
+            return
+
+        # 画像を差し替えるため、添付ファイルごと入れ替える。
+        try:
+            await interaction.response.edit_message(
+                embed=embed,
+                attachments=[image] if image is not None else [],
+                view=self,
+            )
+        except discord.HTTPException:
+            logger.warning("図鑑ページの更新に失敗しました")
 
 
 # ==================================================
@@ -482,10 +664,11 @@ async def _open_fusion(interaction: discord.Interaction) -> None:
         return
 
     if not bases:
+        master = load_master_data()
         await interaction.followup.send(
             (
                 "合成できる使い魔がありません。\n"
-                "-# 同じ種類を2体以上所有し、最大レベル未満の使い魔が必要です。\n"
+                f"-# 同じ種類を2体以上所有し、Lv.{master.familiar.max_level}未満の使い魔が必要です。\n"
                 f"{LOCKED_NOTICE}"
             ),
             ephemeral=True,
@@ -494,15 +677,20 @@ async def _open_fusion(interaction: discord.Interaction) -> None:
 
     view = FuseBaseView(user_id=interaction.user.id, rows=bases)
     await interaction.followup.send(
-        content=f"{view.header()}\n{LOCKED_NOTICE}", view=view, ephemeral=True
+        content=(
+            "レベルアップさせる使い魔を選択してください。\n"
+            "-# ※素材にした使い魔は消費されます。\n"
+            f"{LOCKED_NOTICE}"
+        ),
+        view=view,
+        ephemeral=True,
     )
 
 
-class FuseBaseView(InstancePageView):
+class FuseBaseView(GroupPageView):
     """レベルアップさせるベース個体を選ぶ。"""
 
     placeholder = "レベルアップさせる使い魔を選択してください"
-    header_label = "合成できる使い魔"
 
     async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -523,14 +711,8 @@ class FuseBaseView(InstancePageView):
 
         try:
             locked = get_locked_instance_ids()
-            materials = service.exclude_locked(
-                get_same_familiars(
-                    self.user_id,
-                    str(base["familiar_id"]),
-                    exclude_instance_id=instance_id,
-                ),
-                locked,
-            )
+            owned = get_owned_familiars(self.user_id)
+            max_count = service.max_fusion_count(owned, locked, base=base)
         except Exception:
             logger.exception("合成素材の取得に失敗しました: instance_id=%s", instance_id)
             await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
@@ -542,50 +724,53 @@ class FuseBaseView(InstancePageView):
             )
             return
 
-        if not materials:
+        if max_count < 1:
             await interaction.followup.send(
-                (
-                    "素材にできる同じ種類の使い魔がありません。\n"
-                    f"{LOCKED_NOTICE}"
-                ),
+                f"素材にできる同じ種類の使い魔がありません。\n{LOCKED_NOTICE}",
                 ephemeral=True,
             )
             return
 
-        view = FuseMaterialView(
+        view = FuseCountView(
             user_id=self.user_id,
-            rows=materials,
             base_instance_id=instance_id,
+            options=service.build_fusion_count_options(base, max_count),
         )
         await interaction.followup.send(
             content=(
-                f"ベース：**{service.instance_title(base)}**\n"
-                "-# 素材にした使い魔は消費されます。\n"
-                f"{view.header()}"
+                f"**{service.instance_title(base)}** を何体合成しますか？\n"
+                f"-# 一度に{max_count}体まで合成できます。\n"
+                "-# ※素材にした使い魔は消費されます。"
             ),
             view=view,
             ephemeral=True,
         )
 
 
-class FuseMaterialView(InstancePageView):
-    """素材にする個体を選び、合成を実行する。"""
+class FuseCountView(CountView):
+    """何体合成するかを選び、そのまま実行する。"""
 
-    placeholder = "素材にする使い魔を選択してください"
-    header_label = "素材候補"
+    placeholder = "合成する体数を選択してください"
 
     def __init__(
         self,
         *,
         user_id: int,
-        rows: list[dict[str, Any]],
         base_instance_id: int,
+        options: list[discord.SelectOption],
         timeout: float = 300,
     ):
-        self.base_instance_id = base_instance_id
-        super().__init__(user_id=user_id, rows=rows, timeout=timeout)
+        super().__init__(user_id=user_id, options=options, timeout=timeout)
 
-    async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
+        self.base_instance_id = base_instance_id
+        self._running = False
+
+    async def on_count(self, interaction: discord.Interaction, count: int) -> None:
+        if self._running:
+            await game_shared.respond(interaction, "処理中です。しばらくお待ちください。")
+            return
+
+        self._running = True
         await interaction.response.defer(ephemeral=True)
 
         master = load_master_data()
@@ -594,18 +779,19 @@ class FuseMaterialView(InstancePageView):
             outcome = fuse_familiar(
                 self.user_id,
                 base_instance_id=self.base_instance_id,
-                material_instance_id=instance_id,
+                material_count=count,
                 max_level=master.familiar.max_level,
                 locked_instance_ids=get_locked_instance_ids(),
             )
         except Exception:
             logger.exception(
-                "合成に失敗しました: base=%s material=%s",
-                self.base_instance_id,
-                instance_id,
+                "合成に失敗しました: base=%s count=%s", self.base_instance_id, count
             )
             await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
             return
+
+        finally:
+            self.stop()
 
         if not outcome["ok"]:
             await interaction.followup.send(
@@ -613,12 +799,17 @@ class FuseMaterialView(InstancePageView):
             )
             return
 
-        embed = service.build_fusion_result_embed(
-            str(outcome["familiar_id"]), level=int(outcome["level"])
+        embed, icon = service.build_fusion_result_embed(
+            str(outcome["familiar_id"]),
+            before_level=int(outcome["before_level"]),
+            level=int(outcome["level"]),
+            material_count=len(outcome["material_instance_ids"]),
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
-        self.stop()
+        if icon is not None:
+            await interaction.followup.send(embed=embed, file=icon, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ==================================================
@@ -652,15 +843,20 @@ async def _open_sell(interaction: discord.Interaction) -> None:
 
     view = SellSelectView(user_id=interaction.user.id, rows=candidates)
     await interaction.followup.send(
-        content=f"{view.header()}\n{LOCKED_NOTICE}", view=view, ephemeral=True
+        content=(
+            "売却する使い魔を選択してください。\n"
+            "-# ※取り消しできません。\n"
+            f"{LOCKED_NOTICE}"
+        ),
+        view=view,
+        ephemeral=True,
     )
 
 
-class SellSelectView(InstancePageView):
-    """売却する個体を選ぶ。実行前に必ず確認画面を挟む。"""
+class SellSelectView(GroupPageView):
+    """売却する使い魔を選ぶ。次に体数を選ばせる。"""
 
     placeholder = "売却する使い魔を選択してください"
-    header_label = "売却できる使い魔"
 
     async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -672,33 +868,101 @@ class SellSelectView(InstancePageView):
             )
             return
 
-        if instance_id in get_locked_instance_ids():
+        locked = get_locked_instance_ids()
+        if instance_id in locked:
             await interaction.followup.send(
                 game_shared.error_message("in_use"), ephemeral=True
             )
             return
 
-        price = service.sell_price(str(row["familiar_id"]), int(row["level"]))
-        embed = service.build_sell_confirm_embed(row, price=price)
+        group = self.group_of(instance_id)
+        if group is None:
+            await interaction.followup.send(
+                game_shared.error_message("not_owned"), ephemeral=True
+            )
+            return
 
+        # 選択後に編成へ入った個体を除き、売却できるものだけを対象にする。
+        sellable = [
+            candidate
+            for candidate in group["instance_ids"]
+            if candidate not in locked
+        ]
+        if not sellable:
+            await interaction.followup.send(
+                game_shared.error_message("in_use"), ephemeral=True
+            )
+            return
+
+        unit_price = service.sell_price(str(row["familiar_id"]), int(row["level"]))
+
+        view = SellCountView(
+            user_id=self.user_id,
+            row=row,
+            instance_ids=sellable,
+            unit_price=unit_price,
+            options=service.build_count_options(len(sellable), unit_price=unit_price),
+        )
         await interaction.followup.send(
-            embed=embed,
-            view=SellConfirmView(
-                user_id=self.user_id, instance_id=instance_id, price=price
+            content=(
+                f"**{service.instance_title(row)}** を何体売却しますか？\n"
+                f"-# 1体あたり {game_shared.format_coin(unit_price)}／所有 {len(sellable)}体\n"
+                "-# ※取り消しできません。"
             ),
+            view=view,
             ephemeral=True,
         )
+
+
+class SellCountView(CountView):
+    """何体売却するかを選び、最終確認へ進む。"""
+
+    placeholder = "売却する体数を選択してください"
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        row: dict[str, Any],
+        instance_ids: list[int],
+        unit_price: int,
+        options: list[discord.SelectOption],
+        timeout: float = 300,
+    ):
+        super().__init__(user_id=user_id, options=options, timeout=timeout)
+
+        self.row = row
+        self.instance_ids = instance_ids
+        self.unit_price = unit_price
+
+    async def on_count(self, interaction: discord.Interaction, count: int) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        targets = self.instance_ids[:count]
+
+        embed = service.build_sell_confirm_embed(
+            self.row,
+            count=len(targets),
+            unit_price=self.unit_price,
+            available=len(self.instance_ids),
+        )
+        await interaction.followup.send(
+            embed=embed,
+            view=SellConfirmView(user_id=self.user_id, instance_ids=targets),
+            ephemeral=True,
+        )
+
+        self.stop()
 
 
 class SellConfirmView(discord.ui.View):
     """売却の最終確認。"""
 
-    def __init__(self, *, user_id: int, instance_id: int, price: int):
+    def __init__(self, *, user_id: int, instance_ids: list[int]):
         super().__init__(timeout=180)
 
         self.user_id = user_id
-        self.instance_id = instance_id
-        self.price = price
+        self.instance_ids = instance_ids
         self._running = False
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -729,20 +993,24 @@ class SellConfirmView(discord.ui.View):
                 await game_shared.respond(interaction, GAME_DISABLED_MESSAGE)
                 return
 
-            row = _own_instance(self.user_id, self.instance_id)
-            if row is None:
-                await game_shared.respond(
-                    interaction, game_shared.error_message("not_owned")
-                )
-                return
-
             # 確認画面を開いてからレベルが変わっている場合があるため、価格を再計算する。
-            price = service.sell_price(str(row["familiar_id"]), int(row["level"]))
+            prices: dict[int, int] = {}
 
-            outcome = sell_familiar(
+            for instance_id in self.instance_ids:
+                row = _own_instance(self.user_id, instance_id)
+                if row is None:
+                    await game_shared.respond(
+                        interaction, game_shared.error_message("not_owned")
+                    )
+                    return
+
+                prices[instance_id] = service.sell_price(
+                    str(row["familiar_id"]), int(row["level"])
+                )
+
+            outcome = sell_familiars(
                 self.user_id,
-                instance_id=self.instance_id,
-                price=price,
+                prices=prices,
                 locked_instance_ids=get_locked_instance_ids(),
             )
 
@@ -753,18 +1021,14 @@ class SellConfirmView(discord.ui.View):
                 return
 
             await game_shared.respond(
-                interaction,
-                (
-                    f"**{service.instance_title(row)}** を売却しました。\n"
-                    f"受取額：**{game_shared.format_coin(int(outcome['price']))}**"
-                ),
+                interaction, embed=service.build_sell_result_embed(outcome)
             )
 
         except Exception:
             logger.exception(
-                "売却に失敗しました: user_id=%s instance_id=%s",
+                "売却に失敗しました: user_id=%s instance_ids=%s",
                 self.user_id,
-                self.instance_id,
+                self.instance_ids,
             )
             await game_shared.respond(interaction, UNEXPECTED_ERROR_MESSAGE)
 
@@ -786,7 +1050,7 @@ class SellConfirmView(discord.ui.View):
 # ==================================================
 # パネルEmbed
 # ==================================================
-GACHA_PANEL_TITLE = "使い魔ガチャ"
+GACHA_PANEL_TITLE = "ガチャ"
 MANAGE_PANEL_TITLE = "使い魔管理"
 
 
@@ -805,31 +1069,34 @@ def build_gacha_panel_embed() -> discord.Embed:
     lines = [
         "​",
         "**使い魔を入手できます。**",
-        f"単発：{game_shared.format_coin(pool.single_cost)}",
-        f"{pool.multi_count}連：{game_shared.format_coin(pool.multi_cost)}",
+        service.item_line("単発", game_shared.format_coin(pool.single_cost)),
+        service.item_line(
+            f"{pool.multi_count}連", game_shared.format_coin(pool.multi_cost)
+        ),
     ]
 
+    rates = service.rate_lines(pool, service.SLOT_NORMAL)
+    if rates:
+        lines.extend(["", "**排出率**", *rates])
+
     if pool.guaranteed_slot:
-        lines.append(
-            f"-# {pool.multi_count}連の{pool.guaranteed_slot}枠目はBランク以上を保証します。"
-        )
+        guaranteed = service.rate_lines(pool, service.SLOT_GUARANTEED)
+        if guaranteed:
+            top = service.guaranteed_floor_rank(pool)
+            lines.extend(
+                [
+                    "",
+                    f"**{pool.multi_count}連の{pool.guaranteed_slot}枠目（保証枠）**",
+                    *guaranteed,
+                    f"-# ※{pool.guaranteed_slot}枠目は{top}ランク以上が確定します。",
+                ]
+            )
 
     embed = discord.Embed(
         title=GACHA_PANEL_TITLE,
         description="\n".join(lines),
         color=game_shared.RANK_COLORS.get("S", 0xFEE75C),
     )
-
-    table = service.build_rank_table(pool)
-    if table:
-        embed.add_field(
-            name="排出率",
-            value="\n".join(
-                f"{game_shared.rank_label(rank)}：{service.format_rate(permille)}"
-                for rank, permille in reversed(table)
-            ),
-            inline=False,
-        )
 
     notice = service.rank_table_notice(pool)
     if notice:
@@ -839,12 +1106,12 @@ def build_gacha_panel_embed() -> discord.Embed:
 
 
 def build_manage_panel_embed() -> discord.Embed:
-    """使い魔管理パネルのEmbedを作る（一覧・合成・売却を1枚にまとめる）。"""
+    """使い魔管理パネルのEmbedを作る（一覧・合成・売却・図鑑を1枚にまとめる）。"""
 
     master = load_master_data()
 
     prices = "／".join(
-        f"{game_shared.rank_label(rank)} {master.familiar.sell_base_prices[rank]:,}"
+        f"{rank} {master.familiar.sell_base_prices[rank]:,}"
         for rank in reversed(master.familiar.rank_order)
         if rank in master.familiar.sell_base_prices
     )
@@ -853,15 +1120,20 @@ def build_manage_panel_embed() -> discord.Embed:
         title=MANAGE_PANEL_TITLE,
         description=(
             "​\n"
-            "**使い魔一覧**\n"
+            "**一覧**\n"
             "-# 所有している使い魔の能力・スキル・画像を確認できます。\n\n"
-            "**使い魔合成**\n"
-            "-# 同じ種類の使い魔を素材にしてレベルアップします。\n"
-            f"-# 上限はLv.{master.familiar.max_level}です。素材にした使い魔は消費されます。\n\n"
-            "**使い魔売却**\n"
-            "-# 不要な使い魔をcoinへ換金します。取り消しできません。\n"
+            "**合成**\n"
+            "-# 同じ種類の使い魔を素材にしてレベルアップします。"
+            f"（上限はLv.{master.familiar.max_level}）\n"
+            "-# ※素材にした使い魔は消費されます。\n\n"
+            "**売却**\n"
+            "-# 不要な使い魔をcoinへ換金します。\n"
+            "-# ※取り消しできません。\n"
             f"-# 基準価格：{prices}\n"
-            "-# 売却額は「基準価格 × (レベル + 1)」です。\n\n"
+            "-# 売却額は「基準価格 × レベル」です。\n\n"
+            "**図鑑**\n"
+            "-# 所有している使い魔の画像をめくって眺められます。\n"
+            "-# 能力値とスキルも一緒に確認できます。\n\n"
             f"{LOCKED_NOTICE}"
         ),
         color=game_shared.RANK_COLORS.get("B", 0xBEDBFF),

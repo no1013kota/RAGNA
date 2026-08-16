@@ -141,14 +141,102 @@ def _remaining_seconds(state: BattleState, guild_id: int, fallback: int) -> int:
 # ==================================================
 # 出場者セット（9節）
 # ==================================================
-def get_battle_roster(guild_id: int) -> list[dict[str, Any]]:
-    """ギルドの出場者セット（1～5人）をスロット順で返す。"""
+def get_player_battle_familiars(user_id: int) -> list[dict[str, Any]]:
+    """プレイヤーがバトル用に事前登録した使い魔を、優先順で返す（9節）。
+
+    ギルドに所属していなくても、バトル中でも登録できます。所有していない
+    個体（売却・合成済み）は結果から除きます。
+    """
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT guild_id, user_id, slot
+            SELECT
+                entry.priority,
+                entry.instance_id,
+                owned.familiar_id,
+                owned.level
+            FROM player_battle_familiars AS entry
+            JOIN player_familiars AS owned
+              ON owned.instance_id = entry.instance_id
+            WHERE entry.user_id = ?
+              AND owned.user_id = ?
+              AND owned.status = 'owned'
+            ORDER BY entry.priority
+            """,
+            (user_id, user_id),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def set_player_battle_familiars(
+    user_id: int, instance_ids: list[int]
+) -> dict[str, Any]:
+    """バトル用の事前登録を、渡された順番で登録し直す（9節）。
+
+    所有していない個体が混ざっていた場合は ``not_owned`` を返し、登録内容は
+    変えません。編成ロックやバトルの進行状況とは無関係にいつでも変更できます。
+    """
+
+    ordered = [int(instance_id) for instance_id in instance_ids]
+    if len(set(ordered)) != len(ordered):
+        return _failure("duplicate_familiar")
+
+    timestamp = _now()
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            if ordered:
+                placeholders = ", ".join("?" for _ in ordered)
+                owned = conn.execute(
+                    f"""
+                    SELECT instance_id
+                    FROM player_familiars
+                    WHERE instance_id IN ({placeholders})
+                      AND user_id = ?
+                      AND status = 'owned'
+                    """,
+                    [*ordered, user_id],
+                ).fetchall()
+
+                if len(owned) != len(ordered):
+                    conn.rollback()
+                    return _failure("not_owned")
+
+            conn.execute(
+                "DELETE FROM player_battle_familiars WHERE user_id = ?", (user_id,)
+            )
+
+            for priority, instance_id in enumerate(ordered, start=1):
+                conn.execute(
+                    """
+                    INSERT INTO player_battle_familiars
+                        (user_id, priority, instance_id, updated_at)
+                    VALUES
+                        (?, ?, ?, ?)
+                    """,
+                    (user_id, priority, instance_id, timestamp),
+                )
+
+    return _success(count=len(ordered))
+
+
+def get_battle_roster(guild_id: int) -> list[dict[str, Any]]:
+    """ギルドの出場者セット（1～5人）をスロット順で返す。
+
+    ``familiar_count`` は、マスターがその出場者へ割り当てた使い魔の体数です。
+    """
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT guild_id, user_id, slot, familiar_count
             FROM guild_battle_members
             WHERE guild_id = ?
             ORDER BY slot
@@ -194,18 +282,47 @@ def count_member_entries(guild_id: int, user_id: int) -> int:
     return int(row[0]) if row else 0
 
 
-def set_battle_roster(guild_id: int, user_ids: list[int]) -> dict[str, Any]:
-    """出場者セットを指定順で登録し直す（1～5人）。
+def set_battle_roster(
+    guild_id: int, assignments: list[tuple[int, int]]
+) -> dict[str, Any]:
+    """出場者セットと、1人あたりの使い魔体数を登録し直す（9節）。
 
-    既存の行をすべて削除してから ``user_ids`` の順に ``slot=1`` から登録します。
-    出場者から外れたメンバーがセットしていた使い魔は同時に解除します。
-    人数が変わると1人あたりの上限も変わるため、上限を超えた分も解除します。
-    編成ロック中は変更できません（9節）。
+    ``assignments`` は ``[(出場者ID, 使い魔の体数), ...]`` で、渡した順に
+    ``slot=1`` から並べます。登録後は各出場者の事前登録（優先順）から自動で
+    使い魔を採用します。既に本人が選び直していた分は、割り当て体数に収まる
+    範囲でそのまま残します。編成ロック中は変更できません。
+
+    error: "duplicate_member" / "not_member" / "roster_locked" /
+           "invalid_count" / "member_limit" / "entries_full"
     """
 
-    ordered_ids = [int(user_id) for user_id in user_ids]
+    ordered = [(int(user_id), int(count)) for user_id, count in assignments]
+    ordered_ids = [user_id for user_id, _ in ordered]
+
     if len(set(ordered_ids)) != len(ordered_ids):
         return _failure("duplicate_member", added=[], removed=[], released=[])
+
+    if any(count < 1 for _, count in ordered):
+        return _failure("invalid_count", added=[], removed=[], released=[])
+
+    from game.master_data import load_master_data
+
+    master = load_master_data()
+    limit = master.familiar_limit_per_member(len(ordered))
+
+    if any(count > limit for _, count in ordered):
+        return _failure(
+            "member_limit", added=[], removed=[], released=[], limit=limit
+        )
+
+    if sum(count for _, count in ordered) > master.battle.max_units:
+        return _failure(
+            "entries_full",
+            added=[],
+            removed=[],
+            released=[],
+            max_units=master.battle.max_units,
+        )
 
     timestamp = _now()
 
@@ -260,40 +377,39 @@ def set_battle_roster(guild_id: int, user_ids: list[int]) -> dict[str, Any]:
                 (guild_id,),
             )
 
-            for slot, user_id in enumerate(ordered_ids, start=1):
+            for slot, (user_id, count) in enumerate(ordered, start=1):
                 conn.execute(
                     """
                     INSERT INTO guild_battle_members
-                        (guild_id, user_id, slot, instance_id, updated_at)
+                        (guild_id, user_id, slot, familiar_count,
+                         instance_id, updated_at)
                     VALUES
-                        (?, ?, ?, NULL, ?)
+                        (?, ?, ?, ?, NULL, ?)
                     """,
-                    (guild_id, user_id, slot, timestamp),
+                    (guild_id, user_id, slot, count, timestamp),
                 )
 
-            released = _release_invalid_entries(conn, guild_id, ordered_ids, timestamp)
+            released = _release_invalid_entries(conn, guild_id, ordered, timestamp)
+            adopted = _adopt_registered_familiars(conn, guild_id, ordered, timestamp)
 
     added = [user_id for user_id in ordered_ids if user_id not in current]
     removed = [user_id for user_id in current if user_id not in set(ordered_ids)]
 
-    return _success(added=added, removed=removed, released=released)
+    return _success(added=added, removed=removed, released=released, adopted=adopted)
 
 
 def _release_invalid_entries(
     conn: sqlite3.Connection,
     guild_id: int,
-    member_ids: list[int],
+    assignments: list[tuple[int, int]],
     timestamp: str,
 ) -> list[int]:
-    """出場者から外れた人、および上限を超えた分の使い魔セットを解除する。
+    """出場者から外れた人、および割り当て体数を超えた分のセットを解除する。
 
     戻り値は解除した所有使い魔ID。トランザクション内から呼びます。
     """
 
-    from game.master_data import load_master_data
-
-    limit = load_master_data().familiar_limit_per_member(len(member_ids))
-    allowed = set(member_ids)
+    limits = {user_id: count for user_id, count in assignments}
 
     rows = conn.execute(
         """
@@ -312,7 +428,7 @@ def _release_invalid_entries(
         user_id = int(row["user_id"])
         used = kept_per_user.get(user_id, 0)
 
-        if user_id in allowed and used < limit:
+        if used < limits.get(user_id, 0):
             kept_per_user[user_id] = used + 1
             continue
 
@@ -330,6 +446,84 @@ def _release_invalid_entries(
         _renumber_entries(conn, guild_id, timestamp)
 
     return released
+
+
+def _adopt_registered_familiars(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    assignments: list[tuple[int, int]],
+    timestamp: str,
+) -> list[int]:
+    """割り当て体数に足りない分を、事前登録の優先順から自動で埋める（9節）。
+
+    戻り値は自動採用した所有使い魔ID。トランザクション内から呼びます。
+    """
+
+    used_rows = conn.execute(
+        """
+        SELECT entry_slot, user_id, instance_id
+        FROM guild_battle_entries
+        WHERE guild_id = ?
+        """,
+        (guild_id,),
+    ).fetchall()
+
+    used_counts: dict[int, int] = {}
+    used_instances = set()
+
+    for row in used_rows:
+        user_id = int(row["user_id"])
+        used_counts[user_id] = used_counts.get(user_id, 0) + 1
+        used_instances.add(int(row["instance_id"]))
+
+    next_slot = max(
+        (int(row["entry_slot"]) for row in used_rows), default=0
+    ) + 1
+    adopted: list[int] = []
+
+    for user_id, count in assignments:
+        missing = count - used_counts.get(user_id, 0)
+        if missing <= 0:
+            continue
+
+        candidates = conn.execute(
+            """
+            SELECT entry.instance_id
+            FROM player_battle_familiars AS entry
+            JOIN player_familiars AS owned
+              ON owned.instance_id = entry.instance_id
+            WHERE entry.user_id = ?
+              AND owned.user_id = ?
+              AND owned.status = 'owned'
+            ORDER BY entry.priority
+            """,
+            (user_id, user_id),
+        ).fetchall()
+
+        for row in candidates:
+            if missing <= 0:
+                break
+
+            instance_id = int(row["instance_id"])
+            if instance_id in used_instances:
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO guild_battle_entries
+                    (guild_id, entry_slot, user_id, instance_id, updated_at)
+                VALUES
+                    (?, ?, ?, ?, ?)
+                """,
+                (guild_id, next_slot, user_id, instance_id, timestamp),
+            )
+
+            used_instances.add(instance_id)
+            adopted.append(instance_id)
+            next_slot += 1
+            missing -= 1
+
+    return adopted
 
 
 def _renumber_entries(
@@ -363,17 +557,34 @@ def _renumber_entries(
         )
 
 
+def renumber_battle_entries(
+    conn: sqlite3.Connection, guild_id: int, timestamp: str | None = None
+) -> None:
+    """使い魔の枠番号を1から詰め直す。
+
+    追放・脱退で行を削除した側から、同じトランザクション内で呼びます。
+    呼び出し元の ``row_factory`` 設定に依存しないよう、一時的に切り替えます。
+    """
+
+    previous = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        _renumber_entries(conn, guild_id, timestamp or _now())
+    finally:
+        conn.row_factory = previous
+
+
 def add_battle_entry(
     guild_id: int,
     user_id: int,
     instance_id: int,
     *,
     max_units: int,
-    per_member_limit: int,
 ) -> dict[str, Any]:
-    """出場者が使い魔を1体セットする（9節・10.3節）。
+    """出場者が自分の使い魔を1体セットする（9節・10.3節）。
 
-    早い者勝ちで、ギルド合計 ``max_units`` 体・1人 ``per_member_limit`` 体まで。
+    体数の上限は、マスターがその出場者へ割り当てた ``familiar_count`` です。
+    自動採用された使い魔を差し替えたい場合は、先に外してから追加します。
     error: "roster_locked" / "not_selected" / "entries_full" /
            "member_limit" / "already_set" / "not_owned"
     """
@@ -395,7 +606,7 @@ def add_battle_entry(
 
             selected = conn.execute(
                 """
-                SELECT 1
+                SELECT familiar_count
                 FROM guild_battle_members
                 WHERE guild_id = ?
                   AND user_id = ?
@@ -406,6 +617,8 @@ def add_battle_entry(
             if selected is None:
                 conn.rollback()
                 return _failure("not_selected")
+
+            per_member_limit = int(selected["familiar_count"] or 0)
 
             owned = conn.execute(
                 """
@@ -428,6 +641,7 @@ def add_battle_entry(
                 """
                 SELECT
                     COUNT(*) AS total,
+                    COALESCE(MAX(entry_slot), 0) AS last_slot,
                     SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS mine,
                     SUM(CASE WHEN instance_id = ? THEN 1 ELSE 0 END) AS duplicated
                 FROM guild_battle_entries
@@ -443,13 +657,14 @@ def add_battle_entry(
             # 両方に該当する場合は、本人の上限を先に案内する（より具体的なため）
             if int(counts["mine"] or 0) >= per_member_limit:
                 conn.rollback()
-                return _failure("member_limit")
+                return _failure("member_limit", limit=per_member_limit)
 
             if int(counts["total"] or 0) >= max_units:
                 conn.rollback()
                 return _failure("entries_full")
 
-            next_slot = int(counts["total"] or 0) + 1
+            # 枠番号は詰め直しているが、途中に抜けがあっても衝突しないようにする
+            next_slot = int(counts["last_slot"] or 0) + 1
             conn.execute(
                 """
                 INSERT INTO guild_battle_entries
