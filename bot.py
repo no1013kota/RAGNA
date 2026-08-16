@@ -12,6 +12,8 @@ import config
 
 from discord.ext import commands
 from database.connection import init_database
+from database.familiar import sync_master_data
+from game.master_data import load_master_data
 from discord_settings import (
     REQUIRED_INTENT_NAMES,
     create_allowed_mentions,
@@ -39,6 +41,35 @@ EXTENSIONS = (
     "cogs.introduction",
 )
 
+# RAGNA Online（ギルド・使い魔・ギルドバトル）。
+# マスターデータの読み込みに失敗した場合は、既存機能を止めずにこの3つだけ読み込みません。
+GAME_EXTENSIONS = (
+    "cogs.guild",
+    "cogs.familiar",
+    "cogs.guild_battle",
+)
+
+
+def load_game_master_data() -> bool:
+    """使い魔・スキル・ガチャのマスターデータを検証してDBへ同期する。"""
+
+    try:
+        master = load_master_data()
+        sync_master_data()
+    except Exception:
+        logger.exception("RAGNA Onlineのマスターデータを読み込めませんでした")
+        return False
+
+    missing_ranks = master.missing_ranks()
+    if missing_ranks:
+        logger.info(
+            "使い魔マスター未登録のランク: %s。"
+            "追加するまで、その排出率は設定した寄せ先ランクへ加算します。",
+            "・".join(missing_ranks),
+        )
+
+    return True
+
 
 class RagnaBot(commands.Bot):
     async def setup_hook(self) -> None:
@@ -46,6 +77,15 @@ class RagnaBot(commands.Bot):
 
         for extension in EXTENSIONS:
             await self.load_extension(extension)
+
+        if load_game_master_data():
+            for extension in GAME_EXTENSIONS:
+                await self.load_extension(extension)
+
+            if not config.GAME_ENABLED:
+                logger.info(
+                    "GAME_ENABLED が未設定のため、RAGNA Onlineのパネルは設置しません"
+                )
 
         logger.info("登録済みCog: %s", ", ".join(self.cogs))
         logger.info("有効なDiscord Intent: %s", ", ".join(REQUIRED_INTENT_NAMES))

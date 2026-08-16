@@ -94,6 +94,40 @@ def get_connection():
 
 
 # ==================================================
+# 列の追加
+# CREATE TABLE IF NOT EXISTS では既存テーブルへ列を足せないため、
+# 後から追加した列だけをここで補う
+# ==================================================
+ADDED_COLUMNS = (
+    # (テーブル名, 列名, 列定義)
+    ("guild_battles", "guild_a_channel_id", "INTEGER"),
+    ("guild_battles", "guild_b_channel_id", "INTEGER"),
+    ("guild_battles", "channels_deleted_at", "TEXT"),
+)
+
+
+def _apply_added_columns(conn) -> None:
+    """既存テーブルに不足している列を追加する。"""
+
+    for table, column, definition in ADDED_COLUMNS:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if exists is None:
+            continue
+
+        columns = {
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column in columns:
+            continue
+
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        logger.info(f"列を追加しました: {table}.{column}")
+
+
+# ==================================================
 # DB初期化
 # schema.sqlを読み込んでテーブルを自動生成する
 # ==================================================
@@ -113,6 +147,12 @@ def init_database():
     ) as file:
 
         schema = file.read()
+
+    # schema.sqlのインデックスが後から追加した列を参照するため、
+    # スキーマ適用より先に不足している列を補う。
+    _apply_added_columns(conn)
+    conn.commit()
+
     conn.executescript(schema)
     conn.commit()
     conn.close()

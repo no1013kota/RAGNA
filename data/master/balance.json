@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "note": "RAGNA Onlineのゲームバランス値。docs/GAME_SPEC.mdの数値と一致させて更新すること。",
+  "guild": {
+    "create_cost": 1000000,
+    "rename_cost": 50000,
+    "member_slot_cost": 100000,
+    "initial_capacity": 5,
+    "max_capacity": 10,
+    "name_min_length": 1,
+    "name_max_length": 30,
+    "description_min_length": 1,
+    "description_max_length": 300,
+    "archive_days": 30,
+    "archive_name_prefix": "【解散済】"
+  },
+  "familiar": {
+    "rank_order": [
+      "C",
+      "B",
+      "A",
+      "S"
+    ],
+    "usable_rank_offset": 1,
+    "max_level": 10,
+    "hp_growth_rate_per_level": 0.05,
+    "atk_growth_rate_per_level": 0.05,
+    "speed_growth_levels": [
+      2,
+      4,
+      6,
+      8,
+      10
+    ],
+    "speed_growth_value": 1,
+    "speed_max": 100,
+    "sell_base_prices": {
+      "C": 2000,
+      "B": 5000,
+      "A": 15000,
+      "S": 50000
+    }
+  },
+  "battle": {
+    "team_size": 5,
+    "critical_chance_permille": 100,
+    "critical_multiplier": 1.5,
+    "atk_buff_cap": 10,
+    "atk_debuff_cap": 10,
+    "same_skill_stack_limit": 3,
+    "guild_time_seconds": 3600,
+    "turn_time_seconds": 180,
+    "battle_channel_retention_days": 7,
+    "surrender_reward_from_round": 3,
+    "rewards": {
+      "win": {
+        "coin": 20000,
+        "xp": 100
+      },
+      "lose": {
+        "coin": 5000,
+        "xp": 25
+      },
+      "draw": {
+        "coin": 10000,
+        "xp": 50
+      }
+    },
+    "reward_daily_limit_per_player": 3,
+    "ranking": {
+      "win_points": 3,
+      "draw_points": 1,
+      "lose_points": 0,
+      "display_limit": 20
+    },
+    "battle_log_retention_days": 365,
+    "admin_log_retention_days": 180
+  }
+}

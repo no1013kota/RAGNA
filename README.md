@@ -55,6 +55,12 @@ python -m unittest discover -s tests
 4. ServiceへVolumeを追加し、Mount Pathを/dataにします。
 5. デプロイします。railway.jsonによりpython -u bot.pyで起動します。
 
+RAGNA Onlineを有効にする場合は、次のVariablesも追加します（[公開手順](#ragna-onlineの公開手順)を参照）。
+
+- GAME_ENABLED: true
+- GUILD_INTRO_CHANNEL_ID / FAMILIAR_PANEL_CHANNEL_ID /
+  GUILD_BATTLE_RECRUITMENT_CHANNEL_ID / GAME_ADMIN_LOG_CHANNEL_ID
+
 Volumeが接続されている場合、DBは自動的に/data/ragna.dbへ保存されます。
 Volumeがないローカル環境ではdata/ragna.dbが使用されます。
 
@@ -100,6 +106,44 @@ Bot起動時に整合性を確認して/data/ragna.dbへ取り込み、直前の
   コード更新をそのブランチへpushすると自動デプロイされます。
 - Bot Tokenや.env、data/ragna.dbをGitHubへ追加しないでください。
 - Railwayへ切り替えた後は、PC上の同じBotを同時起動しないでください。
+
+## RAGNA Onlineの公開手順
+
+ギルド・使い魔・ギルドバトルは実装済みですが、既定では停止しています。
+`GAME_ENABLED` が未設定の間、Cogは読み込まれますがパネルを設置せず、
+ボタン操作もすべて拒否します。段階的に公開できるようにするためです。
+
+公開前に次を用意してください。詳細は
+[ゲーム仕様書 32節](docs/GAME_SPEC.md#32-今後必要な準備物)を参照します。
+
+1. Discordチャンネルを4つ作り、IDを環境変数へ設定します。
+
+   - `GUILD_INTRO_CHANNEL_ID`：ギルド紹介（設立パネル・申請確認）
+   - `GUILD_MEMBER_RECRUITMENT_CHANNEL_ID`：メンバー募集（募集Embed・参加申請）
+   - `FAMILIAR_PANEL_CHANNEL_ID`：ガチャ・一覧・合成・売却の4パネル
+   - `GUILD_BATTLE_RECRUITMENT_CHANNEL_ID`：公開バトル募集とランキング
+
+   `GAME_ADMIN_LOG_CHANNEL_ID`（運営ログの転送先）は任意です。未設定でも
+   運営操作は `game_admin_logs` テーブルへ必ず記録します。
+
+2. Botにチャンネル管理権限を与え、Botロールを管理対象ロールより上へ置きます。
+   ギルド設立のたびに、専用カテゴリーと4つの常設チャンネルを自動作成します。
+   バトル用チャンネルは対戦成立時に自動生成し、終了から既定7日で自動削除します。
+
+3. 任意で、マスターデータを補完します（未登録でも公開できます）。
+
+   - Cランク使い魔（`data/master/familiars.json`）
+     未登録の間、Cランク分の排出率はBランクへ加算します。
+   - 使い魔画像（`assets/familiars/<使い魔ID>.png`）
+     未登録の個体は共通の仮画像 `default.png` を表示します。
+   - 性別は神話・伝承に基づく暫定値を登録済みです。変更する場合は
+     `data/master/familiars.json` と `docs/FAMILIAR_MASTER.md` を同時に更新してください。
+
+4. `GAME_ENABLED=true` を設定してデプロイします。5分以内に各パネルが設置されます。
+
+数値バランスは `data/master/*.json` で管理します。変更するときは
+`docs/GAME_SPEC.md` の該当値と `tests/test_game_master_data.py` の期待値も
+同じ変更として更新してください。
 
 ## Discord側で必要な権限
 

@@ -21,6 +21,13 @@ REQUIRED_FILES = (
     "schema.sql",
     "requirements.txt",
     "railway.json",
+    "data/master/balance.json",
+    "data/master/familiars.json",
+    "data/master/skills.json",
+    "data/master/gacha.json",
+    "game/models.py",
+    "game/master_data.py",
+    "game/battle_engine.py",
 )
 FEATURE_PACKAGES = (
     "coin",
@@ -28,6 +35,15 @@ FEATURE_PACKAGES = (
     "member",
     "ticket",
     "trial_member",
+    "guild",
+    "familiar",
+    "guild_battle",
+)
+# service.py まで求める、RAGNA Onlineの機能パッケージ
+GAME_FEATURE_PACKAGES = (
+    "guild",
+    "familiar",
+    "guild_battle",
 )
 
 
@@ -47,6 +63,43 @@ def check_feature_packages(errors: list[str]) -> None:
             relative_path = Path("cogs") / package_name / filename
             if not (ROOT / relative_path).is_file():
                 errors.append(f"機能パッケージのファイルがありません: {relative_path}")
+
+    for package_name in GAME_FEATURE_PACKAGES:
+        relative_path = Path("cogs") / package_name / "service.py"
+        if not (ROOT / relative_path).is_file():
+            errors.append(f"機能パッケージのファイルがありません: {relative_path}")
+
+
+def check_master_data(errors: list[str]) -> None:
+    """ゲームのマスターデータが読み込める状態か確認する。"""
+
+    for name in ("balance.json", "familiars.json", "skills.json", "gacha.json"):
+        path = ROOT / "data" / "master" / name
+        if not path.is_file():
+            continue
+
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeError) as exc:
+            errors.append(f"マスターデータを読み込めません: data/master/{name}: {exc}")
+
+    gacha_path = ROOT / "data" / "master" / "gacha.json"
+    if not gacha_path.is_file():
+        return
+
+    try:
+        gacha = json.loads(gacha_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeError):
+        return
+
+    for pool in gacha.get("pools", []):
+        for slot_type, weights in (pool.get("rates") or {}).items():
+            total = sum(weights.values())
+            if total != 1000:
+                errors.append(
+                    f"ガチャ排出率の合計が1000ではありません: "
+                    f"{pool.get('pool_id')}/{slot_type} = {total}"
+                )
 
 
 def check_python_syntax(errors: list[str]) -> None:
@@ -113,6 +166,7 @@ def main() -> int:
     check_feature_packages(errors)
     check_python_syntax(errors)
     check_configuration(errors)
+    check_master_data(errors)
     check_database(errors)
 
     if errors:

@@ -244,3 +244,81 @@ HOTEL_PLANS = {
     "シークレット": {"price": HOTEL_SECRET_PRICE, "limit": 2, "default_private": True},
     "プレミアム": {"price": HOTEL_PREMIUM_PRICE, "limit": 0, "default_private": True},
 }
+
+# ==================================================
+# RAGNA Online（ギルド・使い魔・ギルドバトル）
+# ==================================================
+# 仕様は docs/GAME_SPEC.md を参照。
+# 料金・確率・戦闘定数などのゲームバランス値はコードへ書かず、
+# data/master/ 配下のマスターデータで管理します（game.master_data が読み込みます）。
+
+
+def _optional_channel_env(name: str) -> int:
+    """未設定を許容するチャンネルID環境変数を読み込む。
+
+    テスト環境と本番環境でIDが異なるため、実在IDはコードへ書かず
+    Railway Variablesまたは ``.env`` から読み込みます。未設定の場合は0を返し、
+    該当パネルの設置だけを見送ります（Bot全体は起動します）。
+    """
+
+    value = os.getenv(name, "").strip()
+    if not value:
+        return 0
+
+    try:
+        channel_id = int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} は数字で設定してください。") from exc
+
+    if channel_id <= 0:
+        raise RuntimeError(f"{name} は正の数字で設定してください。")
+
+    return channel_id
+
+
+def _flag_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
+
+
+# ゲーム機能全体の公開スイッチ。段階公開のため既定はOFF。
+GAME_ENABLED = _flag_env("GAME_ENABLED", False)
+
+# ギルド紹介チャンネル（設立パネル・申請確認）
+GUILD_INTRO_CHANNEL_ID = _optional_channel_env("GUILD_INTRO_CHANNEL_ID")
+
+# メンバー募集チャンネル（募集Embedと参加申請）。ギルド紹介とは別のチャンネル
+GUILD_MEMBER_RECRUITMENT_CHANNEL_ID = _optional_channel_env(
+    "GUILD_MEMBER_RECRUITMENT_CHANNEL_ID"
+)
+
+# 使い魔の4パネルを置くチャンネル
+FAMILIAR_PANEL_CHANNEL_ID = _optional_channel_env("FAMILIAR_PANEL_CHANNEL_ID")
+
+# 公開バトル募集チャンネル（募集Embedとランキングパネル）
+GUILD_BATTLE_RECRUITMENT_CHANNEL_ID = _optional_channel_env(
+    "GUILD_BATTLE_RECRUITMENT_CHANNEL_ID"
+)
+
+# 運営操作ログの転送先（任意）。未設定でも game_admin_logs テーブルへは必ず記録します。
+# バトルの進行ログは、対戦成立時にギルドカテゴリー内へ自動生成する
+# バトル専用チャンネルへ投稿します（GAME_SPEC 34.14節）。
+GAME_ADMIN_LOG_CHANNEL_ID = _optional_channel_env("GAME_ADMIN_LOG_CHANNEL_ID")
+
+# ギルドを設立できるDiscordロール（騎士・七星・運営）
+GUILD_FOUNDER_ROLES = [ROLE_MEMBER, ROLE_SUB_MANAGER, ROLE_MANAGER]
+
+# プレイヤーランクの正式な参照元は player_roles テーブル。
+# ここではDiscordロールとゲーム内ランクの対応だけを定義します。
+PLAYER_RANK_ROLES = {
+    ROLE_CLASS_S: "S",
+    ROLE_CLASS_A: "A",
+    ROLE_CLASS_B: "B",
+    ROLE_CLASS_C: "C",
+}
+
+# 使い魔画像の配置先（正式画像がない個体は default.png を使用）
+FAMILIAR_IMAGE_DIRECTORY = "assets/familiars"
+FAMILIAR_DEFAULT_IMAGE = "default.png"

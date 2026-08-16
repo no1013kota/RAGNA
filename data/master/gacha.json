@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "note": "排出率は千分率の整数。合計は必ず1000にすること。missing_rank_fallback は、使い魔が未登録のランクの確率を寄せる先。",
+  "pools": [
+    {
+      "pool_id": "standard",
+      "name": "通常ガチャ",
+      "single_cost": 10000,
+      "multi_cost": 100000,
+      "multi_count": 10,
+      "guaranteed_slot": 10,
+      "is_public": true,
+      "missing_rank_fallback": "B",
+      "rates": {
+        "normal": {"C": 450, "B": 450, "A": 90, "S": 10},
+        "guaranteed": {"B": 900, "A": 90, "S": 10}
+      }
+    }
+  ]
+}

@@ -10,7 +10,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-FEATURE_PACKAGES = ("coin", "hotel", "member", "ticket", "trial_member")
+FEATURE_PACKAGES = (
+    "coin",
+    "hotel",
+    "member",
+    "ticket",
+    "trial_member",
+    "guild",
+    "familiar",
+    "guild_battle",
+)
+# RAGNA Onlineの機能パッケージは service.py まで持つ
+GAME_FEATURE_PACKAGES = ("guild", "familiar", "guild_battle")
 EXPECTED_EXTENSIONS = (
     "cogs.coin",
     "cogs.trial_member",
@@ -22,9 +33,16 @@ EXPECTED_EXTENSIONS = (
     "cogs.ticket",
     "cogs.introduction",
 )
+EXPECTED_GAME_EXTENSIONS = (
+    "cogs.guild",
+    "cogs.familiar",
+    "cogs.guild_battle",
+)
 EXPECTED_SLASH_COMMANDS = {
     "ban",
     "xp確認",
+    "バトル中止",
+    "バトル再開",
     "クラス分布",
     "クラス変更",
     "メンバー確認",
@@ -43,6 +61,37 @@ EXPECTED_PERSISTENT_CUSTOM_IDS = {
     "evaluation_panel:evaluate",
     "evaluation_panel:target_list",
     "evaluation_user_select",
+    "familiar:fuse",
+    "familiar:gacha_multi",
+    "familiar:gacha_single",
+    "familiar:list",
+    "familiar:sell",
+    "guild:create",
+    "guild:description",
+    "guild:disband",
+    "guild:expand",
+    "guild:info",
+    "guild:join_request",
+    "guild:kick",
+    "guild:leave",
+    "guild:my_requests",
+    "guild:recruit",
+    "guild:rename",
+    "guild:request_approve",
+    "guild:request_reject",
+    "guild:transfer",
+    "guild_battle:attack",
+    "guild_battle:check_roster",
+    "guild_battle:ranking",
+    "guild_battle:recruit",
+    "guild_battle:recruit_apply",
+    "guild_battle:request",
+    "guild_battle:request_approve",
+    "guild_battle:request_reject",
+    "guild_battle:set_familiar",
+    "guild_battle:set_members",
+    "guild_battle:skill",
+    "guild_battle:surrender",
     "hotel:limit",
     "hotel:plan",
     "hotel:rename",
@@ -88,18 +137,39 @@ class ProjectStructureTests(unittest.TestCase):
                 (package / "__init__.py").read_text(encoding="utf-8"),
             )
 
-    def test_bot_keeps_the_same_extension_names(self) -> None:
-        tree = ast.parse((ROOT / "bot.py").read_text(encoding="utf-8"))
-        extensions = None
-        for node in tree.body:
-            if isinstance(node, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id == "EXTENSIONS"
-                for target in node.targets
-            ):
-                extensions = ast.literal_eval(node.value)
-                break
+    def test_game_features_have_a_service_layer(self) -> None:
+        for package_name in GAME_FEATURE_PACKAGES:
+            service_path = ROOT / "cogs" / package_name / "service.py"
+            self.assertTrue(service_path.is_file(), package_name)
 
-        self.assertEqual(extensions, EXPECTED_EXTENSIONS)
+    def test_bot_keeps_the_same_extension_names(self) -> None:
+        assignments = self.read_bot_assignments()
+
+        self.assertEqual(assignments.get("EXTENSIONS"), EXPECTED_EXTENSIONS)
+
+    def test_game_extensions_are_loaded_separately(self) -> None:
+        # マスターデータを読めない場合でも既存機能を止めないため、
+        # ゲーム機能は別のタプルに分けて読み込む。
+        assignments = self.read_bot_assignments()
+
+        self.assertEqual(assignments.get("GAME_EXTENSIONS"), EXPECTED_GAME_EXTENSIONS)
+
+    def read_bot_assignments(self) -> dict[str, object]:
+        tree = ast.parse((ROOT / "bot.py").read_text(encoding="utf-8"))
+        found: dict[str, object] = {}
+
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {
+                    "EXTENSIONS",
+                    "GAME_EXTENSIONS",
+                }:
+                    found[target.id] = ast.literal_eval(node.value)
+
+        return found
 
     def test_slash_command_names_remain_stable(self) -> None:
         source = read_all_cog_source()
@@ -125,8 +195,39 @@ class ProjectStructureTests(unittest.TestCase):
             "ranking",
             "hotel",
             "ticket",
+            "guild",
+            "familiar",
+            "battle",
+            "player_rank",
         ):
             self.assertTrue((ROOT / "database" / f"{module_name}.py").is_file())
+
+    def test_game_layer_does_not_depend_on_discord(self) -> None:
+        """戦闘計算をDiscordなしでテストできる状態を保つ（32.8節）。"""
+
+        # battle_embed.py は表示専用のため唯一の例外。
+        allowed_to_import_discord = {"battle_embed.py"}
+
+        for path in sorted((ROOT / "game").glob("*.py")):
+            if path.name in allowed_to_import_discord:
+                continue
+
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn("import discord", source, path.name)
+            self.assertNotIn("import config", source, path.name)
+
+    def test_game_cogs_do_not_run_sql_directly(self) -> None:
+        """SQLはdatabase層に閉じ込める（設計・開発ガイドの変更時のルール）。"""
+
+        for package_name in GAME_FEATURE_PACKAGES:
+            for path in sorted((ROOT / "cogs" / package_name).glob("*.py")):
+                source = path.read_text(encoding="utf-8")
+                self.assertNotIn("get_connection", source, str(path))
+                self.assertNotIn("sqlite3", source, str(path))
+
+    def test_master_data_files_exist(self) -> None:
+        for name in ("balance.json", "familiars.json", "skills.json", "gacha.json"):
+            self.assertTrue((ROOT / "data" / "master" / name).is_file(), name)
 
 
 if __name__ == "__main__":
