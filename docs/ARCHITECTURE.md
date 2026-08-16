@@ -135,7 +135,7 @@ database/battle.py           状態の保存と楽観ロック
   終了から `battle_channel_retention_days` 日後に自動削除）
 
 - 戦闘計算は `game/` だけで完結するため、Discordを使わずに自動テストできます
-  （`tests/test_game_battle.py` が5対5の通し確認を行います）。
+  （`tests/test_game_battle.py` が5体どうしの通し確認を行います）。
 - 進行中バトルの二重処理は `guild_battles.action_seq` の楽観ロックで防ぎます。
   `database.battle.save_battle_state(state, expected_action_seq=...)` が `False` を
   返した場合、Cogは**何も投稿せず**に処理を中断します。

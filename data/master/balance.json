@@ -42,7 +42,16 @@
     }
   },
   "battle": {
-    "team_size": 5,
+    "max_units": 5,
+    "max_members": 5,
+    "min_members": 1,
+    "familiars_per_member": {
+      "1": 5,
+      "2": 3,
+      "3": 2,
+      "4": 2,
+      "5": 1
+    },
     "critical_chance_permille": 100,
     "critical_multiplier": 1.5,
     "atk_buff_cap": 10,

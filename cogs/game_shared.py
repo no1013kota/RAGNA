@@ -285,9 +285,11 @@ async def create_guild_channels(
     reason = f"RAGNA Onlineギルド「{guild_name}」の作成"
 
     try:
+        # カテゴリーの権限は「このギルドを見られる人」の定義になる。
+        # 終了後のバトルログはこの権限へ同期するため、所属メンバーを含める（34.14節）。
         category = await guild.create_category(
             name=guild_name,
-            overwrites=_base_overwrites(guild),
+            overwrites=member_overwrites(guild, [master_id], send_messages=False),
             reason=reason,
         )
         created.append(category)
@@ -395,6 +397,33 @@ async def create_battle_channel(
     return channel.id
 
 
+async def open_battle_log_channel(
+    guild: discord.Guild, channel_id: int | None
+) -> bool:
+    """終了したバトルのチャンネルを、カテゴリーの権限へ同期する（34.14節）。
+
+    同期すると「ギルドカテゴリーを見られる人」全員が過去ログを読めるようになり、
+    以後にギルドへ加入したメンバーも自動的に閲覧できます。
+    """
+
+    if not channel_id:
+        return True
+
+    channel = guild.get_channel(int(channel_id))
+    if channel is None:
+        return True
+
+    try:
+        await channel.edit(
+            sync_permissions=True, reason="ギルドバトル終了によるログ公開"
+        )
+    except Exception:
+        logger.warning("バトルログの権限同期に失敗しました: %s", channel_id)
+        return False
+
+    return True
+
+
 async def delete_channel(guild: discord.Guild, channel_id: int | None) -> bool:
     """チャンネルを削除する。既に無い場合も成功として扱う。"""
 
@@ -428,6 +457,9 @@ async def apply_guild_permissions(
     master_id = guild_row["master_id"]
 
     targets = (
+        # カテゴリーは「このギルドを見られる人」の定義。終了後のバトルログは
+        # ここへ同期するため、所属メンバーの増減を必ず反映する（34.14節）。
+        (guild_row.get("category_id"), member_ids, False),
         (guild_row.get("guild_text_channel_id"), member_ids, True),
         (guild_row.get("guild_voice_channel_id"), member_ids, True),
         (guild_row.get("master_text_channel_id"), [master_id], True),

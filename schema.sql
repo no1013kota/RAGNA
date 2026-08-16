@@ -534,7 +534,8 @@ ON guild_battles(status);
 
 -- ==================================================
 -- RAGNA Online：出場者セット
--- ギルドごとに保持し、バトル終了時に使い魔セットを解除する
+-- ギルドごとに1～5人を保持し、バトル終了時に解除する
+-- 使い魔のセットは guild_battle_entries が持つ
 -- ==================================================
 CREATE TABLE IF NOT EXISTS guild_battle_members (
 guild_id INTEGER NOT NULL REFERENCES guilds(guild_id),
@@ -551,6 +552,30 @@ PRIMARY KEY (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_guild_battle_members_slot
 ON guild_battle_members(guild_id, slot);
+
+-- ==================================================
+-- RAGNA Online：出場する使い魔（1ギルドあたり最大5体）
+-- 1人が複数体を出せるため、出場者セットとは別に持つ（9節）
+-- ==================================================
+CREATE TABLE IF NOT EXISTS guild_battle_entries (
+guild_id INTEGER NOT NULL REFERENCES guilds(guild_id),
+entry_slot INTEGER NOT NULL,
+user_id INTEGER NOT NULL,
+instance_id INTEGER NOT NULL REFERENCES player_familiars(instance_id),
+updated_at TEXT NOT NULL,
+
+PRIMARY KEY (
+    guild_id,
+    entry_slot
+)
+);
+
+-- 同じ個体を2枠へセットできないようにする
+CREATE UNIQUE INDEX IF NOT EXISTS idx_guild_battle_entries_instance
+ON guild_battle_entries(guild_id, instance_id);
+
+CREATE INDEX IF NOT EXISTS idx_guild_battle_entries_user
+ON guild_battle_entries(guild_id, user_id);
 
 -- ==================================================
 -- RAGNA Online：戦闘用使い魔

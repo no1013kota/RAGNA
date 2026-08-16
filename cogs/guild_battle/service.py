@@ -30,6 +30,7 @@ from database.battle import (
     get_active_battle_for_guild,
     get_active_battles,
     get_battle,
+    get_battle_entries,
     get_battle_roster,
     get_battles_to_purge_channels,
     grant_battle_rewards,
@@ -304,15 +305,29 @@ def check_guild_ready(
         issues.append("このギルドには既に進行中のバトルがあります。")
 
     roster = get_battle_roster(guild_id)
-    if len(roster) != master.battle.team_size:
+    member_ids = {int(member["user_id"]) for member in roster}
+
+    if not roster:
+        issues.append("出場者がセットされていません。")
+    elif len(roster) > master.battle.max_members:
         issues.append(
-            f"出場者が{master.battle.team_size}人ちょうどではありません"
-            f"（現在{len(roster)}人）。"
+            f"出場者は最大{master.battle.max_members}人です（現在{len(roster)}人）。"
+        )
+
+    battle_entries = get_battle_entries(guild_id)
+
+    if not battle_entries:
+        issues.append("使い魔がセットされていません。")
+    elif len(battle_entries) > master.battle.max_units:
+        issues.append(
+            f"使い魔は最大{master.battle.max_units}体です"
+            f"（現在{len(battle_entries)}体）。"
         )
 
     if busy_players is None:
         busy_players = _players_in_active_battles()
 
+    # 出場者そのものの確認（使い魔をセットしていない人も対象にする）
     for member in roster:
         user_id = int(member["user_id"])
         mention = f"<@{user_id}>"
@@ -324,14 +339,18 @@ def check_guild_ready(
 
         if user_id in busy_players:
             issues.append(f"{mention} は他の進行中バトルへ参加しています。")
+
+    # セットされた使い魔ごとの確認
+    for entry in battle_entries:
+        user_id = int(entry["user_id"])
+        instance_id = int(entry["instance_id"])
+        mention = f"<@{user_id}>"
+
+        if user_id not in member_ids:
+            issues.append(f"{mention} は出場者から外れています。")
             continue
 
-        instance_id = member.get("instance_id")
-        if not instance_id:
-            issues.append(f"{mention} が使い魔をセットしていません。")
-            continue
-
-        owned = get_owned_familiar(int(instance_id))
+        owned = get_owned_familiar(instance_id)
         if (
             owned is None
             or int(owned["user_id"]) != user_id
@@ -366,10 +385,10 @@ def check_guild_ready(
             {
                 "guild_id": guild_id,
                 "player_id": user_id,
-                "instance_id": int(instance_id),
+                "instance_id": instance_id,
                 "familiar_id": owned["familiar_id"],
                 "level": int(owned["level"]),
-                "slot": int(member["slot"]),
+                "slot": int(entry["entry_slot"]),
             }
         )
 
@@ -997,6 +1016,8 @@ async def finish_battle_flow(
 
     # 6～8. 出場者専用TCの権限を整理する（マスターと運営の権限は維持）
     discord_guild = bot.get_guild(config.GUILD_ID)
+    battle_row = get_battle(state.battle_id) or {}
+
     if discord_guild is not None:
         for guild_id in (state.guild_a_id, state.guild_b_id):
             guild_row = get_guild(guild_id)
@@ -1006,6 +1027,12 @@ async def finish_battle_flow(
             member_ids = [row["user_id"] for row in get_guild_members(guild_id)]
             await game_shared.apply_guild_permissions(
                 discord_guild, guild_row, member_ids=member_ids, roster_ids=[]
+            )
+
+            # バトルログをカテゴリー権限へ同期し、後からの加入者も読めるようにする
+            await game_shared.open_battle_log_channel(
+                discord_guild,
+                battle_row.get(_side_key(state, guild_id, "channel_id")),
             )
 
     # 9・10. 報酬付与と運営ログ

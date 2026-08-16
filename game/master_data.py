@@ -86,7 +86,10 @@ class RankingBalance:
 
 @dataclass(frozen=True)
 class BattleBalance:
-    team_size: int
+    max_units: int
+    max_members: int
+    min_members: int
+    familiars_per_member: dict[int, int]
     critical_chance_permille: int
     critical_multiplier: float
     atk_buff_cap: int
@@ -210,6 +213,21 @@ class MasterData:
             speed_max=self.familiar.speed_max,
         )
 
+    def familiar_limit_per_member(self, member_count: int) -> int:
+        """出場者数に応じた「1人あたりの使い魔上限」を返す（9節）。
+
+        設定に無い人数の場合は、合計上限を人数で割った切り上げを使います。
+        """
+
+        limit = self.battle.familiars_per_member.get(member_count)
+        if limit is not None:
+            return limit
+
+        if member_count <= 0:
+            return 0
+
+        return -(-self.battle.max_units // member_count)
+
     def sell_price(self, rank: str, level: int) -> int:
         """売却額を返す（10.2節）。``基準価格 × (レベル + 1)``。"""
 
@@ -331,7 +349,13 @@ def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, B
 
     ranking_raw = battle_raw["ranking"]
     battle = BattleBalance(
-        team_size=int(battle_raw["team_size"]),
+        max_units=int(battle_raw["max_units"]),
+        max_members=int(battle_raw["max_members"]),
+        min_members=int(battle_raw["min_members"]),
+        familiars_per_member={
+            int(members): int(limit)
+            for members, limit in battle_raw["familiars_per_member"].items()
+        },
         critical_chance_permille=int(battle_raw["critical_chance_permille"]),
         critical_multiplier=float(battle_raw["critical_multiplier"]),
         atk_buff_cap=int(battle_raw["atk_buff_cap"]),
@@ -358,8 +382,27 @@ def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, B
     if not 0 <= battle.critical_chance_permille <= 1000:
         raise MasterDataError("critical_chance_permille は0～1000で設定してください")
 
-    if battle.team_size <= 0:
-        raise MasterDataError("team_size は1以上で設定してください")
+    if battle.max_units <= 0:
+        raise MasterDataError("max_units は1以上で設定してください")
+
+    if not 1 <= battle.min_members <= battle.max_members:
+        raise MasterDataError("min_members / max_members の関係が不正です")
+
+    for members in range(battle.min_members, battle.max_members + 1):
+        if members not in battle.familiars_per_member:
+            raise MasterDataError(
+                f"familiars_per_member に出場者{members}人分の上限がありません"
+            )
+
+        limit = battle.familiars_per_member[members]
+        if limit <= 0:
+            raise MasterDataError("familiars_per_member の上限は1以上にしてください")
+
+        # 人数 × 上限が合計上限に届かないと、5体そろえられない編成が生まれる
+        if members * limit < battle.max_units:
+            raise MasterDataError(
+                f"出場者{members}人では合計{battle.max_units}体をセットできません"
+            )
 
     return guild, familiar, battle
 

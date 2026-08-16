@@ -142,13 +142,13 @@ def _remaining_seconds(state: BattleState, guild_id: int, fallback: int) -> int:
 # 出場者セット（9節）
 # ==================================================
 def get_battle_roster(guild_id: int) -> list[dict[str, Any]]:
-    """ギルドの出場者セットをスロット順で返す。"""
+    """ギルドの出場者セット（1～5人）をスロット順で返す。"""
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT guild_id, user_id, slot, instance_id
+            SELECT guild_id, user_id, slot
             FROM guild_battle_members
             WHERE guild_id = ?
             ORDER BY slot
@@ -159,18 +159,53 @@ def get_battle_roster(guild_id: int) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def get_battle_entries(guild_id: int) -> list[dict[str, Any]]:
+    """ギルドがセットした使い魔（最大5体）を枠順で返す（9節）。"""
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT guild_id, entry_slot, user_id, instance_id
+            FROM guild_battle_entries
+            WHERE guild_id = ?
+            ORDER BY entry_slot
+            """,
+            (guild_id,),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def count_member_entries(guild_id: int, user_id: int) -> int:
+    """その出場者がセット済みの使い魔数を返す。"""
+
+    with closing(get_connection()) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM guild_battle_entries
+            WHERE guild_id = ?
+              AND user_id = ?
+            """,
+            (guild_id, user_id),
+        ).fetchone()
+
+    return int(row[0]) if row else 0
+
+
 def set_battle_roster(guild_id: int, user_ids: list[int]) -> dict[str, Any]:
-    """出場者セットを指定順で登録し直す。
+    """出場者セットを指定順で登録し直す（1～5人）。
 
     既存の行をすべて削除してから ``user_ids`` の順に ``slot=1`` から登録します。
-    引き続き出場するメンバーがセット済みの使い魔は、そのまま引き継ぎます
-    （改めて選び直す手間を無くすため。所有確認は開始前チェックで再度行います）。
+    出場者から外れたメンバーがセットしていた使い魔は同時に解除します。
+    人数が変わると1人あたりの上限も変わるため、上限を超えた分も解除します。
     編成ロック中は変更できません（9節）。
     """
 
     ordered_ids = [int(user_id) for user_id in user_ids]
     if len(set(ordered_ids)) != len(ordered_ids):
-        return _failure("duplicate_member", added=[], removed=[])
+        return _failure("duplicate_member", added=[], removed=[], released=[])
 
     timestamp = _now()
 
@@ -190,7 +225,7 @@ def set_battle_roster(guild_id: int, user_ids: list[int]) -> dict[str, Any]:
 
             if guild_row is not None and guild_row["roster_locked"]:
                 conn.rollback()
-                return _failure("roster_locked", added=[], removed=[])
+                return _failure("roster_locked", added=[], removed=[], released=[])
 
             member_rows = conn.execute(
                 """
@@ -204,18 +239,18 @@ def set_battle_roster(guild_id: int, user_ids: list[int]) -> dict[str, Any]:
 
             if any(user_id not in member_ids for user_id in ordered_ids):
                 conn.rollback()
-                return _failure("not_member", added=[], removed=[])
+                return _failure("not_member", added=[], removed=[], released=[])
 
             current_rows = conn.execute(
                 """
-                SELECT user_id, instance_id
+                SELECT user_id
                 FROM guild_battle_members
                 WHERE guild_id = ?
                 ORDER BY slot
                 """,
                 (guild_id,),
             ).fetchall()
-            current = {row["user_id"]: row["instance_id"] for row in current_rows}
+            current = [row["user_id"] for row in current_rows]
 
             conn.execute(
                 """
@@ -231,23 +266,117 @@ def set_battle_roster(guild_id: int, user_ids: list[int]) -> dict[str, Any]:
                     INSERT INTO guild_battle_members
                         (guild_id, user_id, slot, instance_id, updated_at)
                     VALUES
-                        (?, ?, ?, ?, ?)
+                        (?, ?, ?, NULL, ?)
                     """,
-                    (guild_id, user_id, slot, current.get(user_id), timestamp),
+                    (guild_id, user_id, slot, timestamp),
                 )
+
+            released = _release_invalid_entries(conn, guild_id, ordered_ids, timestamp)
 
     added = [user_id for user_id in ordered_ids if user_id not in current]
     removed = [user_id for user_id in current if user_id not in set(ordered_ids)]
 
-    return _success(added=added, removed=removed)
+    return _success(added=added, removed=removed, released=released)
 
 
-def set_roster_familiar(
+def _release_invalid_entries(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    member_ids: list[int],
+    timestamp: str,
+) -> list[int]:
+    """出場者から外れた人、および上限を超えた分の使い魔セットを解除する。
+
+    戻り値は解除した所有使い魔ID。トランザクション内から呼びます。
+    """
+
+    from game.master_data import load_master_data
+
+    limit = load_master_data().familiar_limit_per_member(len(member_ids))
+    allowed = set(member_ids)
+
+    rows = conn.execute(
+        """
+        SELECT entry_slot, user_id, instance_id
+        FROM guild_battle_entries
+        WHERE guild_id = ?
+        ORDER BY entry_slot
+        """,
+        (guild_id,),
+    ).fetchall()
+
+    kept_per_user: dict[int, int] = {}
+    released: list[int] = []
+
+    for row in rows:
+        user_id = int(row["user_id"])
+        used = kept_per_user.get(user_id, 0)
+
+        if user_id in allowed and used < limit:
+            kept_per_user[user_id] = used + 1
+            continue
+
+        released.append(int(row["instance_id"]))
+        conn.execute(
+            """
+            DELETE FROM guild_battle_entries
+            WHERE guild_id = ?
+              AND entry_slot = ?
+            """,
+            (guild_id, row["entry_slot"]),
+        )
+
+    if released:
+        _renumber_entries(conn, guild_id, timestamp)
+
+    return released
+
+
+def _renumber_entries(
+    conn: sqlite3.Connection, guild_id: int, timestamp: str
+) -> None:
+    """使い魔の枠番号を1から詰め直す。"""
+
+    rows = conn.execute(
+        """
+        SELECT entry_slot, user_id, instance_id
+        FROM guild_battle_entries
+        WHERE guild_id = ?
+        ORDER BY entry_slot
+        """,
+        (guild_id,),
+    ).fetchall()
+
+    conn.execute(
+        "DELETE FROM guild_battle_entries WHERE guild_id = ?", (guild_id,)
+    )
+
+    for slot, row in enumerate(rows, start=1):
+        conn.execute(
+            """
+            INSERT INTO guild_battle_entries
+                (guild_id, entry_slot, user_id, instance_id, updated_at)
+            VALUES
+                (?, ?, ?, ?, ?)
+            """,
+            (guild_id, slot, row["user_id"], row["instance_id"], timestamp),
+        )
+
+
+def add_battle_entry(
     guild_id: int,
     user_id: int,
-    instance_id: int | None,
+    instance_id: int,
+    *,
+    max_units: int,
+    per_member_limit: int,
 ) -> dict[str, Any]:
-    """出場者がバトルへ持ち込む使い魔を設定する（10.3節）。"""
+    """出場者が使い魔を1体セットする（9節・10.3節）。
+
+    早い者勝ちで、ギルド合計 ``max_units`` 体・1人 ``per_member_limit`` 体まで。
+    error: "roster_locked" / "not_selected" / "entries_full" /
+           "member_limit" / "already_set" / "not_owned"
+    """
 
     timestamp = _now()
 
@@ -257,49 +386,132 @@ def set_roster_familiar(
             conn.execute("BEGIN IMMEDIATE")
 
             guild_row = conn.execute(
-                """
-                SELECT roster_locked
-                FROM guilds
-                WHERE guild_id = ?
-                """,
-                (guild_id,),
+                "SELECT roster_locked FROM guilds WHERE guild_id = ?", (guild_id,)
             ).fetchone()
 
             if guild_row is not None and guild_row["roster_locked"]:
                 conn.rollback()
                 return _failure("roster_locked")
 
-            updated = conn.execute(
+            selected = conn.execute(
                 """
-                UPDATE guild_battle_members
-                SET instance_id = ?,
-                    updated_at = ?
+                SELECT 1
+                FROM guild_battle_members
                 WHERE guild_id = ?
                   AND user_id = ?
                 """,
-                (instance_id, timestamp, guild_id, user_id),
-            )
+                (guild_id, user_id),
+            ).fetchone()
 
-            if updated.rowcount == 0:
+            if selected is None:
                 conn.rollback()
                 return _failure("not_selected")
 
-    return _success(instance_id=instance_id)
+            owned = conn.execute(
+                """
+                SELECT user_id, status
+                FROM player_familiars
+                WHERE instance_id = ?
+                """,
+                (instance_id,),
+            ).fetchone()
+
+            if (
+                owned is None
+                or int(owned["user_id"]) != int(user_id)
+                or owned["status"] != "owned"
+            ):
+                conn.rollback()
+                return _failure("not_owned")
+
+            counts = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS mine,
+                    SUM(CASE WHEN instance_id = ? THEN 1 ELSE 0 END) AS duplicated
+                FROM guild_battle_entries
+                WHERE guild_id = ?
+                """,
+                (user_id, instance_id, guild_id),
+            ).fetchone()
+
+            if int(counts["duplicated"] or 0):
+                conn.rollback()
+                return _failure("already_set")
+
+            # 両方に該当する場合は、本人の上限を先に案内する（より具体的なため）
+            if int(counts["mine"] or 0) >= per_member_limit:
+                conn.rollback()
+                return _failure("member_limit")
+
+            if int(counts["total"] or 0) >= max_units:
+                conn.rollback()
+                return _failure("entries_full")
+
+            next_slot = int(counts["total"] or 0) + 1
+            conn.execute(
+                """
+                INSERT INTO guild_battle_entries
+                    (guild_id, entry_slot, user_id, instance_id, updated_at)
+                VALUES
+                    (?, ?, ?, ?, ?)
+                """,
+                (guild_id, next_slot, user_id, instance_id, timestamp),
+            )
+
+    return _success(entry_slot=next_slot)
+
+
+def remove_battle_entry(
+    guild_id: int, user_id: int, instance_id: int
+) -> dict[str, Any]:
+    """自分がセットした使い魔を1体解除する。
+
+    error: "roster_locked" / "not_set"
+    """
+
+    timestamp = _now()
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            guild_row = conn.execute(
+                "SELECT roster_locked FROM guilds WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+
+            if guild_row is not None and guild_row["roster_locked"]:
+                conn.rollback()
+                return _failure("roster_locked")
+
+            deleted = conn.execute(
+                """
+                DELETE FROM guild_battle_entries
+                WHERE guild_id = ?
+                  AND user_id = ?
+                  AND instance_id = ?
+                """,
+                (guild_id, user_id, instance_id),
+            )
+
+            if deleted.rowcount == 0:
+                conn.rollback()
+                return _failure("not_set")
+
+            _renumber_entries(conn, guild_id, timestamp)
+
+    return _success()
 
 
 def clear_roster_familiars(guild_id: int) -> None:
-    """ギルドの出場者セットから使い魔の選択だけを解除する（26.2節）。"""
+    """ギルドの使い魔セットだけを解除する（26.2節）。"""
 
     with closing(get_connection()) as conn:
         with conn:
             conn.execute(
-                """
-                UPDATE guild_battle_members
-                SET instance_id = NULL,
-                    updated_at = ?
-                WHERE guild_id = ?
-                """,
-                (_now(), guild_id),
+                "DELETE FROM guild_battle_entries WHERE guild_id = ?", (guild_id,)
             )
 
 
@@ -315,12 +527,11 @@ def get_locked_instance_ids() -> set[int]:
     with closing(get_connection()) as conn:
         roster_rows = conn.execute(
             """
-            SELECT member.instance_id
-            FROM guild_battle_members AS member
+            SELECT entry.instance_id
+            FROM guild_battle_entries AS entry
             JOIN guilds AS guild
-              ON guild.guild_id = member.guild_id
+              ON guild.guild_id = entry.guild_id
             WHERE guild.roster_locked = 1
-              AND member.instance_id IS NOT NULL
             """
         ).fetchall()
 
@@ -1654,13 +1865,19 @@ def finish_battle(
                 (timestamp, guild_a_id, guild_b_id),
             )
 
-            # 出場者セットそのものを解除する（26.2節）。
-            # instance_id をNULLにするだけでは、DB上は5人が出場者のまま残り、
-            # 次にメンバー構成が変わったときに出場者専用TCの閲覧権限が
-            # 復活してしまう。行ごと削除して編成と権限を一致させる。
+            # 出場者セットと使い魔セットを解除する（26.2節）。
+            # 行を残すと、次にメンバー構成が変わったときに出場者専用TCの
+            # 閲覧権限が復活してしまうため、両方を削除して編成と権限を一致させる。
             conn.execute(
                 """
                 DELETE FROM guild_battle_members
+                WHERE guild_id IN (?, ?)
+                """,
+                (guild_a_id, guild_b_id),
+            )
+            conn.execute(
+                """
+                DELETE FROM guild_battle_entries
                 WHERE guild_id IN (?, ?)
                 """,
                 (guild_a_id, guild_b_id),
