@@ -1,4 +1,4 @@
-"""使い魔パネル（ガチャ・一覧・合成・売却）のDiscord UI層（GAME_SPEC 10.2節）。
+"""使い魔パネル（ガチャ／管理）のDiscord UI層（GAME_SPEC 10.2節）。
 
 常設パネルのViewだけが固定 ``custom_id`` を持ち、押した先の一時的なView・
 セレクトには ``custom_id`` を付けません（discord.pyが自動採番します）。
@@ -194,6 +194,45 @@ class GachaPanelView(discord.ui.View):
     ):
         await _open_gacha_confirm(interaction, multi=True)
 
+    @discord.ui.button(
+        label="排出使い魔の確認",
+        style=discord.ButtonStyle.secondary,
+        custom_id="familiar:gacha_rates",
+    )
+    async def show_rates(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        """排出される使い魔とランクごとの確率を一覧表示する。"""
+
+        if not await _guard(interaction):
+            return
+
+        try:
+            pool = service.get_pool()
+        except Exception:
+            logger.exception("ガチャ設定の読み込みに失敗しました")
+            await game_shared.respond(interaction, MASTER_ERROR_MESSAGE)
+            return
+
+        if pool is None:
+            await game_shared.respond(interaction, "現在このガチャは利用できません。")
+            return
+
+        try:
+            embed = service.build_rate_list_embed(pool)
+        except Exception:
+            logger.exception("排出使い魔一覧の作成に失敗しました")
+            await game_shared.respond(interaction, UNEXPECTED_ERROR_MESSAGE)
+            return
+
+        if not embed.fields:
+            await game_shared.respond(
+                interaction, "排出できる使い魔が登録されていません。"
+            )
+            return
+
+        await game_shared.respond(interaction, embed=embed)
+
 
 async def _open_gacha_confirm(interaction: discord.Interaction, *, multi: bool) -> None:
     """実行前の確認画面を実行者だけへ表示する。"""
@@ -332,10 +371,11 @@ class GachaConfirmView(discord.ui.View):
 
 
 # ==================================================
-# 使い魔一覧（10.2節）
+# 使い魔管理（10.2節）
+# 一覧・合成・売却を1つのパネルにまとめる
 # ==================================================
-class FamiliarListPanelView(discord.ui.View):
-    """使い魔一覧パネルの常設View。"""
+class FamiliarManagePanelView(discord.ui.View):
+    """使い魔の一覧・合成・売却をまとめた常設View。"""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -366,6 +406,26 @@ class FamiliarListPanelView(discord.ui.View):
 
         view = FamiliarListView(user_id=interaction.user.id, rows=owned)
         await interaction.followup.send(content=view.header(), view=view, ephemeral=True)
+
+    @discord.ui.button(
+        label="使い魔合成",
+        style=discord.ButtonStyle.success,
+        custom_id="familiar:fuse",
+    )
+    async def start_fusion(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await _open_fusion(interaction)
+
+    @discord.ui.button(
+        label="使い魔売却",
+        style=discord.ButtonStyle.danger,
+        custom_id="familiar:sell",
+    )
+    async def start_sell(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await _open_sell(interaction)
 
 
 class FamiliarListView(InstancePageView):
@@ -400,53 +460,42 @@ class FamiliarListView(InstancePageView):
 # ==================================================
 # 合成（10.2節）
 # ==================================================
-class FamiliarFusePanelView(discord.ui.View):
-    """合成パネルの常設View。"""
+async def _open_fusion(interaction: discord.Interaction) -> None:
+    """合成のベース個体選択を開く。"""
 
-    def __init__(self):
-        super().__init__(timeout=None)
+    if not await _guard(interaction):
+        return
 
-    @discord.ui.button(
-        label="使い魔合成",
-        style=discord.ButtonStyle.primary,
-        custom_id="familiar:fuse",
-    )
-    async def start_fusion(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        if not await _guard(interaction):
-            return
+    await interaction.response.defer(ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
+    try:
+        owned = get_owned_familiars(interaction.user.id)
+        locked = get_locked_instance_ids()
+        bases = service.fusable_bases(owned, locked)
+    except Exception:
+        logger.exception("合成候補の取得に失敗しました: user_id=%s", interaction.user.id)
+        await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
+        return
 
-        try:
-            owned = get_owned_familiars(interaction.user.id)
-            locked = get_locked_instance_ids()
-            bases = service.fusable_bases(owned, locked)
-        except Exception:
-            logger.exception("合成候補の取得に失敗しました: user_id=%s", interaction.user.id)
-            await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
-            return
+    if not owned:
+        await interaction.followup.send(NO_FAMILIAR_MESSAGE, ephemeral=True)
+        return
 
-        if not owned:
-            await interaction.followup.send(NO_FAMILIAR_MESSAGE, ephemeral=True)
-            return
-
-        if not bases:
-            await interaction.followup.send(
-                (
-                    "合成できる使い魔がありません。\n"
-                    "-# 同じ種類を2体以上所有し、最大レベル未満の使い魔が必要です。\n"
-                    f"{LOCKED_NOTICE}"
-                ),
-                ephemeral=True,
-            )
-            return
-
-        view = FuseBaseView(user_id=interaction.user.id, rows=bases)
+    if not bases:
         await interaction.followup.send(
-            content=f"{view.header()}\n{LOCKED_NOTICE}", view=view, ephemeral=True
+            (
+                "合成できる使い魔がありません。\n"
+                "-# 同じ種類を2体以上所有し、最大レベル未満の使い魔が必要です。\n"
+                f"{LOCKED_NOTICE}"
+            ),
+            ephemeral=True,
         )
+        return
+
+    view = FuseBaseView(user_id=interaction.user.id, rows=bases)
+    await interaction.followup.send(
+        content=f"{view.header()}\n{LOCKED_NOTICE}", view=view, ephemeral=True
+    )
 
 
 class FuseBaseView(InstancePageView):
@@ -575,47 +624,36 @@ class FuseMaterialView(InstancePageView):
 # ==================================================
 # 売却（10.2節）
 # ==================================================
-class FamiliarSellPanelView(discord.ui.View):
-    """売却パネルの常設View。"""
+async def _open_sell(interaction: discord.Interaction) -> None:
+    """売却する個体の選択を開く。"""
 
-    def __init__(self):
-        super().__init__(timeout=None)
+    if not await _guard(interaction):
+        return
 
-    @discord.ui.button(
-        label="使い魔売却",
-        style=discord.ButtonStyle.danger,
-        custom_id="familiar:sell",
-    )
-    async def start_sell(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        if not await _guard(interaction):
-            return
+    await interaction.response.defer(ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
+    try:
+        owned = get_owned_familiars(interaction.user.id)
+        candidates = service.exclude_locked(owned, get_locked_instance_ids())
+    except Exception:
+        logger.exception("売却候補の取得に失敗しました: user_id=%s", interaction.user.id)
+        await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
+        return
 
-        try:
-            owned = get_owned_familiars(interaction.user.id)
-            candidates = service.exclude_locked(owned, get_locked_instance_ids())
-        except Exception:
-            logger.exception("売却候補の取得に失敗しました: user_id=%s", interaction.user.id)
-            await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
-            return
+    if not owned:
+        await interaction.followup.send(NO_FAMILIAR_MESSAGE, ephemeral=True)
+        return
 
-        if not owned:
-            await interaction.followup.send(NO_FAMILIAR_MESSAGE, ephemeral=True)
-            return
-
-        if not candidates:
-            await interaction.followup.send(
-                f"売却できる使い魔がありません。\n{LOCKED_NOTICE}", ephemeral=True
-            )
-            return
-
-        view = SellSelectView(user_id=interaction.user.id, rows=candidates)
+    if not candidates:
         await interaction.followup.send(
-            content=f"{view.header()}\n{LOCKED_NOTICE}", view=view, ephemeral=True
+            f"売却できる使い魔がありません。\n{LOCKED_NOTICE}", ephemeral=True
         )
+        return
+
+    view = SellSelectView(user_id=interaction.user.id, rows=candidates)
+    await interaction.followup.send(
+        content=f"{view.header()}\n{LOCKED_NOTICE}", view=view, ephemeral=True
+    )
 
 
 class SellSelectView(InstancePageView):
@@ -749,9 +787,7 @@ class SellConfirmView(discord.ui.View):
 # パネルEmbed
 # ==================================================
 GACHA_PANEL_TITLE = "使い魔ガチャ"
-LIST_PANEL_TITLE = "使い魔一覧"
-FUSE_PANEL_TITLE = "使い魔合成"
-SELL_PANEL_TITLE = "使い魔売却"
+MANAGE_PANEL_TITLE = "使い魔管理"
 
 
 def build_gacha_panel_embed() -> discord.Embed:
@@ -802,39 +838,8 @@ def build_gacha_panel_embed() -> discord.Embed:
     return embed
 
 
-def build_list_panel_embed() -> discord.Embed:
-    """使い魔一覧パネルのEmbedを作る。"""
-
-    return discord.Embed(
-        title=LIST_PANEL_TITLE,
-        description=(
-            "​\n"
-            "**所有している使い魔を確認できます。**\n"
-            "-# 名前・ランク・レベル・HP・ATK・SPD・COST・性別・スキルを表示します。"
-        ),
-        color=game_shared.RANK_COLORS.get("B", 0xBEDBFF),
-    )
-
-
-def build_fuse_panel_embed() -> discord.Embed:
-    """合成パネルのEmbedを作る。"""
-
-    master = load_master_data()
-
-    return discord.Embed(
-        title=FUSE_PANEL_TITLE,
-        description=(
-            "​\n"
-            "**同じ種類の使い魔を素材にしてレベルアップします。**\n"
-            f"-# 上限はLv.{master.familiar.max_level}です。素材にした使い魔は消費されます。\n"
-            "-# 編成ロック中・進行中バトルで使用中の使い魔は合成できません。"
-        ),
-        color=game_shared.RANK_COLORS.get("C", 0xBEFFD7),
-    )
-
-
-def build_sell_panel_embed() -> discord.Embed:
-    """売却パネルのEmbedを作る。売却基準価格はマスターデータから取得する。"""
+def build_manage_panel_embed() -> discord.Embed:
+    """使い魔管理パネルのEmbedを作る（一覧・合成・売却を1枚にまとめる）。"""
 
     master = load_master_data()
 
@@ -845,28 +850,29 @@ def build_sell_panel_embed() -> discord.Embed:
     )
 
     return discord.Embed(
-        title=SELL_PANEL_TITLE,
+        title=MANAGE_PANEL_TITLE,
         description=(
             "​\n"
-            "**不要な使い魔をcoinへ換金します。**\n"
+            "**使い魔一覧**\n"
+            "-# 所有している使い魔の能力・スキル・画像を確認できます。\n\n"
+            "**使い魔合成**\n"
+            "-# 同じ種類の使い魔を素材にしてレベルアップします。\n"
+            f"-# 上限はLv.{master.familiar.max_level}です。素材にした使い魔は消費されます。\n\n"
+            "**使い魔売却**\n"
+            "-# 不要な使い魔をcoinへ換金します。取り消しできません。\n"
             f"-# 基準価格：{prices}\n"
-            "-# 売却額は「基準価格 × (レベル + 1)」です。取り消しできません。"
+            "-# 売却額は「基準価格 × (レベル + 1)」です。\n\n"
+            f"{LOCKED_NOTICE}"
         ),
-        color=game_shared.RANK_COLORS.get("A", 0x5C21FF),
+        color=game_shared.RANK_COLORS.get("B", 0xBEDBFF),
     )
 
 
 __all__ = [
-    "FUSE_PANEL_TITLE",
     "GACHA_PANEL_TITLE",
-    "LIST_PANEL_TITLE",
-    "SELL_PANEL_TITLE",
-    "FamiliarFusePanelView",
-    "FamiliarListPanelView",
-    "FamiliarSellPanelView",
+    "MANAGE_PANEL_TITLE",
+    "FamiliarManagePanelView",
     "GachaPanelView",
-    "build_fuse_panel_embed",
     "build_gacha_panel_embed",
-    "build_list_panel_embed",
-    "build_sell_panel_embed",
+    "build_manage_panel_embed",
 ]

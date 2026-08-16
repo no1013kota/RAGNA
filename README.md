@@ -58,8 +58,8 @@ python -m unittest discover -s tests
 RAGNA Onlineを有効にする場合は、次のVariablesも追加します（[公開手順](#ragna-onlineの公開手順)を参照）。
 
 - GAME_ENABLED: true
-- GUILD_INTRO_CHANNEL_ID / FAMILIAR_PANEL_CHANNEL_ID /
-  GUILD_BATTLE_RECRUITMENT_CHANNEL_ID / GAME_ADMIN_LOG_CHANNEL_ID
+- GUILD_INTRO_CHANNEL_ID / GUILD_MEMBER_RECRUITMENT_CHANNEL_ID /
+  FAMILIAR_PANEL_CHANNEL_ID / GUILD_BATTLE_RECRUITMENT_CHANNEL_ID
 
 Volumeが接続されている場合、DBは自動的に/data/ragna.dbへ保存されます。
 Volumeがないローカル環境ではdata/ragna.dbが使用されます。
@@ -120,7 +120,7 @@ Bot起動時に整合性を確認して/data/ragna.dbへ取り込み、直前の
 
    - `GUILD_INTRO_CHANNEL_ID`：ギルド紹介（設立パネル・申請確認）
    - `GUILD_MEMBER_RECRUITMENT_CHANNEL_ID`：メンバー募集（募集Embed・参加申請）
-   - `FAMILIAR_PANEL_CHANNEL_ID`：ガチャ・一覧・合成・売却の4パネル
+   - `FAMILIAR_PANEL_CHANNEL_ID`：ガチャパネルと使い魔管理パネル
    - `GUILD_BATTLE_RECRUITMENT_CHANNEL_ID`：公開バトル募集とランキング
 
    `GAME_ADMIN_LOG_CHANNEL_ID`（運営ログの転送先）は任意です。未設定でも

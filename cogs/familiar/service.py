@@ -363,9 +363,83 @@ def format_rate(permille: int) -> str:
     return f"{permille / 10:.1f}%"
 
 
+def format_each_rate(permille: int, count: int) -> str:
+    """ランク内で均等配分したときの、1体あたりの排出率を表示用に整える。"""
+
+    if count <= 0:
+        return "—"
+
+    return f"{permille / 10 / count:.2f}%"
+
+
 # ==================================================
 # Embedの組み立て
 # ==================================================
+def build_rate_list_embed(pool: GachaPool) -> discord.Embed:
+    """排出される使い魔の一覧をランクごとにまとめる。
+
+    同じランク内の使い魔は均等に排出されるため（10.6節）、ランクの排出率と
+    1体あたりの排出率の両方を表示します。
+    """
+
+    master = load_master_data()
+
+    embed = discord.Embed(
+        title="排出使い魔一覧",
+        description=(
+            f"**{pool.name}** で入手できる使い魔です。\n"
+            "-# 同じランク内の使い魔は均等に排出されます。"
+        ),
+        color=game_shared.RANK_COLORS.get("S", 0xFEE75C),
+    )
+
+    # 表示順は使い魔マスターの登録順（docs/FAMILIAR_MASTER.md の掲載順）に合わせる
+    document_order = {
+        familiar_id: index for index, familiar_id in enumerate(master.familiars)
+    }
+
+    table = build_rank_table(pool, SLOT_NORMAL)
+
+    for rank, permille in reversed(table):
+        familiars = sorted(
+            master.familiars_by_rank(rank),
+            key=lambda familiar: document_order.get(familiar.familiar_id, 0),
+        )
+        if not familiars:
+            continue
+
+        names = "、".join(familiar.name for familiar in familiars)
+        if len(names) > 1000:
+            names = names[:1000] + "…"
+
+        embed.add_field(
+            name=(
+                f"{game_shared.rank_label(rank)}　{format_rate(permille)}"
+                f"（{len(familiars)}体・各{format_each_rate(permille, len(familiars))}）"
+            ),
+            value=names,
+            inline=False,
+        )
+
+    if pool.guaranteed_slot:
+        guaranteed_table = build_rank_table(pool, SLOT_GUARANTEED)
+        if guaranteed_table:
+            embed.add_field(
+                name=f"{pool.multi_count}連の{pool.guaranteed_slot}枠目（保証枠）",
+                value=" ／ ".join(
+                    f"{game_shared.rank_label(rank)} {format_rate(permille)}"
+                    for rank, permille in reversed(guaranteed_table)
+                ),
+                inline=False,
+            )
+
+    notice = rank_table_notice(pool)
+    if notice:
+        embed.set_footer(text=notice)
+
+    return embed
+
+
 def build_gacha_confirm_embed(pool: GachaPool, *, count: int, cost: int) -> discord.Embed:
     """実行前の確認画面（料金・回数・排出率）を作る。"""
 

@@ -29,7 +29,7 @@ RAGNA/
 │   ├── ticket/               # 同じ3層構成
 │   ├── trial_member/         # 同じ3層構成
 │   ├── guild/                # RAGNA Online：ギルド（cog/views/service）
-│   ├── familiar/             # RAGNA Online：使い魔4パネル
+│   ├── familiar/             # RAGNA Online：ガチャ／使い魔管理パネル
 │   ├── guild_battle/         # RAGNA Online：ギルドバトル
 │   ├── game_shared.py        # ゲーム3Cogの共通Discord処理（Cogではない）
 │   ├── xp.py                 # 比較的小さい単独Cog
@@ -110,7 +110,7 @@ Cog側を変更せずに済みます。
 | 問い合わせの作成・管理 | `cogs/ticket/` | `database.ticket` |
 | 自己紹介テンプレート | `cogs/introduction.py` | なし |
 | ギルド設立・募集・参加・管理 | `cogs/guild/` | `database.guild`、`database.player_rank` |
-| ガチャ・使い魔一覧・合成・売却 | `cogs/familiar/` | `database.familiar` |
+| ガチャ・排出確認・一覧・合成・売却 | `cogs/familiar/` | `database.familiar` |
 | 出場者セット・対戦・バトル進行 | `cogs/guild_battle/` | `database.battle`、`game/` |
 
 ## RAGNA Onlineの構成

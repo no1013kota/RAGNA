@@ -1,8 +1,8 @@
-"""使い魔パネル（ガチャ・一覧・合成・売却）の自動設置を担当するCog。
+"""使い魔パネル（ガチャ／管理）の自動設置を担当するCog。
 
-4つのパネルは同じ「使い魔」専用チャンネル
-（``config.FAMILIAR_PANEL_CHANNEL_ID``）へ、ガチャ・一覧・合成・売却の順で
-設置します（GAME_SPEC 10.2節）。
+2つのパネルを同じ「使い魔」専用チャンネル
+（``config.FAMILIAR_PANEL_CHANNEL_ID``）へ、ガチャ・管理の順で設置します。
+一覧・合成・売却は「使い魔管理」パネルの3ボタンにまとめています（GAME_SPEC 10.2節）。
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class Familiar(commands.Cog):
             return
 
         try:
-            # ガチャ → 一覧 → 合成 → 売却 の順で設置する。
+            # ガチャ → 管理（一覧・合成・売却）の順で設置する。
             panels = (
                 (
                     views.GACHA_PANEL_TITLE,
@@ -68,22 +68,10 @@ class Familiar(commands.Cog):
                     "使い魔ガチャパネル",
                 ),
                 (
-                    views.LIST_PANEL_TITLE,
-                    views.build_list_panel_embed(),
-                    views.FamiliarListPanelView(),
-                    "使い魔一覧パネル",
-                ),
-                (
-                    views.FUSE_PANEL_TITLE,
-                    views.build_fuse_panel_embed(),
-                    views.FamiliarFusePanelView(),
-                    "使い魔合成パネル",
-                ),
-                (
-                    views.SELL_PANEL_TITLE,
-                    views.build_sell_panel_embed(),
-                    views.FamiliarSellPanelView(),
-                    "使い魔売却パネル",
+                    views.MANAGE_PANEL_TITLE,
+                    views.build_manage_panel_embed(),
+                    views.FamiliarManagePanelView(),
+                    "使い魔管理パネル",
                 ),
             )
         except Exception:
@@ -121,8 +109,6 @@ async def setup(bot: commands.Bot):
 
     # 再起動後も使用できる永続View
     bot.add_view(views.GachaPanelView())
-    bot.add_view(views.FamiliarListPanelView())
-    bot.add_view(views.FamiliarFusePanelView())
-    bot.add_view(views.FamiliarSellPanelView())
+    bot.add_view(views.FamiliarManagePanelView())
 
     logger.info("Familiar Cog 登録完了")

@@ -112,6 +112,53 @@ class DrawTests(unittest.TestCase):
             self.assertLess(abs(count - expected), expected * 0.6, familiar_id)
 
 
+class RateListEmbedTests(unittest.TestCase):
+    """ガチャパネルの「排出使い魔の確認」が出す一覧（10.2節・10.6節）。"""
+
+    def setUp(self) -> None:
+        self.embed = service.build_rate_list_embed(POOL)
+
+    def test_every_drawable_familiar_is_listed(self) -> None:
+        listed = "".join(field.value for field in self.embed.fields)
+
+        for rank, _ in service.build_rank_table(POOL, "normal"):
+            for familiar in MASTER.familiars_by_rank(rank):
+                self.assertIn(familiar.name, listed, familiar.familiar_id)
+
+    def test_unregistered_ranks_are_not_listed(self) -> None:
+        # Cランクは未登録なので、確率も名前も出さない
+        names = "".join(field.name for field in self.embed.fields)
+
+        self.assertNotIn("C", names.replace("COST", ""))
+
+    def test_rank_rate_and_per_familiar_rate_are_shown(self) -> None:
+        names = [field.name for field in self.embed.fields]
+
+        # 例：「🔷B　90.0%（20体・各4.50%）」
+        self.assertTrue(any("90.0%" in name and "4.50%" in name for name in names), names)
+
+    def test_the_guaranteed_slot_is_explained(self) -> None:
+        names = [field.name for field in self.embed.fields]
+
+        self.assertTrue(any("保証枠" in name for name in names), names)
+
+    def test_embed_stays_within_discord_limits(self) -> None:
+        total = len(self.embed.title or "") + len(self.embed.description or "")
+
+        for field in self.embed.fields:
+            self.assertLessEqual(len(field.name), 256)
+            self.assertLessEqual(len(field.value), 1024)
+            total += len(field.name) + len(field.value)
+
+        self.assertLessEqual(len(self.embed.fields), 25)
+        self.assertLessEqual(total, 6000)
+
+    def test_per_familiar_rate_formatting(self) -> None:
+        self.assertEqual(service.format_each_rate(900, 20), "4.50%")
+        self.assertEqual(service.format_each_rate(10, 5), "0.20%")
+        self.assertEqual(service.format_each_rate(10, 0), "—")
+
+
 class CostTests(unittest.TestCase):
     def test_ten_draws_cost_ten_times_a_single_draw(self) -> None:
         # 10.2節「10回実行に割引はありません」
