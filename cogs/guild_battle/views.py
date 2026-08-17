@@ -188,15 +188,14 @@ def _unit_option(unit, state=None) -> discord.SelectOption:
     label = f"{_familiar_name(unit.familiar_id)} Lv.{unit.level}"
     description = (
         f"HP {unit.current_hp}/{unit.max_hp}"
-        f"／ATK {unit.current_atk}／SPD {unit.speed}"
+        f"／ATK {battle_embed.atk_text(unit)}"
+        f"／SPD {battle_embed.speed_text(unit)}"
     )
 
     if state is not None:
         marks = _effect_marks(state, unit)
         if marks:
             description = f"{description}／{marks}"
-        elif unit.current_atk != unit.base_atk:
-            description = f"{description}（基礎ATK {unit.base_atk}）"
 
     return discord.SelectOption(
         label=label[:100],
@@ -1925,9 +1924,7 @@ async def open_attack_selection(
     lines.append(
         game_shared.item_line(
             "あなたの攻撃力",
-            f"**{attack_power}**（基礎ATK {unit.base_atk}）"
-            if attack_power != unit.base_atk
-            else f"**{attack_power}**",
+            f"**{battle_embed.stat_with_delta(attack_power, unit.base_atk)}**",
         )
     )
 

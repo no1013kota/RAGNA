@@ -62,7 +62,7 @@
     "atk_debuff_cap": 10,
     "same_skill_stack_limit": 3,
     "guild_time_seconds": 3600,
-    "turn_time_seconds": 180,
+    "turn_time_seconds": 120,
     "battle_channel_retention_days": 7,
     "surrender_reward_from_round": 3,
     "bet": {

@@ -193,28 +193,42 @@ def item_line(label: str, value: object) -> str:
     return f"【{label}】{value}"
 
 
+def stat_with_delta(current: int, base: int) -> str:
+    """現在値と、基礎値からの増減を「15（+2）」の形で返す。
+
+    増減が無ければ数値だけを返します。バフ・デバフがどれだけ乗っているかを
+    ひと目で分かるようにするためです。
+    """
+
+    delta = current - base
+    if delta == 0:
+        return str(current)
+
+    return f"{current}（{delta:+d}）"
+
+
+def atk_text(unit: BattleUnit) -> str:
+    """現在ATKを「15（+2）」の形で返す。"""
+
+    return stat_with_delta(unit.current_atk, unit.base_atk)
+
+
+def speed_text(unit: BattleUnit) -> str:
+    """現在SPDを「96（+12）」の形で返す。"""
+
+    return stat_with_delta(unit.speed, effects_module.base_speed_of(unit))
+
+
 def stat_line(state: BattleState, unit: BattleUnit) -> str:
     """HP・ATK・SPDをまとめた1行を作る（バトルログ用）。"""
 
     if not unit.alive:
         return f"HP 0/{unit.max_hp}（戦闘不能）"
 
-    text = (
+    return (
         f"HP {unit.current_hp}/{unit.max_hp}"
-        f"／ATK {unit.current_atk}／SPD {unit.speed}"
+        f"／ATK {atk_text(unit)}／SPD {speed_text(unit)}"
     )
-
-    # 基礎値から変わっている分は、素の値も添えて分かるようにする
-    notes: list[str] = []
-    if unit.current_atk != unit.base_atk:
-        notes.append(f"基礎ATK {unit.base_atk}")
-    if unit.speed != effects_module.base_speed_of(unit):
-        notes.append(f"基礎SPD {effects_module.base_speed_of(unit)}")
-
-    if notes:
-        text = f"{text}（{'／'.join(notes)}）"
-
-    return text
 
 
 def unit_status_lines(state: BattleState, unit: BattleUnit) -> list[str]:
@@ -551,7 +565,7 @@ def _unit_line(state: BattleState, unit: BattleUnit, index: int) -> str:
     head = f"{mark}{rank} **{name}** Lv.{unit.level}　COST {unit.cost}"
     stats = (
         f"`{bar}` {unit.current_hp}/{unit.max_hp}"
-        f"　ATK {unit.current_atk}　SPD {unit.speed}"
+        f"　ATK {atk_text(unit)}　SPD {speed_text(unit)}"
     )
 
     summary = effects_module.buff_summary(state, unit)
@@ -643,7 +657,7 @@ def build_lineup_embed(
             lines.append(
                 f"　`{hp_bar(unit.current_hp, unit.max_hp)}` "
                 f"{unit.current_hp}/{unit.max_hp}"
-                f"　ATK {unit.current_atk}　SPD {unit.speed}"
+                f"　ATK {atk_text(unit)}　SPD {speed_text(unit)}"
             )
 
             for skill in master.skills_of(unit.familiar_id):
@@ -803,21 +817,12 @@ def build_turn_embed(
 
     master = load_master_data()
 
-    atk = f"{unit.current_atk}"
-    if unit.current_atk != unit.base_atk:
-        atk = f"{unit.current_atk}（基礎 {unit.base_atk}）"
-
-    speed = f"{unit.speed}"
-    base_speed = effects_module.base_speed_of(unit)
-    if unit.speed != base_speed:
-        speed = f"{unit.speed}（基礎 {base_speed}）"
-
     lines = [
         f"`{hp_bar(unit.current_hp, unit.max_hp)}` "
         f"{unit.current_hp}/{unit.max_hp}",
         "",
-        item_line("現在ATK", atk),
-        item_line("現在SPD", speed),
+        item_line("現在ATK", atk_text(unit)),
+        item_line("現在SPD", speed_text(unit)),
     ]
 
     summary = effects_module.buff_summary(state, unit)

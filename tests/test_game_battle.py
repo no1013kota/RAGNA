@@ -608,6 +608,51 @@ class StatusTests(unittest.TestCase):
 
 
 # ==================================================
+# 表示（GAME_SPEC 23節・24節）
+# ==================================================
+class DisplayTests(unittest.TestCase):
+    def test_stat_shows_the_change_from_the_base_value(self) -> None:
+        from game import battle_embed
+
+        self.assertEqual(battle_embed.stat_with_delta(15, 13), "15（+2）")
+        self.assertEqual(battle_embed.stat_with_delta(7, 9), "7（-2）")
+        self.assertEqual(battle_embed.stat_with_delta(9, 9), "9")
+
+    def test_status_line_uses_the_inline_delta(self) -> None:
+        from game import battle_embed
+
+        state = build_state([("mammon", 1)], [("garm", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "mammon", GUILD_A)
+        target = unit_of(state, "garm", GUILD_B)
+
+        use_skill(state, caster, "mammon_active", {"main": [target.battle_unit_id]})
+
+        self.assertIn("（+2）", battle_embed.atk_text(caster))
+        self.assertIn("（-2）", battle_embed.atk_text(target))
+        self.assertIn("ATK", battle_embed.stat_line(state, caster))
+        # 基礎値を末尾へ書く旧表記は使わない
+        self.assertNotIn("基礎ATK", battle_embed.stat_line(state, caster))
+
+    def test_speed_shows_the_change_too(self) -> None:
+        from game import battle_embed
+
+        state = build_state([("pegasus", 1), ("loki", 1)], [("garm", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "pegasus", GUILD_A)
+        loki = unit_of(state, "loki", GUILD_A)
+
+        use_skill(state, caster, "pegasus_active", {"main": [loki.battle_unit_id]})
+
+        self.assertEqual(battle_embed.speed_text(loki), "96（+12）")
+
+    def test_turn_time_is_two_minutes(self) -> None:
+        self.assertEqual(MASTER.battle.turn_time_seconds, 120)
+
+
+# ==================================================
 # 現在SPDと行動順（BATTLE_RULES.md 1節・7節）
 # ==================================================
 class SpeedTests(unittest.TestCase):
