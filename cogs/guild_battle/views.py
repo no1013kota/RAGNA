@@ -52,7 +52,7 @@ from database.guild import (
     get_guild_ranking_position,
     get_player_guild,
 )
-from game import battle_embed, battle_engine
+from game import battle_embed, battle_engine, effects
 from game.master_data import load_master_data
 from game.models import (
     ACTION_ATTACK,
@@ -89,6 +89,12 @@ SELECT_LIMIT = 25
 # 1メッセージに置ける操作行の上限は5行。体数選択は確定ボタンで1行使うため、
 # セレクトを並べられるのは最大4人分まで（超える人数は初期値で確定する）。
 SELECT_ROWS_FOR_COUNTS = 4
+
+# 1メッセージに並べられる操作行の数（Discordの仕様）
+MAX_SELECT_ROWS = 5
+
+# セレクトの見出しでランクを読み取るための先頭文字
+RANK_INITIALS = frozenset({"S", "A", "B", "C"})
 
 
 # ==================================================
@@ -172,14 +178,45 @@ def load_actor(channel_id: int, user_id: int):
     return battle_row, state, unit, None
 
 
-def _unit_option(unit) -> discord.SelectOption:
-    """戦闘用使い魔を選択肢へ変換する。"""
+def _unit_option(unit, state=None) -> discord.SelectOption:
+    """戦闘用使い魔を選択肢へ変換する。
+
+    ``state`` を渡すと、現在ATKに加えてバフ・デバフ・状態異常の有無も表示します。
+    攻撃対象を選ぶときに「強化されている敵かどうか」が分かるようにするためです。
+    """
+
+    label = f"{_familiar_name(unit.familiar_id)} Lv.{unit.level}"
+    description = (
+        f"HP {unit.current_hp}/{unit.max_hp}"
+        f"／ATK {unit.current_atk}／SPD {unit.speed}"
+    )
+
+    if state is not None:
+        marks = _effect_marks(state, unit)
+        if marks:
+            description = f"{description}／{marks}"
+        elif unit.current_atk != unit.base_atk:
+            description = f"{description}（基礎ATK {unit.base_atk}）"
 
     return discord.SelectOption(
-        label=f"{_familiar_name(unit.familiar_id)} Lv.{unit.level}"[:100],
-        description=f"HP {unit.current_hp}/{unit.max_hp}　ATK {unit.current_atk}"[:100],
+        label=label[:100],
+        description=description[:100],
         value=str(unit.battle_unit_id),
     )
+
+
+def _effect_marks(state, unit) -> str:
+    """バフ・デバフ・状態異常を短くまとめた文字列を返す。"""
+
+    summary = effects.buff_summary(state, unit)
+
+    marks: list[str] = []
+    marks.extend(f"🔺{text}" for text in summary["buffs"])
+    marks.extend(f"🔻{text}" for text in summary["debuffs"])
+    marks.extend(f"☠{text}" for text in summary["statuses"])
+    marks.extend(f"◆{text}" for text in summary["others"])
+
+    return " ".join(marks)
 
 
 async def _apply_and_report(
@@ -223,7 +260,12 @@ async def _apply_and_report(
 # 一時View（custom_idを付けない）
 # ==================================================
 class PagedSelectView(discord.ui.View):
-    """25件を超える候補をページ送りで1件選ばせる一時View。"""
+    """候補を1件選ばせる一時View。
+
+    Discordのセレクトは1つ25件までなので、候補が多い場合はセレクトを複数並べて
+    **すべて同時に表示**します。1メッセージに置ける操作行は5行までなので、
+    それを超える件数だけページ送りへ切り替えます。
+    """
 
     def __init__(
         self,
@@ -239,41 +281,81 @@ class PagedSelectView(discord.ui.View):
         self._render()
 
     @property
+    def _per_page(self) -> int:
+        """1ページに表示する件数。"""
+
+        return SELECT_LIMIT * MAX_SELECT_ROWS
+
+    @property
     def page_count(self) -> int:
-        return max(1, (len(self._options) + SELECT_LIMIT - 1) // SELECT_LIMIT)
+        return max(1, -(-len(self._options) // self._per_page))
 
     def _render(self) -> None:
         self.clear_items()
 
-        start = self.page * SELECT_LIMIT
-        chunk = self._options[start : start + SELECT_LIMIT]
+        start = self.page * self._per_page
+        page_options = self._options[start : start + self._per_page]
 
-        select = discord.ui.Select(
-            placeholder=f"{self._placeholder}（{self.page + 1}/{self.page_count}）"[:150],
-            min_values=1,
-            max_values=1,
-            options=chunk,
-        )
-        select.callback = self._select_callback
-        self.add_item(select)
-        self._select = select
+        paging = self.page_count > 1
+        # ページ送りボタンを置く場合は1行分を空ける
+        rows = MAX_SELECT_ROWS - (1 if paging else 0)
+        chunks = [
+            page_options[index : index + SELECT_LIMIT]
+            for index in range(0, len(page_options), SELECT_LIMIT)
+        ][:rows]
 
-        if self.page_count > 1:
+        self._selects: list[discord.ui.Select] = []
+
+        for row, chunk in enumerate(chunks):
+            label = self._chunk_label(chunk)
+            select = discord.ui.Select(
+                placeholder=f"{self._placeholder}{label}"[:150],
+                min_values=1,
+                max_values=1,
+                options=chunk,
+                row=row,
+            )
+            select.callback = self._select_callback
+            self.add_item(select)
+            self._selects.append(select)
+
+        if paging:
             previous = discord.ui.Button(
-                label="前の25件",
+                label="◀ 前へ",
                 style=discord.ButtonStyle.secondary,
+                row=rows,
                 disabled=self.page == 0,
             )
             previous.callback = self._previous_callback
             self.add_item(previous)
 
             following = discord.ui.Button(
-                label="次の25件",
+                label="次へ ▶",
                 style=discord.ButtonStyle.secondary,
+                row=rows,
                 disabled=self.page >= self.page_count - 1,
             )
             following.callback = self._next_callback
             self.add_item(following)
+
+    def _chunk_label(self, chunk: list[discord.SelectOption]) -> str:
+        """セレクトの見出しに、その塊が何を含むかを付ける。
+
+        ランク順に並んでいるため、先頭と末尾のランクを見れば範囲が分かります。
+        """
+
+        ranks = [
+            option.label[:1]
+            for option in chunk
+            if option.label and option.label[:1] in RANK_INITIALS
+        ]
+        if not ranks:
+            return ""
+
+        if ranks[0] == ranks[-1]:
+            return f"（{ranks[0]}ランク）"
+
+        return f"（{ranks[0]}〜{ranks[-1]}ランク）"
 
     async def _previous_callback(self, interaction: discord.Interaction) -> None:
         self.page = max(0, self.page - 1)
@@ -286,7 +368,10 @@ class PagedSelectView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
     async def _select_callback(self, interaction: discord.Interaction) -> None:
-        await self.on_choice(interaction, self._select.values[0])
+        for select in self._selects:
+            if select.values:
+                await self.on_choice(interaction, select.values[0])
+                return
 
     async def on_choice(self, interaction: discord.Interaction, value: str) -> None:
         """選択されたときの処理。継承先で実装する。"""
@@ -694,8 +779,104 @@ class RosterFamiliarRemoveView(PagedSelectView):
         )
 
 
+class RosterFamiliarSwapView(PagedSelectView):
+    """セット済みの1体を、別の使い魔へ入れ替える一時View（9.3節）。"""
+
+    def __init__(
+        self,
+        options: list[discord.SelectOption],
+        *,
+        guild_id: int,
+        removed_instance_id: int,
+    ) -> None:
+        super().__init__(options, placeholder="入れ替える使い魔を選択")
+
+        self.guild_id = guild_id
+        self.removed_instance_id = removed_instance_id
+
+    async def on_choice(self, interaction: discord.Interaction, value: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        master = load_master_data()
+
+        removed = remove_battle_entry(
+            self.guild_id, interaction.user.id, self.removed_instance_id
+        )
+        if not removed["ok"]:
+            await game_shared.respond(
+                interaction, entry_error_message(removed["error"])
+            )
+            return
+
+        added = add_battle_entry(
+            self.guild_id,
+            interaction.user.id,
+            int(value),
+            max_units=master.battle.max_units,
+        )
+
+        if not added["ok"]:
+            # 入れ替えに失敗したら、外した分を元へ戻す
+            add_battle_entry(
+                self.guild_id,
+                interaction.user.id,
+                self.removed_instance_id,
+                max_units=master.battle.max_units,
+            )
+            await game_shared.respond(
+                interaction,
+                entry_error_message(added["error"], limit=added.get("limit")),
+            )
+            return
+
+        owned = get_owned_familiar(int(value))
+        name = (
+            f"**{_familiar_name(owned['familiar_id'])} Lv.{owned['level']}**"
+            if owned
+            else "使い魔"
+        )
+
+        await game_shared.respond(interaction, f"{name} へ入れ替えました。")
+
+
+class RosterFamiliarSwapTargetView(PagedSelectView):
+    """入れ替える枠を選ぶ一時View（9.3節）。"""
+
+    def __init__(
+        self, options: list[discord.SelectOption], *, guild_id: int
+    ) -> None:
+        super().__init__(options, placeholder="入れ替える枠を選択")
+
+        self.guild_id = guild_id
+
+    async def on_choice(self, interaction: discord.Interaction, value: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        options = build_settable_familiar_options(self.guild_id, interaction.user.id)
+        if not options:
+            await game_shared.respond(
+                interaction, "入れ替えられる使い魔がありません。"
+            )
+            return
+
+        owned = get_owned_familiar(int(value))
+        current = (
+            f"{_familiar_name(owned['familiar_id'])} Lv.{owned['level']}"
+            if owned
+            else "この使い魔"
+        )
+
+        await game_shared.respond(
+            interaction,
+            f"**{current}** を、どの使い魔へ入れ替えますか？",
+            view=RosterFamiliarSwapView(
+                options, guild_id=self.guild_id, removed_instance_id=int(value)
+            ),
+        )
+
+
 class RosterFamiliarActionView(discord.ui.View):
-    """使い魔セットの追加・解除を選ぶ一時View（9節）。"""
+    """使い魔セットの追加・入れ替え・解除を選ぶ一時View（9節）。"""
 
     def __init__(
         self,
@@ -710,6 +891,7 @@ class RosterFamiliarActionView(discord.ui.View):
         self.guild_id = guild_id
         self.user_id = user_id
         self.add_familiar.disabled = not can_add
+        self.swap_familiar.disabled = not can_remove
         self.remove_familiar.disabled = not can_remove
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -737,6 +919,22 @@ class RosterFamiliarActionView(discord.ui.View):
             view=RosterFamiliarAddView(self.guild_id, options),
         )
 
+    @discord.ui.button(label="入れ替え", style=discord.ButtonStyle.primary)
+    async def swap_familiar(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        options = build_current_entry_options(self.guild_id, interaction.user.id)
+
+        if not options:
+            await game_shared.respond(interaction, "入れ替えられる使い魔がありません。")
+            return
+
+        await game_shared.respond(
+            interaction,
+            "入れ替える枠を選んでください。",
+            view=RosterFamiliarSwapTargetView(options, guild_id=self.guild_id),
+        )
+
     @discord.ui.button(label="セットを解除", style=discord.ButtonStyle.secondary)
     async def remove_familiar(
         self, interaction: discord.Interaction, button: discord.ui.Button
@@ -752,6 +950,55 @@ class RosterFamiliarActionView(discord.ui.View):
             "解除する使い魔を選んでください。",
             view=RosterFamiliarRemoveView(self.guild_id, options),
         )
+
+
+def familiar_sort_key(familiar_id: str, level: int) -> tuple[int, int, str]:
+    """ランク順 → レベル順に並べるための並び替えキーを返す。
+
+    強いランクが先、同じランクなら高いレベルが先です。
+    """
+
+    master = load_master_data()
+
+    familiar = master.get_familiar(familiar_id)
+    order = list(master.familiar.rank_order)
+
+    try:
+        strength = order.index(familiar.rank) if familiar else -1
+    except ValueError:
+        strength = -1
+
+    return (-strength, -int(level), familiar.name if familiar else familiar_id)
+
+
+def familiar_option(
+    instance_id: int, familiar_id: str, level: int, *, prefix: str = ""
+) -> discord.SelectOption | None:
+    """所有使い魔1体をセレクトの選択肢へ変換する。
+
+    ランクは絵文字（アイコン）と先頭文字の両方で示します。先頭文字があると、
+    セレクトの見出しに「S〜Aランク」のような範囲を出せます。
+    """
+
+    master = load_master_data()
+
+    familiar = master.get_familiar(familiar_id)
+    if familiar is None:
+        return None
+
+    stats = master.level_stats(familiar_id, level)
+    description = (
+        f"HP {stats.max_hp}／ATK {stats.atk}／SPD {stats.speed}／COST {familiar.cost}"
+        if stats
+        else familiar.description
+    )
+
+    return discord.SelectOption(
+        label=f"{prefix}{familiar.rank} {familiar.name} Lv.{level}"[:100],
+        description=description[:100],
+        value=str(instance_id),
+        emoji=game_shared.RANK_EMOJIS.get(familiar.rank),
+    )
 
 
 def build_settable_familiar_options(
@@ -787,32 +1034,110 @@ def build_settable_familiar_options(
         ):
             continue
 
-        stats = master.level_stats(familiar.familiar_id, int(owned["level"]))
-        description = (
-            f"HP {stats.max_hp}　ATK {stats.atk}　SPD {stats.speed}"
-            if stats
-            else familiar.description
+        option = familiar_option(
+            int(owned["instance_id"]), str(owned["familiar_id"]), int(owned["level"])
         )
-        options.append(
-            discord.SelectOption(
-                label=(
-                    f"{game_shared.rank_label(familiar.rank)} "
-                    f"{familiar.name} Lv.{owned['level']}"
-                )[:100],
-                description=description[:100],
-                value=str(owned["instance_id"]),
+        if option is not None:
+            options.append(
+                (
+                    familiar_sort_key(
+                        str(owned["familiar_id"]), int(owned["level"])
+                    ),
+                    option,
+                )
             )
+
+    # ランク順 → レベル順に並べる
+    options.sort(key=lambda item: item[0])
+    return [option for _, option in options]
+
+
+def build_entry_overview(
+    guild_id: int, *, viewer_id: int, assigned: int
+) -> str:
+    """出場する使い魔を、他のメンバー分も含めてまとめて表示する（9節）。"""
+
+    master = load_master_data()
+
+    roster = get_battle_roster(guild_id)
+    entries = get_battle_entries(guild_id)
+    mine = [entry for entry in entries if int(entry["user_id"]) == viewer_id]
+
+    by_user: dict[int, list[dict]] = {}
+    for entry in entries:
+        by_user.setdefault(int(entry["user_id"]), []).append(entry)
+
+    lines = [
+        "**出場する使い魔**",
+        game_shared.item_line(
+            "ギルド合計", f"{len(entries)}/{master.battle.max_units}体"
+        ),
+        game_shared.item_line("あなたの枠", f"{len(mine)}/{assigned}体"),
+        "",
+    ]
+
+    for member in roster:
+        user_id = int(member["user_id"])
+        count = int(member["familiar_count"] or 0)
+        owned_entries = by_user.get(user_id, [])
+
+        mark = "▶" if user_id == viewer_id else "・"
+        suffix = "（あなた）" if user_id == viewer_id else ""
+        lines.append(
+            f"{mark} <@{user_id}>{suffix}　{len(owned_entries)}/{count}体"
         )
 
-    return options
+        if not owned_entries:
+            lines.append("　未設定")
+            continue
+
+        for entry in owned_entries:
+            owned = get_owned_familiar(int(entry["instance_id"]))
+            if owned is None:
+                lines.append("　所有していません")
+                continue
+
+            familiar_id = str(owned["familiar_id"])
+            level = int(owned["level"])
+            familiar = master.get_familiar(familiar_id)
+            stats = master.level_stats(familiar_id, level)
+
+            detail = (
+                f"HP {stats.max_hp}／ATK {stats.atk}／SPD {stats.speed}"
+                if stats
+                else "—"
+            )
+            rank = game_shared.rank_label(familiar.rank) if familiar else "?"
+            cost = familiar.cost if familiar else "—"
+
+            lines.append(
+                f"　{rank} **{_familiar_name(familiar_id)}** Lv.{level}"
+                f"　COST {cost}"
+            )
+            lines.append(f"　　{detail}")
+
+    total_cost = 0
+    for entry in entries:
+        owned = get_owned_familiar(int(entry["instance_id"]))
+        familiar = master.get_familiar(owned["familiar_id"]) if owned else None
+        if familiar is not None:
+            total_cost += familiar.cost
+
+    lines.append("")
+    lines.append(game_shared.item_line("合計COST", total_cost))
+    lines.append(
+        "-# 体数はギルドマスターが割り当てます。枠のなかで自由に差し替えできます。"
+    )
+
+    return "\n".join(lines)[:1900]
 
 
 def build_current_entry_options(
     guild_id: int, user_id: int
 ) -> list[discord.SelectOption]:
-    """自分がセット済みの使い魔の選択肢を作る。"""
+    """自分がセット済みの使い魔の選択肢を、ランク順 → レベル順で作る。"""
 
-    options: list[discord.SelectOption] = []
+    found: list[tuple[tuple[int, int, str], discord.SelectOption]] = []
 
     for entry in get_battle_entries(guild_id):
         if int(entry["user_id"]) != user_id:
@@ -822,23 +1147,20 @@ def build_current_entry_options(
         if owned is None:
             continue
 
-        options.append(
-            discord.SelectOption(
-                label=(
-                    f"{entry['entry_slot']}体目："
-                    f"{_familiar_name(owned['familiar_id'])} Lv.{owned['level']}"
-                )[:100],
-                value=str(entry["instance_id"]),
-            )
+        familiar_id = str(owned["familiar_id"])
+        level = int(owned["level"])
+
+        option = familiar_option(
+            int(entry["instance_id"]),
+            familiar_id,
+            level,
+            prefix=f"{entry['entry_slot']}体目：",
         )
+        if option is not None:
+            found.append((familiar_sort_key(familiar_id, level), option))
 
-    return options
-
-
-ROSTER_REQUIRED_MESSAGE = (
-    "先に「メンバーセット」で出場者を決めてください。\n"
-    "-# 出場者を決めるまで、バトル申請・バトル募集・対戦申請はできません。"
-)
+    found.sort(key=lambda item: item[0])
+    return [option for _, option in found]
 
 
 def roster_is_set(guild_id: int) -> bool:
@@ -1292,7 +1614,7 @@ class SkillTargetFlow:
             need = min(group.count, len(candidates))
             label = f"{self.skill.name}：対象を{need}体選択"
 
-        options = [_unit_option(candidate) for candidate in candidates]
+        options = [_unit_option(candidate, state) for candidate in candidates]
         view = SkillTargetSelectView(self, group, options, need=need, label=label)
 
         await game_shared.respond(interaction, label, view=view)
@@ -1460,14 +1782,27 @@ async def open_attack_selection(
         await game_shared.respond(interaction, "攻撃できる対象がいません。")
         return
 
-    options = [_unit_option(choice) for choice in choices]
+    options = [_unit_option(choice, state) for choice in choices]
     view = AttackTargetView(
         int(battle_row["battle_id"]), unit.battle_unit_id, state.action_seq, options
     )
 
-    await game_shared.respond(
-        interaction, notice or "攻撃対象を選んでください。", view=view
+    # 自分の攻撃力と、その内訳（バフが乗っているか）を先に見せる
+    attack_power = effects.attack_atk(state, unit)
+    lines = [notice or "攻撃対象を選んでください。", ""]
+    lines.append(
+        game_shared.item_line(
+            "あなたの攻撃力",
+            f"**{attack_power}**（基礎ATK {unit.base_atk}）"
+            if attack_power != unit.base_atk
+            else f"**{attack_power}**",
+        )
     )
+
+    marks = _effect_marks(state, unit)
+    lines.append(game_shared.item_line("かかっている効果", marks or "なし"))
+
+    await game_shared.respond(interaction, "\n".join(lines), view=view)
 
 
 async def open_skill_selection(interaction: discord.Interaction) -> None:
@@ -1652,10 +1987,6 @@ class GuildBattlePanelView(discord.ui.View):
 
         guild_id = int(guild_row["guild_id"])
 
-        if not roster_is_set(guild_id):
-            await game_shared.respond(interaction, ROSTER_REQUIRED_MESSAGE)
-            return
-
         pending = get_pending_battle_request_for_guild(guild_id)
         if pending is not None:
             if int(pending["from_guild_id"]) == guild_id:
@@ -1673,10 +2004,13 @@ class GuildBattlePanelView(discord.ui.View):
                 )
             return
 
-        lock = get_battle_lock(guild_id)
-        if lock is not None:
+        await interaction.response.defer(ephemeral=True)
+
+        # 申し込めない理由をすべて具体的に出す（12節）
+        issues = service.entry_blockers(interaction.client, guild_id)
+        if issues:
             await game_shared.respond(
-                interaction, game_shared.error_message("guild_busy")
+                interaction, service.blocker_message(issues, action="バトル申請")
             )
             return
 
@@ -1727,10 +2061,6 @@ class GuildBattlePanelView(discord.ui.View):
 
         guild_id = int(guild_row["guild_id"])
 
-        if not roster_is_set(guild_id):
-            await game_shared.respond(interaction, ROSTER_REQUIRED_MESSAGE)
-            return
-
         lock = get_battle_lock(guild_id)
         if lock is not None:
             if lock["lock_type"] == "recruitment":
@@ -1761,6 +2091,14 @@ class GuildBattlePanelView(discord.ui.View):
             return
 
         await interaction.response.defer(ephemeral=True)
+
+        # 募集する前に、開始条件を満たしているかを具体的に確認する（12.2節）
+        issues = service.entry_blockers(interaction.client, guild_id)
+        if issues:
+            await game_shared.respond(
+                interaction, service.blocker_message(issues, action="バトル募集")
+            )
+            return
 
         result = create_battle_recruitment(guild_id)
         if not result["ok"]:
@@ -1922,15 +2260,8 @@ class BattleMemberPanelView(discord.ui.View):
         entries = get_battle_entries(guild_id)
         mine = [entry for entry in entries if int(entry["user_id"]) == interaction.user.id]
 
-        status = "\n".join(
-            [
-                "**出場する使い魔**",
-                game_shared.item_line(
-                    "ギルド合計", f"{len(entries)}/{master.battle.max_units}体"
-                ),
-                game_shared.item_line("あなたの枠", f"{len(mine)}/{assigned}体"),
-                "-# 体数はギルドマスターが割り当てます。枠のなかで自由に差し替えできます。",
-            ]
+        status = build_entry_overview(
+            guild_id, viewer_id=interaction.user.id, assigned=assigned
         )
 
         view = RosterFamiliarActionView(
@@ -2097,20 +2428,14 @@ class BattleRecruitmentView(discord.ui.View):
             await game_shared.respond(interaction, game_shared.error_message("same_guild"))
             return
 
-        if not roster_is_set(challenger_id):
-            await game_shared.respond(interaction, ROSTER_REQUIRED_MESSAGE)
-            return
-
         await interaction.response.defer(ephemeral=True)
 
         # 12.2節：開始前チェックを通過できないギルドは対戦相手として確定させず、
         # その理由を申込者へ表示する。募集を消費してしまわないよう先に確認する。
-        problems, _ = service.check_guild_ready(interaction.client, challenger_id)
-        if problems:
+        issues = service.entry_blockers(interaction.client, challenger_id)
+        if issues:
             await game_shared.respond(
-                interaction,
-                "次の条件を満たしていないため申し込めません。\n"
-                + "\n".join(f"・{problem}" for problem in problems),
+                interaction, service.blocker_message(issues, action="対戦申請")
             )
             return
 
@@ -2483,41 +2808,43 @@ def build_register_status(user_id: int) -> str:
 
 
 def build_registerable_options(user_id: int) -> list[discord.SelectOption]:
-    """事前登録に追加できる使い魔の選択肢を作る。"""
-
-    master = load_master_data()
+    """事前登録に追加できる使い魔の選択肢を、ランク順 → レベル順で作る。"""
 
     registered = {
         int(row["instance_id"]) for row in get_player_battle_familiars(user_id)
     }
-    options: list[discord.SelectOption] = []
+    found: list[tuple[tuple[int, int, str], discord.SelectOption]] = []
 
     for owned in get_owned_familiars(user_id):
         instance_id = int(owned["instance_id"])
         if instance_id in registered:
             continue
 
-        familiar = master.get_familiar(owned["familiar_id"])
-        if familiar is None:
-            continue
+        familiar_id = str(owned["familiar_id"])
+        level = int(owned["level"])
 
-        stats = master.level_stats(familiar.familiar_id, int(owned["level"]))
-        description = (
-            f"HP {stats.max_hp}　ATK {stats.atk}　SPD {stats.speed}"
-            if stats
-            else familiar.description
-        )
+        option = familiar_option(instance_id, familiar_id, level)
+        if option is not None:
+            found.append((familiar_sort_key(familiar_id, level), option))
 
-        options.append(
-            discord.SelectOption(
-                label=(
-                    f"{game_shared.rank_label(familiar.rank)} "
-                    f"{familiar.name} Lv.{owned['level']}"
-                )[:100],
-                description=description[:100],
-                value=str(instance_id),
-            )
+    found.sort(key=lambda item: item[0])
+    return [option for _, option in found]
+
+
+def build_registered_options(user_id: int) -> list[discord.SelectOption]:
+    """事前登録している使い魔の選択肢を、登録順で作る。"""
+
+    options: list[discord.SelectOption] = []
+
+    for row in get_player_battle_familiars(user_id):
+        option = familiar_option(
+            int(row["instance_id"]),
+            str(row["familiar_id"]),
+            int(row["level"]),
+            prefix=f"{row['priority']}番目：",
         )
+        if option is not None:
+            options.append(option)
 
     return options
 
@@ -2563,6 +2890,118 @@ class RegisterAddView(PagedSelectView):
         )
 
 
+class RegisterRemoveView(PagedSelectView):
+    """事前登録から1体だけ取り消す一時View（9.1節）。"""
+
+    async def on_choice(self, interaction: discord.Interaction, value: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        user_id = interaction.user.id
+        current = [
+            int(row["instance_id"])
+            for row in get_player_battle_familiars(user_id)
+        ]
+
+        target = int(value)
+        if target not in current:
+            await game_shared.respond(interaction, "その使い魔は登録されていません。")
+            return
+
+        # 取り消した分を詰めて、以降の優先順を1つ繰り上げる
+        current.remove(target)
+        set_player_battle_familiars(user_id, current)
+
+        await game_shared.respond(
+            interaction,
+            build_register_status(user_id),
+            view=BattleFamiliarRegisterView(user_id),
+        )
+
+
+class RegisterReplaceTargetView(PagedSelectView):
+    """入れ替える枠を選ぶ一時View（9.1節）。"""
+
+    async def on_choice(self, interaction: discord.Interaction, value: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        user_id = interaction.user.id
+        options = build_registerable_options(user_id)
+
+        if not options:
+            await game_shared.respond(
+                interaction,
+                "入れ替えられる使い魔がありません。ガチャで入手してください。",
+            )
+            return
+
+        current = get_player_battle_familiars(user_id)
+        target = next(
+            (row for row in current if int(row["instance_id"]) == int(value)), None
+        )
+        if target is None:
+            await game_shared.respond(interaction, "その使い魔は登録されていません。")
+            return
+
+        await game_shared.respond(
+            interaction,
+            (
+                f"**{target['priority']}番目**（"
+                f"{_familiar_name(target['familiar_id'])} Lv.{target['level']}）"
+                "を、どの使い魔へ入れ替えますか？\n"
+                "-# 優先順はそのままです。"
+            ),
+            view=RegisterReplaceView(options, replaced_instance_id=int(value)),
+        )
+
+
+class RegisterReplaceView(PagedSelectView):
+    """選んだ枠を別の使い魔へ入れ替える一時View（9.1節）。"""
+
+    def __init__(
+        self,
+        options: list[discord.SelectOption],
+        *,
+        replaced_instance_id: int,
+    ) -> None:
+        super().__init__(options, placeholder="入れ替える使い魔を選択")
+
+        self.replaced_instance_id = replaced_instance_id
+
+    async def on_choice(self, interaction: discord.Interaction, value: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        user_id = interaction.user.id
+        current = [
+            int(row["instance_id"])
+            for row in get_player_battle_familiars(user_id)
+        ]
+
+        if self.replaced_instance_id not in current:
+            await game_shared.respond(interaction, "その使い魔は登録されていません。")
+            return
+
+        new_instance_id = int(value)
+        if new_instance_id in current:
+            await game_shared.respond(interaction, "その使い魔は既に登録されています。")
+            return
+
+        # 優先順を変えずに、同じ位置だけ差し替える
+        current[current.index(self.replaced_instance_id)] = new_instance_id
+
+        result = set_player_battle_familiars(user_id, current)
+        if not result["ok"]:
+            await game_shared.respond(
+                interaction, game_shared.error_message(result["error"])
+            )
+            return
+
+        await game_shared.respond(
+            interaction,
+            build_register_status(user_id),
+            view=BattleFamiliarRegisterView(user_id),
+        )
+
+
 class BattleFamiliarRegisterView(discord.ui.View):
     """事前登録の追加・取消を操作する一時View。"""
 
@@ -2574,6 +3013,8 @@ class BattleFamiliarRegisterView(discord.ui.View):
 
         self.user_id = user_id
         self.add_familiar.disabled = len(registered) >= master.battle.max_units
+        self.replace_familiar.disabled = not registered
+        self.remove_one.disabled = not registered
         self.undo.disabled = not registered
         self.clear_all.disabled = not registered
 
@@ -2600,6 +3041,38 @@ class BattleFamiliarRegisterView(discord.ui.View):
             interaction,
             "登録する使い魔を選んでください。選んだ順が優先順になります。",
             view=RegisterAddView(options),
+        )
+
+    @discord.ui.button(label="入れ替え", style=discord.ButtonStyle.primary)
+    async def replace_familiar(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        options = build_registered_options(interaction.user.id)
+
+        if not options:
+            await game_shared.respond(interaction, "登録されている使い魔がありません。")
+            return
+
+        await game_shared.respond(
+            interaction,
+            "入れ替える枠を選んでください。優先順はそのままです。",
+            view=RegisterReplaceTargetView(options, placeholder="入れ替える枠を選択"),
+        )
+
+    @discord.ui.button(label="個別に取消", style=discord.ButtonStyle.secondary)
+    async def remove_one(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        options = build_registered_options(interaction.user.id)
+
+        if not options:
+            await game_shared.respond(interaction, "登録されている使い魔がありません。")
+            return
+
+        await game_shared.respond(
+            interaction,
+            "取り消す使い魔を選んでください。以降の優先順は1つ繰り上がります。",
+            view=RegisterRemoveView(options, placeholder="取り消す使い魔を選択"),
         )
 
     @discord.ui.button(label="最後を取消", style=discord.ButtonStyle.secondary)

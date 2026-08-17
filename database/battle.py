@@ -2212,78 +2212,102 @@ def build_log_entries(records: list[dict[str, Any]]) -> list[BattleLogEntry]:
 # ==================================================
 # バトル報酬（26.2節）
 # ==================================================
-def grant_battle_rewards(
+def settle_battle_bet(
     battle_id: int,
     *,
-    entries: list[dict[str, Any]],
+    winners: list[dict[str, Any]],
+    losers: list[dict[str, Any]],
+    drawers: list[dict[str, Any]],
+    bet_coin: int,
+    win_xp: int,
+    lose_xp: int,
+    draw_xp: int,
     reward_date: str,
-    low_guild_id: int,
-    high_guild_id: int,
     daily_limit: int,
-) -> list[dict[str, Any]]:
-    """バトル報酬のcoinとXPを付与する。
+) -> dict[str, Any]:
+    """ベットしたcoinを負けた側から勝った側へ移し、XPを付与する（26.2節）。
 
-    同じ2ギルド間はその日の最初の1試合だけを報酬対象とし、1プレイヤーにつき
-    1日 ``daily_limit`` 試合までに制限します。coin残高、coin履歴、XP、報酬記録を
-    1トランザクションで確定します。
+    - 負けた側の各出場者から最大 ``bet_coin`` を回収します。残高が足りない場合は
+      持っているぶんだけ回収し、マイナス残高は作りません。
+    - 回収した合計を、勝った側の出場者へ均等に分けます。端数は先頭から1coinずつ。
+      coinは移動するだけなので、総量は増えません。
+    - XPは新しく付与するため、1プレイヤー1日 ``daily_limit`` 試合までに制限します。
+    - 引き分けはcoinを動かさず、XPだけを付与します。
+
+    戻り値は ``{"pot", "collected", "paid", "results"}`` です。``results`` の各要素は
+    ``{"user_id", "guild_id", "coin", "xp", "outcome"}`` で、``coin`` は負けた側なら負数です。
     """
 
     timestamp = _now()
-    granted: list[dict[str, Any]] = []
+
+    def _xp_allowed(conn: sqlite3.Connection, user_id: int) -> bool:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS granted_count
+            FROM guild_battle_rewards
+            WHERE user_id = ?
+              AND reward_date = ?
+            """,
+            (user_id, reward_date),
+        ).fetchone()
+        return int(row["granted_count"]) < daily_limit
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         with conn:
             conn.execute("BEGIN IMMEDIATE")
 
-            pair = conn.execute(
-                """
-                INSERT OR IGNORE INTO guild_battle_pair_rewards
-                    (reward_date, low_guild_id, high_guild_id, battle_id, created_at)
-                VALUES
-                    (?, ?, ?, ?, ?)
-                """,
-                (reward_date, low_guild_id, high_guild_id, battle_id, timestamp),
-            )
+            already = conn.execute(
+                "SELECT COUNT(*) FROM guild_battle_rewards WHERE battle_id = ?",
+                (battle_id,),
+            ).fetchone()
+            if int(already[0]) > 0:
+                # 同じバトルで既に清算済み。二重に動かさない。
+                conn.rollback()
+                return {"pot": 0, "collected": [], "paid": [], "results": []}
 
-            if pair.rowcount == 0:
-                # 同じ2ギルドで同日2試合目のため、誰にも報酬を付与しない。
-                return []
+            # ---- 1. 負けた側から回収する ----
+            pot = 0
+            collected: list[dict[str, Any]] = []
 
-            for entry in entries:
+            for entry in losers:
                 user_id = int(entry["user_id"])
-                guild_id = int(entry["guild_id"])
-                coin = int(entry.get("coin", 0))
-                xp = int(entry.get("xp", 0))
 
-                count_row = conn.execute(
-                    """
-                    SELECT COUNT(*) AS granted_count
-                    FROM guild_battle_rewards
-                    WHERE user_id = ?
-                      AND reward_date = ?
-                    """,
-                    (user_id, reward_date),
+                balance_row = conn.execute(
+                    "SELECT balance FROM balances WHERE user_id = ?", (user_id,)
                 ).fetchone()
+                balance = int(balance_row["balance"]) if balance_row else 0
 
-                if count_row["granted_count"] >= daily_limit:
-                    continue
+                taken = max(0, min(bet_coin, balance))
+                if taken:
+                    conn.execute(
+                        "UPDATE balances SET balance = balance - ? WHERE user_id = ?",
+                        (taken, user_id),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO transactions
+                            (type, executor_id, target_id, amount, note, created_at)
+                        VALUES
+                            ('ギルドバトル敗北', NULL, ?, ?, ?, ?)
+                        """,
+                        (user_id, -taken, f"battle_id={battle_id}", timestamp),
+                    )
 
-                inserted = conn.execute(
-                    """
-                    INSERT OR IGNORE INTO guild_battle_rewards
-                        (battle_id, user_id, guild_id, coin, xp, reward_date, created_at)
-                    VALUES
-                        (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (battle_id, user_id, guild_id, coin, xp, reward_date, timestamp),
-                )
+                pot += taken
+                collected.append({"user_id": user_id, "coin": taken})
 
-                if inserted.rowcount == 0:
-                    # 同じバトルで既に付与済み。
-                    continue
+            # ---- 2. 勝った側へ均等に配る ----
+            paid: list[dict[str, Any]] = []
 
-                if coin:
+            if winners and pot:
+                base, remainder = divmod(pot, len(winners))
+                for index, entry in enumerate(winners):
+                    user_id = int(entry["user_id"])
+                    amount = base + (1 if index < remainder else 0)
+                    if not amount:
+                        continue
+
                     conn.execute(
                         """
                         INSERT INTO balances (user_id, balance)
@@ -2291,34 +2315,80 @@ def grant_battle_rewards(
                         ON CONFLICT(user_id)
                         DO UPDATE SET balance = balance + excluded.balance
                         """,
-                        (user_id, coin),
+                        (user_id, amount),
                     )
                     conn.execute(
                         """
                         INSERT INTO transactions
                             (type, executor_id, target_id, amount, note, created_at)
                         VALUES
-                            ('ギルドバトル報酬', NULL, ?, ?, ?, ?)
+                            ('ギルドバトル勝利', NULL, ?, ?, ?, ?)
                         """,
-                        (user_id, coin, f"battle_id={battle_id}", timestamp),
+                        (user_id, amount, f"battle_id={battle_id}", timestamp),
                     )
+                    paid.append({"user_id": user_id, "coin": amount})
 
-                if xp:
+            paid_by_user = {item["user_id"]: item["coin"] for item in paid}
+            taken_by_user = {item["user_id"]: item["coin"] for item in collected}
+
+            # ---- 3. 記録とXP ----
+            results: list[dict[str, Any]] = []
+
+            groups = (
+                (winners, "win", win_xp),
+                (losers, "lose", lose_xp),
+                (drawers, "draw", draw_xp),
+            )
+
+            for entries, outcome, xp_amount in groups:
+                for entry in entries:
+                    user_id = int(entry["user_id"])
+                    guild_id = int(entry["guild_id"])
+
+                    if outcome == "win":
+                        coin = paid_by_user.get(user_id, 0)
+                    elif outcome == "lose":
+                        coin = -taken_by_user.get(user_id, 0)
+                    else:
+                        coin = 0
+
+                    xp = xp_amount if _xp_allowed(conn, user_id) else 0
+
                     conn.execute(
                         """
-                        INSERT INTO vc_time (user_id, total_xp, monthly_xp)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(user_id)
-                        DO UPDATE SET
-                            total_xp = total_xp + excluded.total_xp,
-                            monthly_xp = monthly_xp + excluded.monthly_xp
+                        INSERT OR IGNORE INTO guild_battle_rewards
+                            (battle_id, user_id, guild_id, coin, xp, reward_date,
+                             created_at)
+                        VALUES
+                            (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (user_id, xp, xp),
+                        (battle_id, user_id, guild_id, coin, xp, reward_date, timestamp),
                     )
 
-                granted.append({"user_id": user_id, "coin": coin, "xp": xp})
+                    if xp:
+                        conn.execute(
+                            """
+                            INSERT INTO vc_time (user_id, total_xp, monthly_xp)
+                            VALUES (?, ?, ?)
+                            ON CONFLICT(user_id)
+                            DO UPDATE SET
+                                total_xp = total_xp + excluded.total_xp,
+                                monthly_xp = monthly_xp + excluded.monthly_xp
+                            """,
+                            (user_id, xp, xp),
+                        )
 
-    return granted
+                    results.append(
+                        {
+                            "user_id": user_id,
+                            "guild_id": guild_id,
+                            "coin": coin,
+                            "xp": xp,
+                            "outcome": outcome,
+                        }
+                    )
+
+    return {"pot": pot, "collected": collected, "paid": paid, "results": results}
 
 
 # ==================================================

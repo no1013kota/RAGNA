@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "RAGNA Onlineのゲームバランス値。docs/GAME_SPEC.mdの数値と一致させて更新すること。",
+  "note": "ゲームバランスの数値。コードへ直接書かず、必ずこのファイルから読み込む。battle.bet はギルドバトルのベット額とXP。負けた側のcoinが勝った側へ移る。familiar.fusion_cost_rate_per_material は合成1体あたりの費用（ランク基準価格に対する割合）。0にすると合成は無料になる。battle.max_total_cost は編成の合計COST上限。0なら無制限。",
   "guild": {
     "create_cost": 1000000,
     "rename_cost": 50000,
@@ -41,10 +41,12 @@
       "A": 15000,
       "S": 50000
     },
-    "sell_price_multiplier": 1.0
+    "sell_price_multiplier": 1.0,
+    "fusion_cost_rate_per_material": 0.5
   },
   "battle": {
     "max_units": 5,
+    "max_total_cost": 0,
     "max_members": 5,
     "min_members": 1,
     "familiars_per_member": {
@@ -63,19 +65,11 @@
     "turn_time_seconds": 180,
     "battle_channel_retention_days": 7,
     "surrender_reward_from_round": 3,
-    "rewards": {
-      "win": {
-        "coin": 20000,
-        "xp": 100
-      },
-      "lose": {
-        "coin": 5000,
-        "xp": 25
-      },
-      "draw": {
-        "coin": 10000,
-        "xp": 50
-      }
+    "bet": {
+      "coin": 20000,
+      "win_xp": 40,
+      "lose_xp": 20,
+      "draw_xp": 20
     },
     "reward_daily_limit_per_player": 3,
     "ranking": {

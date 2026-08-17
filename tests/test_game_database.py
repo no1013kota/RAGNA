@@ -426,6 +426,43 @@ class FamiliarTests(GameDatabaseTestCase):
         self.assertEqual(fused["error"], "not_enough_materials")
         self.assertEqual(self.balance(505), 10_000)
 
+    def test_fusion_charges_coin(self) -> None:
+        self.add_coin(509, 100_000)
+        drawn = self.familiar_db.draw_gacha(
+            509, pool_id="standard", count=3, cost=0,
+            results=[("S", "loki")] * 3, initial_level=1,
+        )
+        base = drawn["instances"][0]["instance_id"]
+
+        result = self.familiar_db.fuse_familiar(
+            509, base_instance_id=base, material_count=2,
+            max_level=10, locked_instance_ids=set(), cost=50_000,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["cost"], 50_000)
+        self.assertEqual(self.balance(509), 50_000)
+
+    def test_fusion_without_enough_coin_changes_nothing(self) -> None:
+        self.add_coin(510, 1_000)
+        drawn = self.familiar_db.draw_gacha(
+            510, pool_id="standard", count=2, cost=0,
+            results=[("S", "loki")] * 2, initial_level=1,
+        )
+        base, material = (item["instance_id"] for item in drawn["instances"])
+
+        result = self.familiar_db.fuse_familiar(
+            510, base_instance_id=base, material_count=1,
+            max_level=10, locked_instance_ids=set(), cost=25_000,
+        )
+
+        self.assertEqual(result["error"], "insufficient_balance")
+        self.assertEqual(self.balance(510), 1_000)
+        self.assertEqual(self.familiar_db.get_owned_familiar(base)["level"], 1)
+        self.assertEqual(
+            self.familiar_db.get_owned_familiar(material)["status"], "owned"
+        )
+
     def test_selling_is_all_or_nothing(self) -> None:
         self.add_coin(508, 30_000)
         drawn = self.familiar_db.draw_gacha(
@@ -944,37 +981,64 @@ class BattleTests(GameDatabaseTestCase):
         self.assertEqual(self.battle_db.get_battle_roster(self.guild_b), [])
         self.assertEqual(self.battle_db.get_locked_instance_ids(), set())
 
-    def test_rewards_respect_the_daily_limits(self) -> None:
-        # 26.2節：1プレイヤー1日3試合まで、同じ2ギルド間は1日最初の1試合だけ
+    def settle(self, battle_id: int, *, winner: int, loser: int, date="2026-08-15"):
+        return self.battle_db.settle_battle_bet(
+            battle_id,
+            winners=[{"user_id": winner, "guild_id": self.guild_a}],
+            losers=[{"user_id": loser, "guild_id": self.guild_b}],
+            drawers=[],
+            bet_coin=20_000,
+            win_xp=40,
+            lose_xp=20,
+            draw_xp=20,
+            reward_date=date,
+            daily_limit=3,
+        )
+
+    def test_the_bet_moves_coin_from_the_loser_to_the_winner(self) -> None:
+        # 26.2節：ベットしたcoinは負けた側から勝った側へ移る
         battle_id = self.start_battle()
         self.battle_db.finish_battle(battle_id, result="guild_a", end_reason="wipe")
 
-        entries = [
-            {"user_id": user_id, "guild_id": self.guild_a, "coin": 20_000, "xp": 100}
-            for user_id in self.members_a
-        ]
-        granted = self.battle_db.grant_battle_rewards(
-            battle_id,
-            entries=entries,
-            reward_date="2026-08-15",
-            low_guild_id=min(self.guild_a, self.guild_b),
-            high_guild_id=max(self.guild_a, self.guild_b),
-            daily_limit=3,
-        )
+        winner, loser = self.members_a[0], self.members_b[0]
+        self.add_coin(winner, 50_000)
+        self.add_coin(loser, 50_000)
 
-        self.assertEqual(len(granted), 5)
-        self.assertEqual(self.balance(self.members_a[0]), 20_000)
+        outcome = self.settle(battle_id, winner=winner, loser=loser)
 
-        repeated = self.battle_db.grant_battle_rewards(
-            battle_id + 1,
-            entries=entries,
-            reward_date="2026-08-15",
-            low_guild_id=min(self.guild_a, self.guild_b),
-            high_guild_id=max(self.guild_a, self.guild_b),
-            daily_limit=3,
-        )
-        self.assertEqual(repeated, [])
-        self.assertEqual(self.balance(self.members_a[0]), 20_000)
+        self.assertEqual(outcome["pot"], 20_000)
+        self.assertEqual(self.balance(winner), 70_000)
+        self.assertEqual(self.balance(loser), 30_000)
+        # coinは移動するだけで総量は変わらない
+        self.assertEqual(self.balance(winner) + self.balance(loser), 100_000)
+
+    def test_the_bet_is_settled_only_once_per_battle(self) -> None:
+        battle_id = self.start_battle()
+        self.battle_db.finish_battle(battle_id, result="guild_a", end_reason="wipe")
+
+        winner, loser = self.members_a[0], self.members_b[0]
+        self.add_coin(winner, 50_000)
+        self.add_coin(loser, 50_000)
+
+        self.settle(battle_id, winner=winner, loser=loser)
+        repeated = self.settle(battle_id, winner=winner, loser=loser)
+
+        self.assertEqual(repeated["results"], [])
+        self.assertEqual(self.balance(winner), 70_000)
+
+    def test_the_bet_never_makes_a_negative_balance(self) -> None:
+        battle_id = self.start_battle()
+        self.battle_db.finish_battle(battle_id, result="guild_a", end_reason="wipe")
+
+        winner, loser = self.members_a[0], self.members_b[0]
+        self.add_coin(winner, 10_000)
+        self.add_coin(loser, 5_000)
+
+        outcome = self.settle(battle_id, winner=winner, loser=loser)
+
+        self.assertEqual(outcome["pot"], 5_000)
+        self.assertEqual(self.balance(loser), 0)
+        self.assertEqual(self.balance(winner), 15_000)
 
 
 if __name__ == "__main__":

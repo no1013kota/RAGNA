@@ -752,10 +752,13 @@ class FuseBaseView(GroupPageView):
             base_instance_id=instance_id,
             options=service.build_fusion_count_options(base, max_count),
         )
+        unit_cost = service.fusion_cost_per_material(str(base["familiar_id"]))
+
         await interaction.followup.send(
             content=(
                 f"**{service.instance_title(base)}** を何体合成しますか？\n"
                 f"-# 一度に{max_count}体まで合成できます。\n"
+                f"-# 費用は素材1体につき {game_shared.format_coin(unit_cost)} です。\n"
                 "-# ※素材にした使い魔は消費されます。"
             ),
             view=view,
@@ -792,12 +795,20 @@ class FuseCountView(CountView):
         master = load_master_data()
 
         try:
+            base = _own_instance(self.user_id, self.base_instance_id)
+            if base is None:
+                await interaction.followup.send(
+                    game_shared.error_message("not_owned"), ephemeral=True
+                )
+                return
+
             outcome = fuse_familiar(
                 self.user_id,
                 base_instance_id=self.base_instance_id,
                 material_count=count,
                 max_level=master.familiar.max_level,
                 locked_instance_ids=get_locked_instance_ids(),
+                cost=service.fusion_cost(str(base["familiar_id"]), count),
             )
         except Exception:
             logger.exception(
@@ -820,6 +831,7 @@ class FuseCountView(CountView):
             before_level=int(outcome["before_level"]),
             level=int(outcome["level"]),
             material_count=len(outcome["material_instance_ids"]),
+            cost=int(outcome.get("cost", 0)),
         )
 
         if icon is not None:
@@ -1135,6 +1147,12 @@ def build_manage_panel_embed() -> discord.Embed:
         if rank in master.familiar.sell_base_prices
     )
 
+    fusion_prices = "／".join(
+        f"{rank} {master.fusion_cost(rank, 1):,}"
+        for rank in reversed(master.familiar.rank_order)
+        if rank in master.familiar.sell_base_prices
+    )
+
     return discord.Embed(
         title=MANAGE_PANEL_TITLE,
         description=(
@@ -1144,6 +1162,8 @@ def build_manage_panel_embed() -> discord.Embed:
             "**合成**\n"
             "-# 同じ種類の使い魔を素材にしてレベルアップします。"
             f"（上限はLv.{master.familiar.max_level}）\n"
+            f"-# 費用：{fusion_prices}\n"
+            "-# 素材1体につき上記のcoinがかかります。体数を選ぶ画面で合計額を確認できます。\n"
             "-# ※素材にした使い魔は消費されます。\n\n"
             "**売却**\n"
             "-# 不要な使い魔をcoinへ換金します。\n"

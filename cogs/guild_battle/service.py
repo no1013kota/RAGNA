@@ -31,9 +31,9 @@ from database.battle import (
     get_active_battles,
     get_battle,
     get_battle_entries,
+    get_battle_lock,
     get_battle_roster,
     get_battles_to_purge_channels,
-    grant_battle_rewards,
     load_battle_state,
     mark_battle_channels_deleted,
     release_battle_lock,
@@ -42,6 +42,7 @@ from database.battle import (
     set_battle_messages,
     set_battle_status,
     set_battle_turn_timing,
+    settle_battle_bet,
 )
 from database.familiar import get_owned_familiar
 from database.guild import get_guild, get_guild_members, get_player_guild
@@ -308,11 +309,16 @@ def check_guild_ready(
     member_ids = {int(member["user_id"]) for member in roster}
 
     if not roster:
-        issues.append("出場者がセットされていません。")
+        issues.append(
+            "出場者がセットされていません。"
+            "ギルドマスター専用tcの「メンバーセット」で決めてください。"
+        )
     elif len(roster) > master.battle.max_members:
         issues.append(
             f"出場者は最大{master.battle.max_members}人です（現在{len(roster)}人）。"
         )
+
+    total_cost = 0
 
     battle_entries = get_battle_entries(guild_id)
 
@@ -395,6 +401,8 @@ def check_guild_ready(
             )
             continue
 
+        total_cost += familiar.cost
+
         entries.append(
             {
                 "guild_id": guild_id,
@@ -406,7 +414,67 @@ def check_guild_ready(
             }
         )
 
+    # COST上限を設けている場合だけ確認する（0以下なら無制限）
+    cost_limit = master.battle.max_total_cost
+    if cost_limit > 0 and total_cost > cost_limit:
+        issues.append(
+            f"編成の合計COSTが上限を超えています（{total_cost}／{cost_limit}）。"
+            "COSTの低い使い魔へ入れ替えてください。"
+        )
+
     return issues, entries
+
+
+def lock_issues(guild_id: int) -> list[str]:
+    """申請・募集を受け付けられない占有状態を、具体的な理由にして返す（12節）。"""
+
+    issues: list[str] = []
+
+    lock = get_battle_lock(guild_id)
+    if lock is None:
+        return issues
+
+    lock_type = str(lock["lock_type"])
+
+    if lock_type == "recruitment":
+        issues.append("このギルドは現在バトルを募集中です。先に募集を取り消してください。")
+    elif lock_type == "request":
+        issues.append(
+            "このギルドには回答待ちのバトル申請があります。"
+            "先に取り消すか、相手の回答を待ってください。"
+        )
+    elif lock_type == "battle":
+        issues.append("このギルドは現在バトル中です。終了までお待ちください。")
+    else:
+        issues.append("このギルドは現在ほかの対戦手続き中です。")
+
+    return issues
+
+
+def entry_blockers(bot: discord.Client, guild_id: int) -> list[str]:
+    """申請・募集・対戦申請を出せない理由をすべて集めて返す（12節）。
+
+    占有状態（募集中・申請中・バトル中）と、開始前チェックの不足内容を
+    まとめます。空なら受け付けられます。
+    """
+
+    issues = lock_issues(guild_id)
+    ready_issues, _ = check_guild_ready(bot, guild_id)
+
+    for issue in ready_issues:
+        if issue not in issues:
+            issues.append(issue)
+
+    return issues
+
+
+def blocker_message(issues: list[str], *, action: str) -> str:
+    """不足内容を、そのまま利用者へ出せる文面にする。"""
+
+    lines = [f"**{action}できません。** 次の点を直してください。", ""]
+    lines.extend(f"・{issue}" for issue in issues)
+
+    return "\n".join(lines)[:1900]
 
 
 async def _notify_start_failure(
@@ -635,17 +703,48 @@ async def start_prepared_battle(bot: discord.Client, battle_id: int) -> bool:
         )
         opening = discord.Embed(
             title="⚔ GUILD BATTLE 開始",
-            description=(
-                f"**{names.get(state.guild_a_id, '—')}** vs "
-                f"**{names.get(state.guild_b_id, '—')}**\n"
-                f"各ギルドの持ち時間は {guild_time}、"
-                f"1操作の制限時間は "
-                f"{battle_embed.format_remaining_time(master.battle.turn_time_seconds)} です。"
+            description="\n".join(
+                [
+                    f"**{names.get(state.guild_a_id, '—')}** vs "
+                    f"**{names.get(state.guild_b_id, '—')}**",
+                    "",
+                    game_shared.item_line("ギルドの持ち時間", guild_time),
+                    game_shared.item_line(
+                        "1操作の制限時間",
+                        battle_embed.format_remaining_time(
+                            master.battle.turn_time_seconds
+                        ),
+                    ),
+                    game_shared.item_line(
+                        "ベット額",
+                        f"1人 {game_shared.format_coin(master.battle.bet.coin)}",
+                    ),
+                    game_shared.item_line(
+                        "XP", f"勝利 {master.battle.bet.win_xp}／敗北 {master.battle.bet.lose_xp}"
+                    ),
+                    "",
+                    f"-# {bet_notice()}",
+                ]
             ),
             color=config.COLOR_PURPLE,
         )
-        for channel in channels.values():
+
+        labels = player_names(bot, state)
+
+        for guild_id, channel in channels.items():
             await _safe_send(channel, embed=opening)
+
+            # 編成表はギルドごとに内容が変わる（自分はスキル効果まで、相手は名前だけ）
+            await _safe_send(
+                channel,
+                embed=battle_embed.build_lineup_embed(
+                    state,
+                    guild_id=guild_id,
+                    guild_names=names,
+                    player_names=labels,
+                    bet_notice=bet_notice(),
+                ),
+            )
 
         await publish_progress(bot, state, channels=channels)
         return True
@@ -890,6 +989,25 @@ async def announce_turn(
             state.battle_id, guild_id=unit.guild_id, turn_message_id=posted.id
         )
 
+    # 相手ギルドへは「誰のターンか」を知らせる（17節）
+    names = guild_names(state)
+    labels = player_names(bot, state)
+
+    for guild_id, other_channel in channels.items():
+        if guild_id == unit.guild_id:
+            continue
+
+        notice = await _safe_send(
+            other_channel,
+            embed=battle_embed.build_opponent_turn_embed(
+                state, unit, guild_names=names, player_names=labels
+            ),
+        )
+        if notice is not None:
+            set_battle_messages(
+                state.battle_id, guild_id=guild_id, turn_message_id=notice.id
+            )
+
 
 async def clear_turn_messages(
     state: BattleState,
@@ -946,47 +1064,114 @@ def _no_reward_reason(state: BattleState) -> str | None:
     return None
 
 
+OUTCOME_LABELS = {"win": "勝利", "lose": "敗北", "draw": "引き分け"}
+
+
+def bet_notice() -> str:
+    """ベット額の案内文を返す（バトル開始時と結果に出す）。"""
+
+    bet = load_master_data().battle.bet
+
+    return (
+        f"1人 {game_shared.format_coin(bet.coin)} をベットします。"
+        f"負けた側のcoinは勝った側へ移ります"
+        f"（勝利 {bet.win_xp} XP／敗北 {bet.lose_xp} XP）。"
+    )
+
+
+def build_settlement_embed(
+    results: list[dict], *, reason: str | None = None
+) -> discord.Embed:
+    """ベットの清算結果Embedを作る。"""
+
+    if not results:
+        return discord.Embed(
+            title="バトル清算",
+            description=reason or "coinの移動はありません。",
+            color=config.COLOR_GREY,
+        )
+
+    moved = sum(item["coin"] for item in results if item["coin"] > 0)
+
+    lines = [
+        game_shared.item_line("移動したcoin", game_shared.format_coin(moved)),
+        "",
+    ]
+
+    for outcome in ("win", "lose", "draw"):
+        members = [item for item in results if item["outcome"] == outcome]
+        if not members:
+            continue
+
+        lines.append(f"**{OUTCOME_LABELS[outcome]}**")
+        for item in members:
+            coin = int(item["coin"])
+            sign = f"{coin:+,} coin" if coin else "±0 coin"
+            xp = f"{item['xp']} XP" if item["xp"] else "XP上限"
+            lines.append(f"<@{item['user_id']}>　{sign}／{xp}")
+
+        lines.append("")
+
+    lines.append(f"-# {bet_notice()}")
+
+    return discord.Embed(
+        title="バトル清算",
+        description="\n".join(lines)[:4000],
+        color=config.COLOR_GOLD,
+    )
+
+
+def battle_participants(state: BattleState) -> dict[str, list[dict]]:
+    """出場者を勝ち・負け・引き分けへ分けて返す（同じプレイヤーは1回だけ）。"""
+
+    seen: set[int] = set()
+    groups: dict[str, list[dict]] = {"win": [], "lose": [], "draw": []}
+
+    for unit in state.units.values():
+        if unit.player_id in seen:
+            continue
+
+        key = _reward_key(state, unit.guild_id)
+        if key is None:
+            continue
+
+        seen.add(unit.player_id)
+        groups[key].append(
+            {"user_id": unit.player_id, "guild_id": unit.guild_id}
+        )
+
+    return groups
+
+
 def grant_rewards(state: BattleState) -> tuple[list[dict], str | None]:
-    """バトル報酬を付与し、``(付与結果, 付与しなかった理由)`` を返す。"""
+    """ベットしたcoinを清算し、``(清算結果, 清算しなかった理由)`` を返す。"""
 
     reason = _no_reward_reason(state)
     if reason is not None:
         return [], reason
 
     master = load_master_data()
-    entries: list[dict] = []
+    bet = master.battle.bet
+    groups = battle_participants(state)
 
-    for unit in state.units.values():
-        key = _reward_key(state, unit.guild_id)
-        if key is None:
-            continue
-
-        amount = master.battle.rewards.get(key)
-        if amount is None:
-            continue
-
-        entries.append(
-            {
-                "user_id": unit.player_id,
-                "guild_id": unit.guild_id,
-                "coin": amount.coin,
-                "xp": amount.xp,
-            }
-        )
-
-    granted = grant_battle_rewards(
+    outcome = settle_battle_bet(
         state.battle_id,
-        entries=entries,
+        winners=groups["win"],
+        losers=groups["lose"],
+        drawers=groups["draw"],
+        bet_coin=bet.coin,
+        win_xp=bet.win_xp,
+        lose_xp=bet.lose_xp,
+        draw_xp=bet.draw_xp,
         reward_date=datetime.now(JST).strftime("%Y-%m-%d"),
-        low_guild_id=min(state.guild_a_id, state.guild_b_id),
-        high_guild_id=max(state.guild_a_id, state.guild_b_id),
         daily_limit=master.battle.reward_daily_limit_per_player,
     )
 
-    if not granted:
-        return [], "報酬上限に達しているため、今回の報酬はありません。"
+    results = outcome["results"]
+    if not results:
+        return [], "このバトルはすでに清算済みです。"
 
-    return granted, None
+    return results, None
 
 
 async def finish_battle_flow(
@@ -1056,20 +1241,7 @@ async def finish_battle_flow(
     else:
         granted, reason = [], None
 
-    if granted:
-        lines = [
-            f"<@{item['user_id']}>：{game_shared.format_coin(item['coin'])} / {item['xp']} XP"
-            for item in granted
-        ]
-        reward_text = "\n".join(lines)[:1024]
-    else:
-        reward_text = reason or "報酬はありません。"
-
-    reward_embed = discord.Embed(
-        title="バトル報酬",
-        description=reward_text,
-        color=config.COLOR_GOLD,
-    )
+    reward_embed = build_settlement_embed(granted, reason=reason)
     for channel in channels.values():
         await _safe_send(channel, embed=reward_embed)
 

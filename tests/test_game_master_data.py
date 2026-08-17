@@ -315,6 +315,44 @@ class SellPriceTests(unittest.TestCase):
         self.assertEqual(MASTER.sell_price("B", 10), 50_000)
 
 
+class BetTests(unittest.TestCase):
+    def test_bet_amounts_match_the_spec(self) -> None:
+        # 26.2節：1人20,000 coin、勝利40XP・敗北20XP
+        bet = MASTER.battle.bet
+
+        self.assertEqual(bet.coin, 20_000)
+        self.assertEqual(bet.win_xp, 40)
+        self.assertEqual(bet.lose_xp, 20)
+        self.assertEqual(bet.draw_xp, 20)
+
+
+class FusionCostTests(unittest.TestCase):
+    def test_cost_scales_with_rank_and_material_count(self) -> None:
+        # 10.2節：基準価格 × 係数 × 素材の体数
+        rate = MASTER.familiar.fusion_cost_rate_per_material
+
+        for rank, base in MASTER.familiar.sell_base_prices.items():
+            self.assertEqual(
+                MASTER.fusion_cost(rank, 1), round_half_up(base * rate), rank
+            )
+            self.assertEqual(
+                MASTER.fusion_cost(rank, 3), round_half_up(base * rate * 3), rank
+            )
+
+    def test_no_cost_without_materials(self) -> None:
+        self.assertEqual(MASTER.fusion_cost("S", 0), 0)
+        self.assertEqual(MASTER.fusion_cost("S", -1), 0)
+
+    def test_unknown_rank_costs_nothing(self) -> None:
+        self.assertEqual(MASTER.fusion_cost("Z", 1), 0)
+
+
+class CostLimitTests(unittest.TestCase):
+    def test_total_cost_limit_is_unset_by_default(self) -> None:
+        # 10.6節：初期リリースでは合計COST制限を設けない
+        self.assertEqual(MASTER.battle.max_total_cost, 0)
+
+
 class UsableRankTests(unittest.TestCase):
     def test_players_can_use_one_rank_above(self) -> None:
         # 10.4節の表

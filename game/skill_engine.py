@@ -786,6 +786,10 @@ def _apply_single_effect(
                 if params.get("forced_target") == "caster":
                     params["forced_target_unit_id"] = owner.battle_unit_id
 
+            # 能力値の変化を「前 → 後」で見せるため、付与前の値を控える
+            atk_before = target.current_atk
+            speed_before = target.speed
+
             applied = effects_module.apply_effect(
                 state,
                 target,
@@ -809,6 +813,12 @@ def _apply_single_effect(
                 amount=effect.value,
                 effect_type=effect_type,
                 text=_effect_log_text(effect_type, effect),
+                atk_before=atk_before,
+                atk_after=target.current_atk,
+                speed_before=speed_before,
+                speed_after=target.speed,
+                hp=target.current_hp,
+                max_hp=target.max_hp,
             )
         return
 

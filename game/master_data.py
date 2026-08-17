@@ -71,12 +71,21 @@ class FamiliarBalance:
     speed_max: int
     sell_base_prices: dict[str, int]
     sell_price_multiplier: float
+    fusion_cost_rate_per_material: float
 
 
 @dataclass(frozen=True)
-class RewardAmount:
+class BetBalance:
+    """ギルドバトルのベット設定（26.2節）。
+
+    ``coin`` は1人あたりのベット額です。負けた側から集めたcoinを勝った側へ
+    分配するため、coinの総量は増えません。XPは新しく付与します。
+    """
+
     coin: int
-    xp: int
+    win_xp: int
+    lose_xp: int
+    draw_xp: int
 
 
 @dataclass(frozen=True)
@@ -90,6 +99,8 @@ class RankingBalance:
 @dataclass(frozen=True)
 class BattleBalance:
     max_units: int
+    # 編成の合計COST上限。0以下なら制限なし（10.6節）。
+    max_total_cost: int
     max_members: int
     min_members: int
     familiars_per_member: dict[int, int]
@@ -102,7 +113,7 @@ class BattleBalance:
     turn_time_seconds: int
     battle_channel_retention_days: int
     surrender_reward_from_round: int
-    rewards: dict[str, RewardAmount]
+    bet: BetBalance
     reward_daily_limit_per_player: int
     ranking: RankingBalance
     battle_log_retention_days: int
@@ -267,6 +278,21 @@ class MasterData:
         levels = max(1, int(level))
         return round_half_up(base * levels * self.familiar.sell_price_multiplier)
 
+    def fusion_cost(self, rank: str, material_count: int) -> int:
+        """合成にかかるcoinを返す（10.2節）。
+
+        ``ランク基準価格 × fusion_cost_rate_per_material × 素材の体数`` です。
+        係数を0にすると無料になります。
+        """
+
+        base = self.familiar.sell_base_prices.get(rank)
+        if base is None or material_count <= 0:
+            return 0
+
+        return round_half_up(
+            base * self.familiar.fusion_cost_rate_per_material * material_count
+        )
+
     def usable_ranks(
         self, player_rank: str | None, *, is_sub_manager: bool = False
     ) -> list[str]:
@@ -362,10 +388,18 @@ def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, B
             for rank, price in familiar_raw["sell_base_prices"].items()
         },
         sell_price_multiplier=float(familiar_raw.get("sell_price_multiplier", 1.0)),
+        fusion_cost_rate_per_material=float(
+            familiar_raw.get("fusion_cost_rate_per_material", 0.0)
+        ),
     )
 
     if not 1 <= familiar.min_level <= familiar.max_level:
         raise MasterDataError("familiar.min_level / max_level の関係が不正です")
+
+    if familiar.fusion_cost_rate_per_material < 0:
+        raise MasterDataError(
+            "familiar.fusion_cost_rate_per_material は0以上にしてください"
+        )
 
     if not familiar.rank_order:
         raise MasterDataError("familiar.rank_order が空です")
@@ -374,18 +408,24 @@ def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, B
         if rank not in familiar.sell_base_prices:
             warnings.append(f"ランク{rank}の売却基準価格が未設定です")
 
-    rewards_raw = battle_raw["rewards"]
-    rewards = {
-        key: RewardAmount(coin=int(value["coin"]), xp=int(value["xp"]))
-        for key, value in rewards_raw.items()
-    }
-    for key in ("win", "lose", "draw"):
-        if key not in rewards:
-            raise MasterDataError(f"battle.rewards に {key} がありません")
+    bet_raw = battle_raw["bet"]
+    for key in ("coin", "win_xp", "lose_xp", "draw_xp"):
+        if key not in bet_raw:
+            raise MasterDataError(f"battle.bet に {key} がありません")
+
+    bet = BetBalance(
+        coin=int(bet_raw["coin"]),
+        win_xp=int(bet_raw["win_xp"]),
+        lose_xp=int(bet_raw["lose_xp"]),
+        draw_xp=int(bet_raw["draw_xp"]),
+    )
+    if bet.coin < 0:
+        raise MasterDataError("battle.bet.coin は0以上にしてください")
 
     ranking_raw = battle_raw["ranking"]
     battle = BattleBalance(
         max_units=int(battle_raw["max_units"]),
+        max_total_cost=int(battle_raw.get("max_total_cost", 0)),
         max_members=int(battle_raw["max_members"]),
         min_members=int(battle_raw["min_members"]),
         familiars_per_member={
@@ -403,7 +443,7 @@ def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, B
             battle_raw.get("battle_channel_retention_days", 7)
         ),
         surrender_reward_from_round=int(battle_raw["surrender_reward_from_round"]),
-        rewards=rewards,
+        bet=bet,
         reward_daily_limit_per_player=int(battle_raw["reward_daily_limit_per_player"]),
         ranking=RankingBalance(
             win_points=int(ranking_raw["win_points"]),

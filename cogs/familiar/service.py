@@ -256,6 +256,24 @@ def sell_price(familiar_id: str, level: int) -> int:
     return master.sell_price(familiar.rank, int(level))
 
 
+def fusion_cost(familiar_id: str, material_count: int) -> int:
+    """合成にかかるcoinを返す（10.2節）。"""
+
+    master = load_master_data()
+
+    familiar = master.get_familiar(familiar_id)
+    if familiar is None:
+        return 0
+
+    return master.fusion_cost(familiar.rank, material_count)
+
+
+def fusion_cost_per_material(familiar_id: str) -> int:
+    """素材1体あたりの合成費用を返す。パネルの案内に使う。"""
+
+    return fusion_cost(familiar_id, 1)
+
+
 def fusable_bases(
     owned: list[dict[str, Any]],
     locked_instance_ids: Iterable[int],
@@ -545,7 +563,10 @@ def build_fusion_count_options(
     base: dict[str, Any],
     maximum: int,
 ) -> list[discord.SelectOption]:
-    """合成する体数の選択肢を作る。選ぶ前に変化後の能力値が分かるようにする。"""
+    """合成する体数の選択肢を作る。
+
+    選ぶ前に「かかるcoin」と「変化後の能力値」が分かるようにします。
+    """
 
     master = load_master_data()
 
@@ -558,7 +579,9 @@ def build_fusion_count_options(
     for count in range(1, min(maximum, PAGE_SIZE) + 1):
         after_level = before_level + count
         after = master.level_stats(familiar_id, after_level)
+        cost = fusion_cost(familiar_id, count)
 
+        label = f"{count}体　{game_shared.format_coin(cost)}"
         description = f"Lv.{before_level}→Lv.{after_level}"
         if before is not None and after is not None:
             description = (
@@ -568,7 +591,7 @@ def build_fusion_count_options(
 
         options.append(
             discord.SelectOption(
-                label=f"{count}体",
+                label=label[:100],
                 description=description[:100],
                 value=str(count),
             )
@@ -1074,6 +1097,7 @@ def build_fusion_result_embed(
     before_level: int,
     level: int,
     material_count: int,
+    cost: int = 0,
 ) -> tuple[discord.Embed, discord.File | None]:
     """合成成功時に、変化後の能力値を表示するEmbedを作る。"""
 
@@ -1085,6 +1109,7 @@ def build_fusion_result_embed(
         item_line("レベル", f"Lv.{before_level}→**Lv.{level}**"),
         *_diff_lines(familiar_id, before_level, level),
         item_line("消費した素材", f"{material_count}体"),
+        item_line("かかったcoin", game_shared.format_coin(cost)),
     ]
 
     embed = discord.Embed(
@@ -1191,6 +1216,8 @@ __all__ = [
     "exclude_locked",
     "fusable_bases",
     "fusable_count",
+    "fusion_cost",
+    "fusion_cost_per_material",
     "gacha_plan",
     "guaranteed_floor_rank",
     "gender_label",

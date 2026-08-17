@@ -651,6 +651,7 @@ def fuse_familiar(
     material_count: int,
     max_level: int,
     locked_instance_ids: set[int] | frozenset[int],
+    cost: int = 0,
 ) -> dict[str, Any]:
     """同じ種類の使い魔を素材にしてレベルを上げる（10.2節）。
 
@@ -658,6 +659,9 @@ def fuse_familiar(
     素材はレベルの低い個体から自動で選び、``status = 'fused'`` にして
     所有一覧から外します。編成ロック中・進行中バトルで使用中の個体は
     素材にも土台にもできません。
+
+    ``cost`` はサービス層が ``master_data.fusion_cost`` で計算した費用です。
+    残高が足りない場合は何も変えずに ``insufficient_balance`` を返します。
     """
 
     if material_count < 1:
@@ -736,6 +740,38 @@ def fuse_familiar(
             now = _now()
             new_level = before_level + material_count
 
+            # 費用は素材を消費する前に確定させる（足りなければ何も変えない）
+            if cost:
+                debit = conn.execute(
+                    """
+                    UPDATE balances
+                    SET balance = balance - ?
+                    WHERE user_id = ?
+                      AND balance >= ?
+                    """,
+                    (cost, user_id, cost),
+                )
+
+                if debit.rowcount == 0:
+                    conn.rollback()
+                    return {"ok": False, "error": "insufficient_balance", "cost": cost}
+
+                conn.execute(
+                    """
+                    INSERT INTO transactions
+                        (type, executor_id, target_id, amount, note, created_at)
+                    VALUES
+                        ('使い魔合成', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        user_id,
+                        -cost,
+                        f"{base['familiar_id']} Lv.{before_level}→Lv.{new_level}",
+                        now,
+                    ),
+                )
+
             conn.execute(
                 """
                 UPDATE player_familiars
@@ -781,6 +817,7 @@ def fuse_familiar(
         "before_level": before_level,
         "level": new_level,
         "material_instance_ids": material_ids,
+        "cost": cost,
     }
 
 
