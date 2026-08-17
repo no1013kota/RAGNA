@@ -19,6 +19,7 @@ import discord
 
 from cogs import game_shared
 from cogs.game_shared import item_line
+from database.familiar import grant_complete_reward
 from game.battle_embed import thumbnail_file
 from game.master_data import GachaPool, load_master_data
 from game.models import GENDER_FEMALE, GENDER_MALE, GENDER_NONE
@@ -120,7 +121,7 @@ def build_rank_table(pool: GachaPool, slot_type: str = SLOT_NORMAL) -> list[tupl
     )
 
     def is_available(rank: str) -> bool:
-        return rank not in missing and bool(master.familiars_by_rank(rank))
+        return rank not in missing and bool(master.gacha_familiars_by_rank(rank))
 
     available = [
         (rank, int(weight))
@@ -177,7 +178,7 @@ def rank_table_notice(pool: GachaPool) -> str | None:
     missing_text = "・".join(missing)
     fallback = pool.missing_rank_fallback
 
-    if fallback and master.familiars_by_rank(fallback):
+    if fallback and master.gacha_familiars_by_rank(fallback):
         return f"{missing_text}ランク未登録のため、その排出率を{fallback}ランクへ加算しています"
 
     return f"{missing_text}ランク未登録のため排出率を調整しています"
@@ -230,7 +231,7 @@ def draw_results(pool: GachaPool, count: int) -> list[tuple[str, str]]:
 
         rank = _pick_rank(table)
 
-        candidates = master.familiars_by_rank(rank)
+        candidates = master.gacha_familiars_by_rank(rank)
         if not candidates:
             raise GachaUnavailableError(f"ランク{rank}の使い魔が登録されていません")
 
@@ -674,7 +675,7 @@ def build_rate_list_embed(pool: GachaPool) -> discord.Embed:
         "",
     ]
 
-    # 表示順は使い魔マスターの登録順（docs/FAMILIAR_MASTER.md の掲載順）に合わせる
+    # 表示順は使い魔マスターの登録順（docs/BATTLE_RULES.md の掲載順）に合わせる
     document_order = {
         familiar_id: index for index, familiar_id in enumerate(master.familiars)
     }
@@ -684,7 +685,7 @@ def build_rate_list_embed(pool: GachaPool) -> discord.Embed:
 
     for rank, permille in reversed(table):
         familiars = sorted(
-            master.familiars_by_rank(rank),
+            master.gacha_familiars_by_rank(rank),
             key=lambda familiar: document_order.get(familiar.familiar_id, 0),
         )
         if not familiars:
@@ -850,6 +851,69 @@ def build_gacha_result_embed(
         embed.set_footer(text=notice)
 
     return embed
+
+
+def check_complete_rewards(user_id: int) -> list[dict[str, Any]]:
+    """コンプリート報酬の条件を満たしていれば解放する（BATTLE_RULES.md 11節）。
+
+    解放した使い魔の一覧を返します。ガチャの直後に呼びます。
+    """
+
+    master = load_master_data()
+
+    rewards = master.complete_reward_familiars()
+    if not rewards:
+        return []
+
+    reward_ids = {familiar.familiar_id for familiar in rewards}
+    required = [
+        familiar_id
+        for familiar_id, familiar in master.familiars.items()
+        if familiar.enabled and familiar_id not in reward_ids
+    ]
+
+    granted: list[dict[str, Any]] = []
+
+    for familiar in rewards:
+        outcome = grant_complete_reward(
+            user_id,
+            reward_familiar_id=familiar.familiar_id,
+            required_familiar_ids=required,
+            initial_level=master.familiar.min_level,
+        )
+        if outcome.get("granted"):
+            granted.append(outcome)
+
+    return granted
+
+
+def build_complete_reward_embed(granted: list[dict[str, Any]]) -> discord.Embed:
+    """コンプリート報酬の解放を知らせるEmbedを作る。"""
+
+    lines: list[str] = []
+
+    for item in granted:
+        familiar_id = str(item["familiar_id"])
+        level = int(item["level"])
+        rank = familiar_rank(familiar_id)
+
+        lines.append(
+            item_line(
+                "解放",
+                f"{game_shared.rank_label(rank)} {familiar_name(familiar_id)}"
+                f" Lv.{level}",
+            )
+        )
+        lines.extend(stat_lines(familiar_id, level))
+        lines.extend(skill_lines(familiar_id))
+
+    return discord.Embed(
+        title="コンプリート報酬",
+        description="\n".join(
+            ["**すべての使い魔を集めました。**", "", *lines]
+        ),
+        color=game_shared.RANK_COLORS.get("S", 0xFEE75C),
+    )
 
 
 def build_owned_list_embed(rows: list[dict[str, Any]]) -> discord.Embed:
@@ -1107,6 +1171,8 @@ __all__ = [
     "SLOT_GUARANTEED",
     "SLOT_NORMAL",
     "build_codex_embed",
+    "build_complete_reward_embed",
+    "check_complete_rewards",
     "codex_pages",
     "build_count_options",
     "build_familiar_detail_embed",

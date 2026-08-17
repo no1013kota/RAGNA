@@ -1356,11 +1356,11 @@ def create_battle(
                     INSERT INTO guild_battle_units
                         (battle_id, guild_id, player_id, familiar_instance_id,
                          familiar_id, level, max_hp, current_hp, base_atk,
-                         current_atk, speed, cost, gender, slot, alive,
+                         current_atk, speed, base_speed, cost, gender, slot, alive,
                          order_seed, active_skill_uses, passive_uses,
                          state_flags, updated_at)
                     VALUES
-                        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         battle_id,
@@ -1374,6 +1374,7 @@ def create_battle(
                         base_atk,
                         int(unit.get("current_atk", base_atk)),
                         int(unit.get("speed", 0)),
+                        int(unit.get("base_speed", unit.get("speed", 0))),
                         int(unit.get("cost", 0)),
                         unit.get("gender"),
                         int(unit["slot"]),
@@ -1434,6 +1435,7 @@ def _build_unit(row: sqlite3.Row) -> BattleUnit:
         base_atk=row["base_atk"],
         current_atk=row["current_atk"],
         speed=row["speed"],
+        base_speed=row["base_speed"] or row["speed"],
         cost=row["cost"],
         slot=row["slot"],
         gender=row["gender"],
@@ -1625,6 +1627,7 @@ def save_battle_state(state: BattleState, *, expected_action_seq: int) -> bool:
                         base_atk = ?,
                         current_atk = ?,
                         speed = ?,
+                        base_speed = ?,
                         alive = ?,
                         order_seed = ?,
                         active_skill_uses = ?,
@@ -1640,6 +1643,7 @@ def save_battle_state(state: BattleState, *, expected_action_seq: int) -> bool:
                         unit.base_atk,
                         unit.current_atk,
                         unit.speed,
+                        unit.base_speed,
                         1 if unit.alive else 0,
                         unit.order_seed,
                         _dump_json(unit.active_skill_uses),

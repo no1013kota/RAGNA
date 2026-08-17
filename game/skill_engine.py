@@ -20,23 +20,30 @@ from .models import (
     EFFECT_ATK_MODIFIER,
     EFFECT_ATK_SWAP,
     EFFECT_ATTACK,
+    EFFECT_ATTACK_DAMAGE_REDUCTION,
+    EFFECT_CLEANSE_DEBUFF,
     EFFECT_CLEANSE_STATUS,
     EFFECT_CONDITIONAL_ATK_MODIFIER,
     EFFECT_DAMAGE,
     EFFECT_HEAL,
+    EFFECT_HEAL_BLOCK,
     EFFECT_HEAL_PER_DEFEAT,
     EFFECT_INSTANT_DEFEAT,
     EFFECT_NEXT_ATTACK_ATK_MODIFIER,
     EFFECT_NULLIFY_DAMAGE,
     EFFECT_NULLIFY_STATUS,
+    EFFECT_POISON_AMPLIFY,
     EFFECT_REVIVE,
+    EFFECT_SPEED_MODIFIER,
     EFFECT_STATUS,
     EFFECT_STATUS_IMMUNE,
     EFFECT_STATUS_REFLECT,
     EFFECT_SURVIVE_WITH_HP,
     EFFECT_TAUNT,
     STATUS_LABELS,
+    STATUS_POISON,
     TARGET_ALLY_ALL,
+    TARGET_ALLY_DEFEATED,
     TARGET_ENEMY_ALL,
     TARGET_EVENT_SOURCE,
     TARGET_EVENT_UNIT,
@@ -133,6 +140,54 @@ def _check_condition(
     if condition_type == "defeat_by_damage":
         return context.defeat_by_damage
 
+    if condition_type == "status_is":
+        return context.status == condition.get("value")
+
+    if condition_type == "event_unit_is_self":
+        unit = context.event_unit
+        return unit is not None and unit.battle_unit_id == owner.battle_unit_id
+
+    if condition_type == "event_unit_is_ally":
+        unit = context.event_unit
+        return (
+            unit is not None
+            and unit.guild_id == owner.guild_id
+            and unit.battle_unit_id != owner.battle_unit_id
+        )
+
+    if condition_type == "target_hp_ratio_at_most":
+        target = context.event_unit
+        if target is None:
+            return False
+        return target.hp_ratio <= float(condition.get("value", 0))
+
+    if condition_type == "target_has_status_or_debuff":
+        target = context.event_unit
+        if target is None:
+            return False
+        return effects_module.has_status_or_debuff(state, target)
+
+    if condition_type == "target_not_acted_this_round":
+        target = context.event_unit
+        if target is None:
+            return False
+        return target.state_flags.get("acted_round") != state.current_round
+
+    if condition_type == "target_is_gender":
+        target = context.event_unit
+        if target is None:
+            return False
+        return target.gender == condition.get("value")
+
+    if condition_type == "damage_is_attack":
+        return context.attack_type in _engine().ATTACK_DAMAGE_TYPES
+
+    if condition_type == "once_per_round":
+        key = f"once_per_round:{condition.get('key', 'default')}"
+        if owner.state_flags.get(key) == state.current_round:
+            return False
+        return True
+
     if condition_type == "turn_owner_is_self":
         turn_owner = context.turn_owner
         return (
@@ -147,10 +202,21 @@ def _check_condition(
 def _conditions_met(
     state: BattleState, owner: BattleUnit, skill: Skill, context: EventContext
 ) -> bool:
-    return all(
-        _check_condition(state, owner, condition, context)
-        for condition in skill.conditions
-    )
+    """スキルの発動条件をすべて満たすか。
+
+    条件に ``on_trigger`` があるものは、そのタイミングのときだけ判定します
+    （複数のタイミングを持つパッシブで、片方だけに条件を付けるため）。
+    """
+
+    for condition in skill.conditions:
+        scope = condition.get("on_trigger")
+        if scope is not None and scope != context.trigger:
+            continue
+
+        if not _check_condition(state, owner, condition, context):
+            return False
+
+    return True
 
 
 # ==================================================
@@ -165,6 +231,55 @@ def _selection_units(
         if unit is not None:
             found.append(unit)
     return found
+
+
+def _narrow(
+    state: BattleState,
+    owner: BattleUnit,
+    candidates: list[BattleUnit],
+    effect: SkillEffect,
+) -> list[BattleUnit]:
+    """全体対象を、``params`` の絞り込み条件で狭める。
+
+    - ``gender``：その性別の使い魔だけ（ベルフェゴール・リリス・セイレーン）
+    - ``pick``：``lowest_hp`` / ``highest_atk`` で1体だけ選ぶ
+    - ``exclude_self``：自分を除く
+    - ``limit``：先頭から指定体数だけ
+    """
+
+    params = effect.params
+
+    gender = params.get("gender")
+    if gender:
+        candidates = [
+            target for target in candidates if target.gender == gender
+        ]
+
+    if params.get("exclude_self"):
+        candidates = [
+            target
+            for target in candidates
+            if target.battle_unit_id != owner.battle_unit_id
+        ]
+
+    pick = params.get("pick")
+    if pick == "lowest_hp":
+        candidates = sorted(
+            candidates, key=lambda unit: (unit.current_hp, unit.battle_unit_id)
+        )
+    elif pick == "highest_atk":
+        candidates = sorted(
+            candidates,
+            key=lambda unit: (-unit.current_atk, unit.battle_unit_id),
+        )
+
+    limit = params.get("limit")
+    if pick and limit is None:
+        limit = 1
+    if limit is not None:
+        candidates = candidates[: int(limit)]
+
+    return candidates
 
 
 def resolve_targets(
@@ -182,10 +297,20 @@ def resolve_targets(
         return [owner]
 
     if target_type == TARGET_ALLY_ALL:
-        return state.living_units(owner.guild_id)
+        return _narrow(state, owner, state.living_units(owner.guild_id), effect)
 
     if target_type == TARGET_ENEMY_ALL:
-        return state.living_units(state.enemy_guild_id(owner.guild_id))
+        return _narrow(
+            state,
+            owner,
+            state.living_units(state.enemy_guild_id(owner.guild_id)),
+            effect,
+        )
+
+    if target_type == TARGET_ALLY_DEFEATED:
+        return _narrow(
+            state, owner, state.defeated_units(owner.guild_id), effect
+        )
 
     if target_type == TARGET_EVENT_UNIT:
         return [context.event_unit] if context.event_unit is not None else []
@@ -226,6 +351,20 @@ def selectable_targets(
                 for target in candidates
                 if target.state_flags.get("acted_round") != state.current_round
             ]
+
+        elif condition_type == "is_gender":
+            candidates = [
+                target
+                for target in candidates
+                if target.gender == condition.get("value")
+            ]
+
+        elif condition_type == "defeated":
+            candidates = (
+                state.defeated_units(state.enemy_guild_id(unit.guild_id))
+                if group.side == "enemy"
+                else state.defeated_units(unit.guild_id)
+            )
 
         elif condition_type == "exclude_self":
             candidates = [
@@ -358,7 +497,13 @@ def apply_status(
         status=status,
         skill_id=skill_id,
     )
-    run_passives(state, "before_status_apply", context, candidates=[target])
+    # 味方を守るパッシブ（ベリアル「魔王の先見」）も判定できるよう、
+    # 対象本人だけでなく同じギルドの生存者を候補にする。
+    guards = [target, *(
+        unit for unit in state.living_units(target.guild_id)
+        if unit.battle_unit_id != target.battle_unit_id
+    )]
+    run_passives(state, "before_status_apply", context, candidates=guards)
 
     if context.cancelled:
         state.add_log(
@@ -387,6 +532,15 @@ def apply_status(
                 )
         return False
 
+    amplified = 0
+
+    # ヒュドラ「猛毒増幅」：毒が付与される時だけ、ダメージと継続ターンを増やす。
+    # 同じ毒に対して1つの強化効果は1回だけ適用する（BATTLE_RULES.md 7節）。
+    if status == STATUS_POISON:
+        damage, duration_turns, amplified = effects_module.amplify_poison(
+            state, target, damage=damage, turns=duration_turns
+        )
+
     params: dict[str, Any] = {"status": status}
     if damage:
         params["damage"] = damage
@@ -405,6 +559,12 @@ def apply_status(
     if applied is None:
         return False
 
+    detail = f"{label}（残{duration_turns}ターン）"
+    if status == STATUS_POISON and damage:
+        detail = f"{label} {damage}ダメージ×{duration_turns}ターン"
+    if amplified:
+        detail = f"{detail}／猛毒増幅"
+
     state.add_log(
         BattleEvent.STATUS_APPLY,
         actor_unit_id=source.battle_unit_id if source else None,
@@ -413,7 +573,7 @@ def apply_status(
         status=status,
         applied=True,
         remaining=duration_turns,
-        text=f"{label}（残{duration_turns}ターン）",
+        text=detail,
     )
     return True
 
@@ -435,7 +595,9 @@ def _apply_single_effect(
     value = int(effect.value or 0)
 
     if effect_type == EFFECT_DAMAGE:
-        can_critical = bool(effect.params.get("can_critical", True))
+        # スキル本文の固定ダメージは「スキルダメージ」。クリティカルも
+        # 攻撃ダメージ軽減も受けない（BATTLE_RULES.md 3節）。
+        damage_kind = str(effect.params.get("damage_kind", "skill"))
         for target in targets:
             if not target.alive:
                 continue
@@ -444,9 +606,9 @@ def _apply_single_effect(
                 owner,
                 target,
                 value,
-                attack_type="skill",
+                attack_type=damage_kind,
                 skill_id=skill.skill_id,
-                can_critical=can_critical,
+                can_critical=damage_kind in engine.ATTACK_DAMAGE_TYPES,
                 context=context,
             )
         return
@@ -529,6 +691,19 @@ def _apply_single_effect(
                 )
         return
 
+    if effect_type == EFFECT_CLEANSE_DEBUFF:
+        for target in targets:
+            removed = effects_module.remove_debuffs(state, target)
+            if removed:
+                state.add_log(
+                    BattleEvent.EFFECT,
+                    actor_unit_id=owner.battle_unit_id,
+                    target_unit_id=target.battle_unit_id,
+                    skill_id=skill.skill_id,
+                    text=f"デバフ{removed}件を解除",
+                )
+        return
+
     if effect_type == EFFECT_STATUS:
         status = str(effect.params.get("status", ""))
         for target in targets:
@@ -599,6 +774,10 @@ def _apply_single_effect(
         EFFECT_STATUS_IMMUNE,
         EFFECT_ACTIVE_LOCK,
         EFFECT_TAUNT,
+        EFFECT_SPEED_MODIFIER,
+        EFFECT_ATTACK_DAMAGE_REDUCTION,
+        EFFECT_HEAL_BLOCK,
+        EFFECT_POISON_AMPLIFY,
     }:
         for target in targets:
             params = dict(effect.params)
@@ -658,6 +837,24 @@ def _effect_log_text(effect_type: str, effect: SkillEffect) -> str:
     if effect_type == EFFECT_TAUNT:
         return "攻撃対象を固定"
 
+    if effect_type == EFFECT_SPEED_MODIFIER:
+        text = f"SPD{value:+d}"
+        if effect.duration_turns:
+            text = f"{text}（残{effect.duration_turns}ターン）"
+        return text
+
+    if effect_type == EFFECT_ATTACK_DAMAGE_REDUCTION:
+        return f"攻撃ダメージ-{abs(value)}"
+
+    if effect_type == EFFECT_HEAL_BLOCK:
+        text = "回復阻害"
+        if effect.duration_turns:
+            text = f"{text}（残{effect.duration_turns}ターン）"
+        return text
+
+    if effect_type == EFFECT_POISON_AMPLIFY:
+        return "猛毒増幅"
+
     return effect_type
 
 
@@ -667,12 +864,19 @@ def apply_skill_effects(
     skill: Skill,
     context: EventContext,
     selections: dict[str, Any] | None = None,
+    *,
+    trigger: str | None = None,
 ) -> None:
-    """スキルの全効果を定義順に適用する。"""
+    """スキルの効果を定義順に適用する。
+
+    ``trigger`` を渡した場合、そのタイミング向けの効果だけを適用します
+    （複数のタイミングを持つパッシブ用）。
+    """
 
     selections = selections or {}
+    targets = skill.effects if trigger is None else skill.effects_for(trigger)
 
-    for effect in skill.effects:
+    for effect in targets:
         if effect.chance is not None:
             if not _engine().roll_permille(state, effect.chance):
                 continue
@@ -718,7 +922,7 @@ def run_passives(
                 continue
 
         for skill in master.passive_skills_of(unit.familiar_id):
-            if skill.trigger != trigger:
+            if trigger not in skill.triggers:
                 continue
 
             entries.append(
@@ -751,6 +955,7 @@ def run_passives(
         unit.passive_uses[skill.skill_id] = (
             int(unit.passive_uses.get(skill.skill_id, 0)) + 1
         )
+        _mark_once_per_round(state, unit, skill)
 
         state.add_log(
             BattleEvent.PASSIVE,
@@ -759,7 +964,20 @@ def run_passives(
             skill_name=skill.name,
         )
 
-        apply_skill_effects(state, unit, skill, context)
+        apply_skill_effects(state, unit, skill, context, trigger=trigger)
+
+
+def _mark_once_per_round(
+    state: BattleState, unit: BattleUnit, skill: Skill
+) -> None:
+    """``once_per_round`` 条件を持つスキルの発動をラウンド単位で記録する。"""
+
+    for condition in skill.conditions:
+        if condition.get("type") != "once_per_round":
+            continue
+
+        key = f"once_per_round:{condition.get('key', 'default')}"
+        unit.state_flags[key] = state.current_round
 
 
 def register_always_passives(state: BattleState) -> None:

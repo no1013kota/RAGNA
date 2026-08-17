@@ -5,7 +5,7 @@ RAGNA Onlineの使い魔サムネイル画像を置く場所です。
 ## 置き方
 
 - ファイル名は `<使い魔ID>.png`（例：`loki.png`、`yuki_onna.png`）。
-  使い魔IDは [使い魔マスターデータ](../../docs/FAMILIAR_MASTER.md) の「ID」と
+  使い魔IDは [戦闘ルール・使い魔データ](../../docs/BATTLE_RULES.md) の「ID」と
   `data/master/familiars.json` の `familiar_id` に一致させます。
 - 正式画像がない個体には、共通の仮画像 `default.png` を表示します。
   `default.png` も無い場合、Embedはサムネイルなしで表示されます。

@@ -511,6 +511,115 @@ def draw_gacha(
 
 
 # ==================================================
+# コンプリート報酬（BATTLE_RULES.md 11節）
+# ==================================================
+def obtained_familiar_ids(user_id: int) -> set[str]:
+    """これまでに1度でも入手した使い魔の種類を返す。
+
+    売却・合成で手放した個体も「入手した」と数えます（行は状態を残して
+    保存しているため）。
+    """
+
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT familiar_id
+            FROM player_familiars
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+
+    return {str(row[0]) for row in rows}
+
+
+def grant_complete_reward(
+    user_id: int,
+    *,
+    reward_familiar_id: str,
+    required_familiar_ids: list[str],
+    initial_level: int = 1,
+) -> dict[str, Any]:
+    """必要な使い魔をすべて入手済みなら、報酬の使い魔を1体付与する。
+
+    既に報酬を持っている場合は何もしません。付与した場合だけ
+    ``granted`` が真になります。
+    """
+
+    now = _now()
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            rows = conn.execute(
+                """
+                SELECT DISTINCT familiar_id
+                FROM player_familiars
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchall()
+            obtained = {str(row["familiar_id"]) for row in rows}
+
+            if reward_familiar_id in obtained:
+                conn.rollback()
+                return {"ok": True, "granted": False, "error": None}
+
+            missing = [
+                familiar_id
+                for familiar_id in required_familiar_ids
+                if familiar_id not in obtained
+            ]
+            if missing:
+                conn.rollback()
+                return {
+                    "ok": True,
+                    "granted": False,
+                    "error": None,
+                    "missing": len(missing),
+                }
+
+            cursor = conn.execute(
+                """
+                INSERT INTO player_familiars
+                    (user_id, familiar_id, level, status, obtained_at, updated_at)
+                VALUES
+                    (?, ?, ?, 'owned', ?, ?)
+                """,
+                (user_id, reward_familiar_id, initial_level, now, now),
+            )
+            instance_id = int(cursor.lastrowid)
+
+            conn.execute(
+                """
+                INSERT INTO familiar_transactions
+                    (user_id, type, instance_id, familiar_id, level,
+                     coin_amount, material_instance_id, note, created_at)
+                VALUES
+                    (?, 'gacha', ?, ?, ?, 0, NULL, 'コンプリート報酬', ?)
+                """,
+                (user_id, instance_id, reward_familiar_id, initial_level, now),
+            )
+
+    logger.info(
+        "コンプリート報酬を付与しました: user_id=%s familiar_id=%s",
+        user_id,
+        reward_familiar_id,
+    )
+    return {
+        "ok": True,
+        "granted": True,
+        "error": None,
+        "instance_id": instance_id,
+        "familiar_id": reward_familiar_id,
+        "level": initial_level,
+    }
+
+
+# ==================================================
 # 合成
 # ==================================================
 def count_fusable_materials(
@@ -796,6 +905,8 @@ def sell_familiars(
 
 __all__ = [
     "count_fusable_materials",
+    "grant_complete_reward",
+    "obtained_familiar_ids",
     "count_owned_familiars",
     "draw_gacha",
     "fuse_familiar",

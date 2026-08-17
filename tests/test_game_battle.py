@@ -15,13 +15,15 @@ from game.models import (
     ACTION_ATTACK,
     BATTLE_STATUS_FINISHED,
     EFFECT_ATK_MODIFIER,
+    EFFECT_HEAL_BLOCK,
+    EFFECT_SPEED_MODIFIER,
     RESULT_ABORTED,
     RESULT_DRAW,
     RESULT_GUILD_A,
     RESULT_GUILD_B,
-    STATUS_CHARM,
-    STATUS_PETRIFY,
+    STATUS_ACTIVE_LOCK,
     STATUS_POISON,
+    STATUS_STUN,
     BattleAction,
     BattleState,
     BattleUnit,
@@ -83,6 +85,7 @@ def build_state(
                 base_atk=stats.atk,
                 current_atk=stats.atk,
                 speed=stats.speed,
+                base_speed=stats.speed,
                 cost=familiar.cost,
                 slot=slot,
                 gender=familiar.gender,
@@ -176,18 +179,33 @@ class NormalAttackTests(unittest.TestCase):
 
     def test_critical_is_one_and_a_half_times_rounded_half_up(self) -> None:
         state = build_state(
-            [("cerberus", 0)], [("behemoth", 0)], rng=AlwaysCriticalRandom()
+            [("garm", 1)], [("behemoth", 1)], rng=AlwaysCriticalRandom()
         )
         battle_engine.start_battle(state)
 
-        attacker = unit_of(state, "cerberus", GUILD_A)  # ATK 9
+        attacker = unit_of(state, "garm", GUILD_A)  # ATK 9
         target = unit_of(state, "behemoth", GUILD_B)
         before = target.current_hp
 
         battle_engine.perform_attack(state, attacker, target)
 
-        # 9 × 1.5 = 13.5 → 14（18.2節の例）
+        # 9 × 1.5 = 13.5 → 14（BATTLE_RULES.md 4節）
         self.assertEqual(before - target.current_hp, 14)
+
+    def test_critical_is_applied_before_damage_reduction(self) -> None:
+        # 4節の例：ATK10のクリティカル15 → 攻撃ダメージ-2 → 13
+        state = build_state(
+            [("cyclops", 1)], [("surtr", 1)], rng=AlwaysCriticalRandom()
+        )
+        battle_engine.start_battle(state)
+
+        attacker = unit_of(state, "cyclops", GUILD_A)
+        target = unit_of(state, "surtr", GUILD_B)
+        before = target.current_hp
+
+        battle_engine.perform_attack(state, attacker, target)
+
+        self.assertEqual(before - target.current_hp, 13)
 
     def test_zero_atk_deals_zero_damage_even_on_critical(self) -> None:
         state = build_state(
@@ -284,7 +302,7 @@ class EffectTests(unittest.TestCase):
 
 
 # ==================================================
-# 状態異常（20節・21節）
+# 状態異常・デバフ・保護効果（BATTLE_RULES.md 8節）
 # ==================================================
 class StatusTests(unittest.TestCase):
     def test_poison_hits_at_the_owners_turn_end_and_expires(self) -> None:
@@ -366,531 +384,1007 @@ class StatusTests(unittest.TestCase):
         battle_engine._finish_turn(state, target, advance=False)
 
         self.assertEqual(target.current_hp, before - 2)
-
-    def test_charm_blocks_the_next_action_without_using_guild_time(self) -> None:
-        state = build_state([("chimera", 0)], [("griffin", 0), ("garm", 0)])
+    def test_stun_blocks_the_next_action_without_using_guild_time(self) -> None:
+        state = build_state([("garm", 1)], [("medusa", 1)])
         battle_engine.start_battle(state)
 
-        attacker = unit_of(state, "chimera", GUILD_A)
-        target = unit_of(state, "griffin", GUILD_B)
+        target = unit_of(state, "garm", GUILD_A)
         skill_engine.apply_status(
-            state, attacker, target, STATUS_CHARM,
-            duration_turns=1, skill_id="test_charm",
+            state, None, target, STATUS_STUN, duration_turns=1
         )
 
-        blocked, reason = effects.is_action_blocked(state, target)
-        self.assertTrue(blocked)
-        self.assertEqual(reason, STATUS_CHARM)
+        before = state.remaining_seconds[GUILD_A]
+        force_turn(state, target)
+        battle_engine.auto_action(state, elapsed_seconds=0)
 
-        before_time = state.remaining_seconds[GUILD_B]
-        attack(state, attacker, unit_of(state, "garm", GUILD_B))
+        self.assertEqual(state.remaining_seconds[GUILD_A], before)
+        self.assertFalse(effects.has_status(state, target, STATUS_STUN))
 
-        # 行動不能の自動スキップでは持ち時間を消費しない（15節・22節）
-        self.assertEqual(state.remaining_seconds[GUILD_B], before_time)
-        # スキップも行動終了として扱われ、状態異常は解除される（20節）
-        self.assertFalse(effects.has_status(state, target, STATUS_CHARM))
-
-    def test_status_immunity_blocks_new_statuses(self) -> None:
-        state = build_state([("astaroth", 0), ("garm", 0)], [("medusa", 0)])
+    def test_active_lock_only_blocks_active_skills(self) -> None:
+        state = build_state([("ifrit", 1)], [("fenrir", 1)])
         battle_engine.start_battle(state)
 
-        astaroth = unit_of(state, "astaroth", GUILD_A)
+        caster = unit_of(state, "fenrir", GUILD_B)
+        target = unit_of(state, "ifrit", GUILD_A)
+
+        use_skill(state, caster, "fenrir_active", {"main": [target.battle_unit_id]})
+
+        self.assertTrue(effects.is_active_locked(state, target))
+        self.assertTrue(effects.has_status(state, target, STATUS_ACTIVE_LOCK))
+
+        blocked, _ = effects.is_action_blocked(state, target)
+        self.assertFalse(blocked, "ACTIVE使用不能でも通常攻撃はできる")
+
+        with self.assertRaises(Exception):
+            use_skill(
+                state, target, "ifrit_active", {"main": [caster.battle_unit_id]}
+            )
+
+    def test_status_immunity_blocks_new_statuses_only(self) -> None:
+        state = build_state([("lucifer", 1), ("garm", 1)], [("medusa", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "lucifer", GUILD_A)
         ally = unit_of(state, "garm", GUILD_A)
-        medusa = unit_of(state, "medusa", GUILD_B)
 
-        skill_engine.apply_status(
-            state, medusa, ally, STATUS_POISON,
-            duration_turns=2, damage=2, skill_id="test_poison",
-        )
-        use_skill(state, astaroth, "astaroth_active",
-                  {"main": (ally.battle_unit_id,)})
+        use_skill(state, caster, "lucifer_active", {"main": [ally.battle_unit_id]})
+        self.assertTrue(effects.is_status_immune(state, ally))
 
-        # 解除されたうえで、新たな状態異常も受けない
-        self.assertFalse(effects.has_status(state, ally, STATUS_POISON))
-        applied = skill_engine.apply_status(
-            state, medusa, ally, STATUS_PETRIFY,
-            duration_turns=1, skill_id="medusa_active",
-        )
-        self.assertFalse(applied)
-
-    def test_only_status_effects_are_cleansed(self) -> None:
-        state = build_state([("astaroth", 0), ("garm", 0)], [("kyubi", 0)])
-        battle_engine.start_battle(state)
-
-        ally = unit_of(state, "garm", GUILD_A)
-        kyubi = unit_of(state, "kyubi", GUILD_B)
-        astaroth = unit_of(state, "astaroth", GUILD_A)
-
-        use_skill(state, kyubi, "kyubi_active", {"main": (ally.battle_unit_id,)})
-        self.assertEqual(effects.compute_atk(state, ally), ally.base_atk - 4)
-
-        use_skill(state, astaroth, "astaroth_active",
-                  {"main": (ally.battle_unit_id,)})
-
-        # 20節「能力値低下は状態異常に含めません」
-        self.assertEqual(effects.compute_atk(state, ally), ally.base_atk - 4)
-
-
-# ==================================================
-# 戦闘不能・蘇生（18.5節）
-# ==================================================
-class DefeatTests(unittest.TestCase):
-    def test_dullahan_survives_lethal_damage_once(self) -> None:
-        state = build_state([("cyclops", 0)], [("dullahan", 0)])
-        battle_engine.start_battle(state)
-
-        attacker = unit_of(state, "cyclops", GUILD_A)
-        dullahan = unit_of(state, "dullahan", GUILD_B)
-        dullahan.current_hp = 3
-
-        battle_engine.perform_attack(state, attacker, dullahan)
-        self.assertTrue(dullahan.alive)
-        self.assertEqual(dullahan.current_hp, 1)
-
-        # 1バトル1回だけなので2度目は耐えない
-        battle_engine.perform_attack(state, attacker, dullahan)
-        self.assertFalse(dullahan.alive)
-
-    def test_instant_defeat_ignores_damage_based_survival(self) -> None:
-        # 18.5節「ダメージを与えない即時戦闘不能では発動しません」
-        state = build_state([("hel", 0)], [("dullahan", 0)])
-        battle_engine.start_battle(state)
-
-        hel = unit_of(state, "hel", GUILD_A)
-        dullahan = unit_of(state, "dullahan", GUILD_B)
-
-        use_skill(state, hel, "hel_active", {"main": (dullahan.battle_unit_id,)})
-        self.assertFalse(dullahan.alive)
-        self.assertEqual(dullahan.current_hp, 0)
-
-    def test_phoenix_revives_itself_once(self) -> None:
-        state = build_state([("cyclops", 0)], [("phoenix", 0), ("garm", 0)])
-        battle_engine.start_battle(state)
-
-        attacker = unit_of(state, "cyclops", GUILD_A)
-        phoenix = unit_of(state, "phoenix", GUILD_B)
-        phoenix.current_hp = 2
-
-        battle_engine.perform_attack(state, attacker, phoenix)
-        self.assertTrue(phoenix.alive)
-        self.assertEqual(phoenix.current_hp, 14)
-
-        phoenix.current_hp = 2
-        battle_engine.perform_attack(state, attacker, phoenix)
-        self.assertFalse(phoenix.alive)
-
-    def test_hel_revives_the_first_fallen_ally_but_not_itself(self) -> None:
-        state = build_state([("cyclops", 0)], [("hel", 0), ("garm", 0)])
-        battle_engine.start_battle(state)
-
-        attacker = unit_of(state, "cyclops", GUILD_A)
-        hel = unit_of(state, "hel", GUILD_B)
-        garm = unit_of(state, "garm", GUILD_B)
-
-        garm.current_hp = 2
-        battle_engine.perform_attack(state, attacker, garm)
-        self.assertTrue(garm.alive)
-        self.assertEqual(garm.current_hp, 10)
-
-        hel.current_hp = 2
-        battle_engine.perform_attack(state, attacker, hel)
-        self.assertFalse(hel.alive)
-
-    def test_effects_survive_defeat_and_revive(self) -> None:
-        state = build_state([("cyclops", 0), ("kyubi", 0)], [("phoenix", 0), ("garm", 0)])
-        battle_engine.start_battle(state)
-
-        kyubi = unit_of(state, "kyubi", GUILD_A)
-        attacker = unit_of(state, "cyclops", GUILD_A)
-        phoenix = unit_of(state, "phoenix", GUILD_B)
-
-        use_skill(state, kyubi, "kyubi_active", {"main": (phoenix.battle_unit_id,)})
-        phoenix.current_hp = 2
-        battle_engine.perform_attack(state, attacker, phoenix)
-
-        self.assertTrue(phoenix.alive)
-        # 18.5節「残っているバフ・デバフを引き継ぎます」
-        self.assertEqual(effects.compute_atk(state, phoenix), phoenix.base_atk - 4)
-
-
-# ==================================================
-# パッシブ（19.3節）
-# ==================================================
-class PassiveTests(unittest.TestCase):
-    def test_fenrir_boosts_only_the_first_attack(self) -> None:
-        state = build_state([("fenrir", 0)], [("behemoth", 0)])
-        battle_engine.start_battle(state)
-
-        fenrir = unit_of(state, "fenrir", GUILD_A)
-        target = unit_of(state, "behemoth", GUILD_B)
-
-        before = target.current_hp
-        battle_engine.perform_attack(state, fenrir, target)
-        self.assertEqual(before - target.current_hp, fenrir.base_atk + 5)
-
-        before = target.current_hp
-        battle_engine.perform_attack(state, fenrir, target)
-        self.assertEqual(before - target.current_hp, fenrir.base_atk)
-
-    def test_surtr_gains_atk_below_half_hp(self) -> None:
-        state = build_state([("surtr", 0)], [("behemoth", 0)])
-        battle_engine.start_battle(state)
-
-        surtr = unit_of(state, "surtr", GUILD_A)
-        self.assertEqual(effects.compute_atk(state, surtr), surtr.base_atk)
-
-        surtr.current_hp = surtr.max_hp // 2
-        self.assertEqual(effects.compute_atk(state, surtr), surtr.base_atk + 3)
-
-        surtr.current_hp = surtr.max_hp
-        self.assertEqual(effects.compute_atk(state, surtr), surtr.base_atk)
-
-    def test_paimon_only_gains_atk_during_round_one(self) -> None:
-        state = build_state([("paimon", 0)], [("behemoth", 0)])
-        battle_engine.start_battle(state)
-
-        paimon = unit_of(state, "paimon", GUILD_A)
-        self.assertEqual(effects.compute_atk(state, paimon), paimon.base_atk + 2)
-
-        state.current_round = 2
-        self.assertEqual(effects.compute_atk(state, paimon), paimon.base_atk)
-
-    def test_jormungandr_debuff_expires_at_the_end_of_round_one(self) -> None:
-        state = build_state([("jormungandr", 0)], [("garm", 0)])
-        battle_engine.start_battle(state)
-
-        target = unit_of(state, "garm", GUILD_B)
-        self.assertEqual(effects.compute_atk(state, target), target.base_atk - 1)
-
-        effects.expire_round_effects(state)
-        self.assertEqual(effects.compute_atk(state, target), target.base_atk)
-
-    def test_loki_reflects_a_status_back_to_its_source(self) -> None:
-        state = build_state([("loki", 0)], [("medusa", 0)])
-        battle_engine.start_battle(state)
-
-        loki = unit_of(state, "loki", GUILD_A)
-        medusa = unit_of(state, "medusa", GUILD_B)
-
-        use_skill(state, medusa, "medusa_active", {"main": (loki.battle_unit_id,)})
-
-        self.assertFalse(effects.has_status(state, loki, STATUS_PETRIFY))
-        self.assertTrue(effects.has_status(state, medusa, STATUS_PETRIFY))
-
-    def test_sphinx_nullifies_only_the_first_status(self) -> None:
-        state = build_state([("sphinx", 0)], [("medusa", 0)])
-        battle_engine.start_battle(state)
-
-        sphinx = unit_of(state, "sphinx", GUILD_A)
-        medusa = unit_of(state, "medusa", GUILD_B)
-
-        first = skill_engine.apply_status(
-            state, medusa, sphinx, STATUS_PETRIFY,
-            duration_turns=1, skill_id="medusa_active",
-        )
-        self.assertFalse(first)
-
-        second = skill_engine.apply_status(
-            state, medusa, sphinx, STATUS_POISON,
-            duration_turns=1, damage=2, skill_id="beelzebub_passive",
-        )
-        self.assertTrue(second)
-
-    def test_hydra_heals_at_the_end_of_its_own_turn(self) -> None:
-        state = build_state([("hydra", 0)], [("garm", 0)])
-        battle_engine.start_battle(state)
-
-        hydra = unit_of(state, "hydra", GUILD_A)
-        garm = unit_of(state, "garm", GUILD_B)
-        hydra.current_hp = 10
-
-        attack(state, hydra, garm)
-        self.assertEqual(hydra.current_hp, 13)
-
-    def test_nidhogg_debuff_does_not_stack_on_the_same_target(self) -> None:
-        state = build_state([("nidhogg", 0)], [("behemoth", 0)])
-        battle_engine.start_battle(state)
-
-        nidhogg = unit_of(state, "nidhogg", GUILD_A)
-        target = unit_of(state, "behemoth", GUILD_B)
-
-        battle_engine.perform_attack(state, nidhogg, target)
-        battle_engine.perform_attack(state, nidhogg, target)
-
-        self.assertEqual(effects.compute_atk(state, target), target.base_atk - 1)
-
-    def test_belphegor_weakens_the_attackers_next_attack(self) -> None:
-        # 「通常攻撃を受けるたび、攻撃した敵の次の攻撃のみATK-2」
-        # 効果を付けた攻撃自身では消費されず、次の攻撃に乗ること。
-        state = build_state([("cyclops", 0)], [("belphegor", 0)])
-        battle_engine.start_battle(state)
-
-        attacker = unit_of(state, "cyclops", GUILD_A)
-        belphegor = unit_of(state, "belphegor", GUILD_B)
-
-        before = belphegor.current_hp
-        battle_engine.perform_attack(state, attacker, belphegor)
-        self.assertEqual(before - belphegor.current_hp, attacker.base_atk)
-
-        before = belphegor.current_hp
-        battle_engine.perform_attack(state, attacker, belphegor)
-        self.assertEqual(before - belphegor.current_hp, attacker.base_atk - 2)
-
-        # 攻撃を受けるたび付与し直すため、以降も弱体化が続く
-        before = belphegor.current_hp
-        battle_engine.perform_attack(state, attacker, belphegor)
-        self.assertEqual(before - belphegor.current_hp, attacker.base_atk - 2)
-
-    def test_next_attack_buff_is_not_stacked_by_repeated_attacks(self) -> None:
-        # 「同一対象には重複しない」ので、ATK-2が二重に乗ることはない
-        state = build_state([("cyclops", 0)], [("belphegor", 0)])
-        battle_engine.start_battle(state)
-
-        attacker = unit_of(state, "cyclops", GUILD_A)
-        belphegor = unit_of(state, "belphegor", GUILD_B)
-
-        for _ in range(4):
-            battle_engine.perform_attack(state, attacker, belphegor)
-
-        self.assertGreaterEqual(
-            effects.compute_atk(state, attacker, include_attack_modifiers=True),
-            attacker.base_atk - 2,
-        )
-
-    def test_lilith_nullifies_the_first_attack_from_the_opposite_sex(self) -> None:
-        # サイクロプス（male）→ リリス（female）は異性なので発動する（21節）
-        state = build_state([("cyclops", 0)], [("lilith", 0)])
-        battle_engine.start_battle(state)
-
-        attacker = unit_of(state, "cyclops", GUILD_A)
-        lilith = unit_of(state, "lilith", GUILD_B)
-
-        before = lilith.current_hp
-        battle_engine.perform_attack(state, attacker, lilith)
-        self.assertEqual(lilith.current_hp, before, "最初の1回はダメージ0")
-
-        before = lilith.current_hp
-        battle_engine.perform_attack(state, attacker, lilith)
-        self.assertEqual(before - lilith.current_hp, attacker.base_atk)
-
-    def test_same_sex_attacks_are_not_nullified(self) -> None:
-        # メドゥーサ（female）→ リリス（female）は同性なので発動しない
-        state = build_state([("medusa", 0)], [("lilith", 0)])
-        battle_engine.start_battle(state)
-
-        attacker = unit_of(state, "medusa", GUILD_A)
-        lilith = unit_of(state, "lilith", GUILD_B)
-
-        before = lilith.current_hp
-        battle_engine.perform_attack(state, attacker, lilith)
-        self.assertEqual(before - lilith.current_hp, attacker.base_atk)
-
-    def test_genderless_familiars_are_never_opposite(self) -> None:
-        # ペガサス（male）→ フェニックス（none）は異性にならない（21節）
-        state = build_state([("pegasus", 0)], [("phoenix", 0)])
-        battle_engine.start_battle(state)
-
-        pegasus = unit_of(state, "pegasus", GUILD_A)
-        phoenix = unit_of(state, "phoenix", GUILD_B)
-
-        self.assertEqual(phoenix.gender, "none")
         self.assertFalse(
-            skill_engine.selectable_targets(
-                state,
-                pegasus,
-                MASTER.get_skill("siren_active").targets[0],
+            skill_engine.apply_status(
+                state, None, ally, STATUS_STUN, duration_turns=1
             )
         )
 
-
-# ==================================================
-# アクティブスキル（19.2節）
-# ==================================================
-class ActiveSkillTests(unittest.TestCase):
-    def test_active_skill_can_be_used_once_per_battle(self) -> None:
-        state = build_state([("ifrit", 0)], [("behemoth", 0)])
-        battle_engine.start_battle(state)
-
-        ifrit = unit_of(state, "ifrit", GUILD_A)
-        target = unit_of(state, "behemoth", GUILD_B)
-
-        use_skill(state, ifrit, "ifrit_active", {"main": (target.battle_unit_id,)})
-        self.assertEqual(ifrit.active_skill_uses["ifrit_active"], 1)
-        self.assertEqual(battle_engine.available_skills(state, ifrit), [])
-
-    def test_fixed_damage_skill_deals_its_value(self) -> None:
-        state = build_state([("ifrit", 0)], [("behemoth", 0)])
-        battle_engine.start_battle(state)
-
-        ifrit = unit_of(state, "ifrit", GUILD_A)
-        target = unit_of(state, "behemoth", GUILD_B)
-        before = target.current_hp
-
-        use_skill(state, ifrit, "ifrit_active", {"main": (target.battle_unit_id,)})
-        self.assertEqual(before - target.current_hp, 12)
-
-    def test_area_skill_hits_every_living_enemy(self) -> None:
-        state = build_state(
-            [("abaddon", 0)], [("behemoth", 0), ("minotaur", 0), ("garm", 0)]
-        )
-        battle_engine.start_battle(state)
-
-        abaddon = unit_of(state, "abaddon", GUILD_A)
-        targets = state.living_units(GUILD_B)
-        before = {unit.battle_unit_id: unit.current_hp for unit in targets}
-
-        use_skill(state, abaddon, "abaddon_active")
-
-        for unit in targets:
-            self.assertEqual(before[unit.battle_unit_id] - unit.current_hp, 5)
-
-    def test_two_attacks_can_target_different_enemies(self) -> None:
-        state = build_state([("surtr", 0)], [("behemoth", 0), ("minotaur", 0)])
-        battle_engine.start_battle(state)
-
-        surtr = unit_of(state, "surtr", GUILD_A)
-        first = unit_of(state, "behemoth", GUILD_B)
-        second = unit_of(state, "minotaur", GUILD_B)
-        before = (first.current_hp, second.current_hp)
-
-        use_skill(
-            state, surtr, "surtr_active",
-            {"main": (first.battle_unit_id, second.battle_unit_id)},
-        )
-
-        self.assertEqual(before[0] - first.current_hp, surtr.base_atk)
-        self.assertEqual(before[1] - second.current_hp, surtr.base_atk)
-
-    def test_second_attack_is_cancelled_when_the_only_target_falls(self) -> None:
-        # 18.4節「1回目の攻撃で対象が戦闘不能になった場合、2回目の攻撃は無効」
-        state = build_state([("surtr", 0)], [("behemoth", 0), ("minotaur", 0)])
-        battle_engine.start_battle(state)
-
-        surtr = unit_of(state, "surtr", GUILD_A)
-        weak = unit_of(state, "behemoth", GUILD_B)
-        other = unit_of(state, "minotaur", GUILD_B)
-        weak.current_hp = 1
-        other_before = other.current_hp
-
-        use_skill(
-            state, surtr, "surtr_active",
-            {"main": (weak.battle_unit_id, weak.battle_unit_id)},
-        )
-
-        self.assertFalse(weak.alive)
-        self.assertEqual(other.current_hp, other_before)
-        # 戦闘不能にした敵1体につきHP10回復
-        self.assertEqual(surtr.current_hp, surtr.max_hp)
-
-    def test_taunt_forces_the_next_normal_attack_target(self) -> None:
-        state = build_state([("kraken", 0), ("garm", 0)], [("cyclops", 0)])
-        battle_engine.start_battle(state)
-
-        kraken = unit_of(state, "kraken", GUILD_A)
-        cyclops = unit_of(state, "cyclops", GUILD_B)
-
-        use_skill(state, kraken, "kraken_active", {"main": (cyclops.battle_unit_id,)})
-
-        choices = battle_engine.attack_target_choices(state, cyclops)
-        self.assertEqual([unit.battle_unit_id for unit in choices],
-                         [kraken.battle_unit_id])
-
-    def test_active_lock_prevents_using_active_skills(self) -> None:
-        state = build_state([("fenrir", 0)], [("ifrit", 0)])
-        battle_engine.start_battle(state)
-
-        fenrir = unit_of(state, "fenrir", GUILD_A)
-        ifrit = unit_of(state, "ifrit", GUILD_B)
-
-        use_skill(state, fenrir, "fenrir_active", {"main": (ifrit.battle_unit_id,)})
-
-        self.assertTrue(effects.is_active_locked(state, ifrit))
-        self.assertEqual(battle_engine.available_skills(state, ifrit), [])
-
-    def test_opposite_gender_skill_is_unusable_while_gender_is_unset(self) -> None:
-        state = build_state([("asmodeus", 0)], [("garm", 0)])
-        battle_engine.start_battle(state)
-
-        asmodeus = unit_of(state, "asmodeus", GUILD_A)
-        skill = MASTER.get_skill("asmodeus_active")
-
-        self.assertFalse(skill_engine.is_skill_usable(state, asmodeus, skill))
-
-    def test_atk_swap_exchanges_current_atk(self) -> None:
-        state = build_state([("loki", 0), ("cyclops", 0)], [("behemoth", 0)])
-        battle_engine.start_battle(state)
-
-        loki = unit_of(state, "loki", GUILD_A)
-        ally = unit_of(state, "cyclops", GUILD_A)  # ATK 10
-        enemy = unit_of(state, "behemoth", GUILD_B)  # ATK 6
-
-        use_skill(
-            state, loki, "loki_active",
-            {"enemy": (enemy.battle_unit_id,), "ally": (ally.battle_unit_id,)},
-        )
-
-        self.assertEqual(effects.compute_atk(state, enemy), 10)
-        self.assertEqual(effects.compute_atk(state, ally), 6)
-
-    def test_atk_swap_does_not_double_count_existing_modifiers(self) -> None:
-        # 34.4節：交換時点の現在ATKを基準値とし、既存の補正を二重に足さない
-        state = build_state([("loki", 0), ("cyclops", 0)], [("behemoth", 0)])
-        battle_engine.start_battle(state)
-
-        loki = unit_of(state, "loki", GUILD_A)
-        ally = unit_of(state, "cyclops", GUILD_A)  # ATK 10
-        enemy = unit_of(state, "behemoth", GUILD_B)  # ATK 6
-
+        # 状態異常無効はATK低下を防がない（8節）
+        base = effects.compute_atk(state, ally)
         effects.apply_effect(
-            state, ally, effect_type=EFFECT_ATK_MODIFIER, value=-3,
+            state, ally, effect_type=EFFECT_ATK_MODIFIER, value=-2,
             duration_type="permanent", source_skill_id="test_debuff",
         )
-        self.assertEqual(effects.compute_atk(state, ally), 7)
+        self.assertEqual(effects.compute_atk(state, ally), base - 2)
 
-        use_skill(
-            state, loki, "loki_active",
-            {"enemy": (enemy.battle_unit_id,), "ally": (ally.battle_unit_id,)},
-        )
-
-        # 交換後は互いの「交換時点の現在ATK」になる
-        self.assertEqual(effects.compute_atk(state, ally), 6)
-        self.assertEqual(effects.compute_atk(state, enemy), 7)
-
-    def test_modifiers_after_the_swap_apply_to_the_swapped_value(self) -> None:
-        state = build_state([("loki", 0), ("cyclops", 0)], [("behemoth", 0)])
+    def test_cleanse_status_removes_statuses_but_keeps_debuffs(self) -> None:
+        state = build_state([("astaroth", 1), ("garm", 1)], [("medusa", 1)])
         battle_engine.start_battle(state)
 
-        loki = unit_of(state, "loki", GUILD_A)
-        ally = unit_of(state, "cyclops", GUILD_A)
-        enemy = unit_of(state, "behemoth", GUILD_B)
+        caster = unit_of(state, "astaroth", GUILD_A)
+        ally = unit_of(state, "garm", GUILD_A)
+        base = effects.compute_atk(state, ally)
 
-        use_skill(
-            state, loki, "loki_active",
-            {"enemy": (enemy.battle_unit_id,), "ally": (ally.battle_unit_id,)},
+        skill_engine.apply_status(state, None, ally, STATUS_STUN, duration_turns=2)
+        effects.apply_effect(
+            state, ally, effect_type=EFFECT_ATK_MODIFIER, value=-3,
+            duration_type="turns", duration_turns=3, source_skill_id="test_debuff",
         )
-        self.assertEqual(effects.compute_atk(state, ally), 6)
+
+        use_skill(state, caster, "astaroth_active")
+
+        self.assertFalse(effects.has_status(state, ally, STATUS_STUN))
+        self.assertEqual(effects.compute_atk(state, ally), base - 3)
+
+    def test_cleanse_debuff_removes_debuffs_but_keeps_statuses(self) -> None:
+        state = build_state([("satan", 1), ("garm", 1)], [("medusa", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "satan", GUILD_A)
+        ally = unit_of(state, "garm", GUILD_A)
+        base = effects.compute_atk(state, ally)
+
+        skill_engine.apply_status(state, None, ally, STATUS_STUN, duration_turns=2)
+        effects.apply_effect(
+            state, ally, effect_type=EFFECT_ATK_MODIFIER, value=-3,
+            duration_type="turns", duration_turns=3, source_skill_id="test_debuff",
+        )
+        effects.apply_effect(
+            state, ally, effect_type=EFFECT_SPEED_MODIFIER, value=-5,
+            duration_type="turns", duration_turns=2, source_skill_id="test_slow",
+        )
+
+        use_skill(state, caster, "satan_active")
+
+        self.assertTrue(effects.has_status(state, ally, STATUS_STUN))
+        self.assertEqual(effects.compute_atk(state, ally), base)
+        self.assertEqual(effects.compute_speed(state, ally), ally.base_speed)
+
+    def test_buffs_are_not_removed_by_cleanse(self) -> None:
+        state = build_state([("satan", 1), ("garm", 1)], [("medusa", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "satan", GUILD_A)
+        ally = unit_of(state, "garm", GUILD_A)
+        base = effects.compute_atk(state, ally)
 
         effects.apply_effect(
             state, ally, effect_type=EFFECT_ATK_MODIFIER, value=2,
             duration_type="permanent", source_skill_id="test_buff",
         )
-        self.assertEqual(effects.compute_atk(state, ally), 8)
 
-    def test_heal_never_exceeds_max_hp_and_skips_defeated_units(self) -> None:
-        state = build_state([("lucifer", 0), ("garm", 0)], [("cyclops", 0)])
+        use_skill(state, caster, "satan_active")
+        self.assertEqual(effects.compute_atk(state, ally), base + 2)
+
+    def test_poison_from_different_sources_stacks(self) -> None:
+        # 7節：異なる使い魔が付与した毒は別効果として重複する
+        state = build_state([("garm", 1)], [("beelzebub", 1), ("jormungandr", 1)])
         battle_engine.start_battle(state)
 
-        lucifer = unit_of(state, "lucifer", GUILD_A)
-        ally = unit_of(state, "garm", GUILD_A)
-        ally.current_hp = ally.max_hp - 2
+        target = unit_of(state, "garm", GUILD_A)
+        caster = unit_of(state, "jormungandr", GUILD_B)
+        use_skill(state, caster, "jormungandr_active")
 
-        use_skill(state, lucifer, "lucifer_active", {"main": (ally.battle_unit_id,)})
+        poisons = [
+            effect
+            for effect in effects.status_effects(state, target)
+            if effect.status_name == STATUS_POISON
+        ]
+        self.assertEqual(len(poisons), 2, poisons)
+        self.assertEqual(
+            sorted(int(effect.params["damage"]) for effect in poisons), [2, 3]
+        )
+
+    def test_hydra_amplifies_each_poison_once(self) -> None:
+        # 7節：ヨルムンガンド毒 2×2 → 3×3、ベルゼブブ毒 3×2 → 4×3
+        state = build_state(
+            [("garm", 1)], [("hydra", 1), ("beelzebub", 1), ("jormungandr", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        target = unit_of(state, "garm", GUILD_A)
+        caster = unit_of(state, "jormungandr", GUILD_B)
+        use_skill(state, caster, "jormungandr_active")
+
+        poisons = [
+            effect
+            for effect in effects.status_effects(state, target)
+            if effect.status_name == STATUS_POISON
+        ]
+        self.assertEqual(
+            sorted(
+                (int(effect.params["damage"]), int(effect.remaining))
+                for effect in poisons
+            ),
+            [(3, 3), (4, 3)],
+        )
+
+    def test_a_single_amplifier_applies_once_per_poison(self) -> None:
+        state = build_state([("garm", 1)], [("hydra", 1), ("beelzebub", 1)])
+        battle_engine.start_battle(state)
+
+        target = unit_of(state, "garm", GUILD_A)
+        poisons = [
+            effect
+            for effect in effects.status_effects(state, target)
+            if effect.status_name == STATUS_POISON
+        ]
+        self.assertEqual(len(poisons), 1)
+        self.assertEqual(int(poisons[0].params["damage"]), 4)
+        self.assertEqual(int(poisons[0].remaining), 3)
+
+    def test_heal_block_prevents_healing(self) -> None:
+        state = build_state([("fafnir", 1), ("garm", 1)], [("nidhogg", 1)])
+        battle_engine.start_battle(state)
+
+        healer = unit_of(state, "fafnir", GUILD_A)
+        target = unit_of(state, "garm", GUILD_A)
+        attacker = unit_of(state, "nidhogg", GUILD_B)
+
+        target.current_hp = 20
+        battle_engine.perform_attack(state, attacker, target)
+        self.assertTrue(effects.is_heal_blocked(state, target))
+
+        before = target.current_hp
+        battle_engine.heal_unit(state, healer, target, 20)
+        self.assertEqual(target.current_hp, before)
+
+    def test_repeating_the_same_skill_refreshes_instead_of_stacking(self) -> None:
+        # 7節：同じ使い魔が同じスキルを同じ対象へ再使用しても重複しない
+        state = build_state([("azazel", 1), ("garm", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "azazel", GUILD_A)
+        ally = unit_of(state, "garm", GUILD_A)
+        base = ally.base_atk
+
+        use_skill(state, caster, "azazel_active", {"main": [ally.battle_unit_id]})
+        self.assertEqual(effects.compute_atk(state, ally), base + 1)
+
+        applied = [
+            effect
+            for effect in state.unit_effects(ally.battle_unit_id)
+            if effect.source_skill_id == "azazel_active"
+        ]
+        applied[0].remaining = 1
+
+        use_skill(state, caster, "azazel_active", {"main": [ally.battle_unit_id]})
+
+        applied = [
+            effect
+            for effect in state.unit_effects(ally.battle_unit_id)
+            if effect.source_skill_id == "azazel_active"
+        ]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0].remaining, 2, "残りターンは長い方へ揃える")
+        self.assertEqual(effects.compute_atk(state, ally), base + 1)
+
+
+# ==================================================
+# 現在SPDと行動順（BATTLE_RULES.md 1節・7節）
+# ==================================================
+class SpeedTests(unittest.TestCase):
+    def test_speed_buff_and_debuff_add_up(self) -> None:
+        # 7節の例：基礎SPD84 + 12 - 20 = 76
+        state = build_state([("loki", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        loki = unit_of(state, "loki", GUILD_A)
+        self.assertEqual(loki.base_speed, 84)
+
+        effects.apply_effect(
+            state, loki, effect_type=EFFECT_SPEED_MODIFIER, value=12,
+            duration_type="turns", duration_turns=2, source_skill_id="test_up",
+        )
+        effects.apply_effect(
+            state, loki, effect_type=EFFECT_SPEED_MODIFIER, value=-20,
+            duration_type="turns", duration_turns=2, source_skill_id="test_down",
+        )
+
+        self.assertEqual(effects.compute_speed(state, loki), 76)
+        self.assertEqual(loki.speed, 76)
+
+    def test_speed_never_goes_below_zero(self) -> None:
+        state = build_state([("mandragora", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        unit = unit_of(state, "mandragora", GUILD_A)
+        effects.apply_effect(
+            state, unit, effect_type=EFFECT_SPEED_MODIFIER, value=-99,
+            duration_type="permanent", source_skill_id="test_down",
+        )
+        self.assertEqual(effects.compute_speed(state, unit), 0)
+
+    def test_no_two_familiars_share_a_base_speed(self) -> None:
+        # 1節「基礎SPDは原則として全使い魔で重複させない」
+        speeds = [familiar.speed for familiar in MASTER.familiars.values()]
+        self.assertEqual(len(speeds), len(set(speeds)))
+
+    def test_same_current_speed_puts_the_higher_base_speed_first(self) -> None:
+        state = build_state([("kyubi", 1)], [("pegasus", 1)])
+        battle_engine.start_battle(state)
+
+        kyubi = unit_of(state, "kyubi", GUILD_A)  # 基礎97
+        pegasus = unit_of(state, "pegasus", GUILD_B)  # 基礎98
+
+        effects.apply_effect(
+            state, pegasus, effect_type=EFFECT_SPEED_MODIFIER, value=-1,
+            duration_type="permanent", source_skill_id="test_down",
+        )
+        self.assertEqual(kyubi.speed, pegasus.speed)
+
+        order = battle_engine._order_units(state)
+        self.assertEqual(order[0], pegasus.battle_unit_id)
+
+    def test_pegasus_pushes_loki_ahead_of_fenrir(self) -> None:
+        state = build_state([("pegasus", 1), ("loki", 1)], [("fenrir", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "pegasus", GUILD_A)
+        loki = unit_of(state, "loki", GUILD_A)
+        fenrir = unit_of(state, "fenrir", GUILD_B)
+
+        use_skill(state, caster, "pegasus_active", {"main": [loki.battle_unit_id]})
+
+        self.assertEqual(loki.speed, 96)
+        self.assertGreater(loki.speed, fenrir.speed)
+
+    def test_finished_turns_are_not_resorted(self) -> None:
+        # 1節：行動済みは並び替えず、未行動だけを現在SPDで並び替える
+        state = build_state(
+            [("kyubi", 1), ("garm", 1)], [("griffin", 1), ("minotaur", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        kyubi = unit_of(state, "kyubi", GUILD_A)
+        griffin = unit_of(state, "griffin", GUILD_B)  # SPD89
+
+        self.assertEqual(state.turn_order[0], kyubi.battle_unit_id)
+        self.assertEqual(state.turn_order[1], griffin.battle_unit_id)
+
+        use_skill(state, kyubi, "kyubi_active", {"main": [griffin.battle_unit_id]})
+        battle_engine.auto_action(state, elapsed_seconds=0)
+
+        self.assertEqual(griffin.speed, 69)
+        self.assertEqual(state.turn_order[0], kyubi.battle_unit_id)
+        self.assertEqual(len(state.turn_order), len(set(state.turn_order)))
+
+
+# ==================================================
+# 戦闘不能・蘇生（BATTLE_RULES.md 5節）
+# ==================================================
+class DefeatTests(unittest.TestCase):
+    def test_dullahan_survives_lethal_attack_damage_once(self) -> None:
+        state = build_state([("dullahan", 1)], [("cyclops", 1)])
+        battle_engine.start_battle(state)
+
+        dullahan = unit_of(state, "dullahan", GUILD_A)
+        attacker = unit_of(state, "cyclops", GUILD_B)
+
+        dullahan.current_hp = 3
+        battle_engine.perform_attack(state, attacker, dullahan)
+
+        self.assertTrue(dullahan.alive)
+        self.assertEqual(dullahan.current_hp, 1)
+
+        battle_engine.perform_attack(state, attacker, dullahan)
+        self.assertFalse(dullahan.alive)
+
+    def test_dullahan_does_not_survive_skill_damage(self) -> None:
+        state = build_state([("dullahan", 1)], [("ifrit", 1)])
+        battle_engine.start_battle(state)
+
+        dullahan = unit_of(state, "dullahan", GUILD_A)
+        caster = unit_of(state, "ifrit", GUILD_B)
+
+        dullahan.current_hp = 3
+        use_skill(state, caster, "ifrit_active", {"main": [dullahan.battle_unit_id]})
+
+        self.assertFalse(dullahan.alive)
+
+    def test_instant_defeat_ignores_damage_based_survival(self) -> None:
+        state = build_state([("dullahan", 1)], [("hel", 1)])
+        battle_engine.start_battle(state)
+
+        dullahan = unit_of(state, "dullahan", GUILD_A)
+        caster = unit_of(state, "hel", GUILD_B)
+
+        use_skill(state, caster, "hel_active", {"main": [dullahan.battle_unit_id]})
+
+        self.assertFalse(dullahan.alive)
+
+    def test_hel_revives_the_first_fallen_ally(self) -> None:
+        state = build_state([("hel", 1), ("garm", 1)], [("cyclops", 1)])
+        battle_engine.start_battle(state)
+
+        ally = unit_of(state, "garm", GUILD_A)
+        attacker = unit_of(state, "cyclops", GUILD_B)
+
+        ally.current_hp = 1
+        battle_engine.perform_attack(state, attacker, ally)
+
+        self.assertTrue(ally.alive)
+        self.assertEqual(ally.current_hp, 10)
+
+    def test_banshee_adds_healing_on_revive(self) -> None:
+        # 13節：ヘルのHP10蘇生なら最終HP18で復帰する
+        state = build_state(
+            [("hel", 1), ("banshee", 1), ("garm", 1)], [("cyclops", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        ally = unit_of(state, "garm", GUILD_A)
+        attacker = unit_of(state, "cyclops", GUILD_B)
+
+        ally.current_hp = 1
+        battle_engine.perform_attack(state, attacker, ally)
+
+        self.assertTrue(ally.alive)
+        self.assertEqual(ally.current_hp, 18)
+
+    def test_phoenix_revives_a_defeated_ally(self) -> None:
+        state = build_state([("phoenix", 1), ("garm", 1)], [("cyclops", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "phoenix", GUILD_A)
+        ally = unit_of(state, "garm", GUILD_A)
+
+        ally.alive = False
+        ally.current_hp = 0
+
+        use_skill(state, caster, "phoenix_active", {"main": [ally.battle_unit_id]})
+
+        self.assertTrue(ally.alive)
+        self.assertEqual(ally.current_hp, 16)
+
+    def test_effects_survive_defeat_and_revive(self) -> None:
+        state = build_state([("phoenix", 1), ("garm", 1)], [("cyclops", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "phoenix", GUILD_A)
+        ally = unit_of(state, "garm", GUILD_A)
+
+        effects.apply_effect(
+            state, ally, effect_type=EFFECT_ATK_MODIFIER, value=3,
+            duration_type="permanent", source_skill_id="test_buff",
+        )
+        base = ally.base_atk
+
+        ally.alive = False
+        ally.current_hp = 0
+
+        use_skill(state, caster, "phoenix_active", {"main": [ally.battle_unit_id]})
+
+        self.assertEqual(effects.compute_atk(state, ally), base + 3)
+
+    def test_heal_block_prevents_reviving(self) -> None:
+        state = build_state([("phoenix", 1), ("garm", 1)], [("nidhogg", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "phoenix", GUILD_A)
+        ally = unit_of(state, "garm", GUILD_A)
+        attacker = unit_of(state, "nidhogg", GUILD_B)
+
+        ally.current_hp = 1
+        battle_engine.perform_attack(state, attacker, ally)
+        self.assertFalse(ally.alive)
+        self.assertTrue(effects.is_heal_blocked(state, ally))
+
+        use_skill(state, caster, "phoenix_active", {"main": [ally.battle_unit_id]})
+        self.assertFalse(ally.alive, "回復阻害中は蘇生できない")
+
+    def test_durations_tick_while_defeated(self) -> None:
+        # 5節：戦闘不能中でも本来の行動順で持続ターンが1減る
+        state = build_state([("garm", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        unit = unit_of(state, "garm", GUILD_A)
+        effects.apply_effect(
+            state, unit, effect_type=EFFECT_ATK_MODIFIER, value=-2,
+            duration_type="turns", duration_turns=2, source_skill_id="test_debuff",
+        )
+
+        unit.alive = False
+        unit.current_hp = 0
+
+        # 付与したターンでは減らさないため、次のターン位置へ進めてから確認する
+        state.turn_index += 1
+
+        before = state.unit_effects(unit.battle_unit_id)[0].remaining
+        battle_engine._tick_defeated_turn(state, unit)
+        after = state.unit_effects(unit.battle_unit_id)[0].remaining
+
+        self.assertEqual(before - after, 1)
+
+    def test_a_revived_unit_can_still_act_this_round(self) -> None:
+        state = build_state([("phoenix", 1), ("garm", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        ally = unit_of(state, "garm", GUILD_A)
+        ally.alive = False
+        ally.current_hp = 0
+
+        caster = unit_of(state, "phoenix", GUILD_A)
+        use_skill(state, caster, "phoenix_active", {"main": [ally.battle_unit_id]})
+
+        self.assertTrue(ally.alive)
+        self.assertNotEqual(ally.state_flags.get("acted_round"), state.current_round)
+        self.assertIn(ally.battle_unit_id, state.turn_order)
+
+    def test_a_unit_that_already_acted_does_not_act_again(self) -> None:
+        state = build_state([("phoenix", 1), ("garm", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        ally = unit_of(state, "garm", GUILD_A)
+        force_turn(state, ally)
+        battle_engine.auto_action(state, elapsed_seconds=0)
+        self.assertEqual(ally.state_flags.get("acted_round"), 1)
+
+        ally.alive = False
+        ally.current_hp = 0
+
+        caster = unit_of(state, "phoenix", GUILD_A)
+        use_skill(state, caster, "phoenix_active", {"main": [ally.battle_unit_id]})
+
+        self.assertTrue(ally.alive)
+        self.assertEqual(ally.state_flags.get("acted_round"), 1)
+
+
+# ==================================================
+# パッシブスキル（BATTLE_RULES.md 11〜13節）
+# ==================================================
+class PassiveTests(unittest.TestCase):
+    def test_surtr_reduces_attack_damage_only(self) -> None:
+        state = build_state([("surtr", 1)], [("cyclops", 1), ("ifrit", 1)])
+        battle_engine.start_battle(state)
+
+        surtr = unit_of(state, "surtr", GUILD_A)
+        attacker = unit_of(state, "cyclops", GUILD_B)  # ATK10
+
+        before = surtr.current_hp
+        battle_engine.perform_attack(state, attacker, surtr)
+        self.assertEqual(before - surtr.current_hp, 8)
+
+        caster = unit_of(state, "ifrit", GUILD_B)
+        before = surtr.current_hp
+        use_skill(state, caster, "ifrit_active", {"main": [surtr.battle_unit_id]})
+        self.assertEqual(before - surtr.current_hp, 6, "スキルダメージは軽減しない")
+
+    def test_surtr_gains_atk_for_each_fallen_ally(self) -> None:
+        state = build_state(
+            [("surtr", 1), ("garm", 1), ("griffin", 1)], [("cyclops", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        surtr = unit_of(state, "surtr", GUILD_A)
+        base = effects.compute_atk(state, surtr)
+
+        for name in ("garm", "griffin"):
+            battle_engine.instant_defeat(state, None, unit_of(state, name, GUILD_A))
+
+        self.assertEqual(effects.compute_atk(state, surtr), base + 4)
+
+    def test_fenrir_boosts_the_first_attack_on_an_unacted_enemy(self) -> None:
+        state = build_state([("fenrir", 1)], [("behemoth", 1), ("minotaur", 1)])
+        battle_engine.start_battle(state)
+
+        fenrir = unit_of(state, "fenrir", GUILD_A)
+        first = unit_of(state, "behemoth", GUILD_B)
+        second = unit_of(state, "minotaur", GUILD_B)
+
+        before = first.current_hp
+        battle_engine.perform_attack(state, fenrir, first)
+        self.assertEqual(before - first.current_hp, fenrir.base_atk + 6)
+
+        before = second.current_hp
+        battle_engine.perform_attack(state, fenrir, second)
+        self.assertEqual(
+            before - second.current_hp, fenrir.base_atk, "同じラウンドの2回目は乗らない"
+        )
+
+    def test_fenrir_does_not_boost_an_enemy_that_already_acted(self) -> None:
+        state = build_state([("fenrir", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        fenrir = unit_of(state, "fenrir", GUILD_A)
+        target = unit_of(state, "behemoth", GUILD_B)
+        target.state_flags["acted_round"] = state.current_round
+
+        before = target.current_hp
+        battle_engine.perform_attack(state, fenrir, target)
+        self.assertEqual(before - target.current_hp, fenrir.base_atk)
+
+    def test_jormungandr_lowers_enemy_atk_at_battle_start(self) -> None:
+        state = build_state([("jormungandr", 1)], [("garm", 1)])
+        battle_engine.start_battle(state)
+
+        enemy = unit_of(state, "garm", GUILD_B)
+        self.assertEqual(effects.compute_atk(state, enemy), enemy.base_atk - 1)
+
+    def test_asmodeus_raises_ally_atk_at_battle_start(self) -> None:
+        state = build_state([("asmodeus", 1), ("garm", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        ally = unit_of(state, "garm", GUILD_A)
+        self.assertEqual(effects.compute_atk(state, ally), ally.base_atk + 1)
+
+    def test_beelzebub_poisons_every_enemy_at_battle_start(self) -> None:
+        state = build_state([("beelzebub", 1)], [("garm", 1), ("griffin", 1)])
+        battle_engine.start_battle(state)
+
+        for name in ("garm", "griffin"):
+            enemy = unit_of(state, name, GUILD_B)
+            self.assertTrue(effects.has_status(state, enemy, STATUS_POISON))
+
+    def test_belphegor_stuns_male_enemies_only(self) -> None:
+        state = build_state([("belphegor", 1)], [("garm", 1), ("medusa", 1)])
+        battle_engine.start_battle(state)
+
+        belphegor = unit_of(state, "belphegor", GUILD_A)
+        male = unit_of(state, "garm", GUILD_B)
+        female = unit_of(state, "medusa", GUILD_B)
+
+        battle_engine.perform_attack(state, belphegor, male)
+        self.assertTrue(effects.has_status(state, male, STATUS_STUN))
+
+        battle_engine.perform_attack(state, belphegor, female)
+        self.assertFalse(effects.has_status(state, female, STATUS_STUN))
+
+    def test_lilith_lowers_male_enemy_atk_only(self) -> None:
+        state = build_state(
+            [("lilith", 1)], [("garm", 1), ("medusa", 1), ("behemoth", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        male = unit_of(state, "garm", GUILD_B)
+        female = unit_of(state, "medusa", GUILD_B)
+        genderless = unit_of(state, "behemoth", GUILD_B)
+
+        self.assertEqual(effects.compute_atk(state, male), male.base_atk - 2)
+        self.assertEqual(effects.compute_atk(state, female), female.base_atk)
+        self.assertEqual(effects.compute_atk(state, genderless), genderless.base_atk)
+
+    def test_siren_only_weakens_the_strongest_male_enemy(self) -> None:
+        state = build_state([("siren", 1)], [("cyclops", 1), ("garm", 1)])
+        battle_engine.start_battle(state)
+
+        strongest = unit_of(state, "cyclops", GUILD_B)  # ATK10
+        other = unit_of(state, "garm", GUILD_B)  # ATK9
+
+        self.assertEqual(effects.compute_atk(state, strongest), strongest.base_atk - 1)
+        self.assertEqual(effects.compute_atk(state, other), other.base_atk)
+
+    def test_cerberus_boosts_attacks_on_weakened_enemies(self) -> None:
+        state = build_state([("cerberus", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        cerberus = unit_of(state, "cerberus", GUILD_A)
+        target = unit_of(state, "behemoth", GUILD_B)
+
+        before = target.current_hp
+        battle_engine.perform_attack(state, cerberus, target)
+        self.assertEqual(before - target.current_hp, cerberus.base_atk)
+
+        target.current_hp = target.max_hp // 2
+        before = target.current_hp
+        battle_engine.perform_attack(state, cerberus, target)
+        self.assertEqual(before - target.current_hp, cerberus.base_atk + 2)
+
+    def test_chimera_boosts_attacks_on_afflicted_enemies(self) -> None:
+        state = build_state([("chimera", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        chimera = unit_of(state, "chimera", GUILD_A)
+        target = unit_of(state, "behemoth", GUILD_B)
+
+        before = target.current_hp
+        battle_engine.perform_attack(state, chimera, target)
+        self.assertEqual(before - target.current_hp, chimera.base_atk)
+
+        effects.apply_effect(
+            state, target, effect_type=EFFECT_ATK_MODIFIER, value=-1,
+            duration_type="permanent", source_skill_id="test_debuff",
+        )
+        before = target.current_hp
+        battle_engine.perform_attack(state, chimera, target)
+        self.assertEqual(before - target.current_hp, chimera.base_atk + 2)
+
+    def test_hraesvelgr_slows_the_enemy_it_hits(self) -> None:
+        state = build_state([("hraesvelgr", 1)], [("griffin", 1)])
+        battle_engine.start_battle(state)
+
+        attacker = unit_of(state, "hraesvelgr", GUILD_A)
+        target = unit_of(state, "griffin", GUILD_B)
+
+        battle_engine.perform_attack(state, attacker, target)
+        self.assertEqual(target.speed, target.base_speed - 5)
+
+    def test_kraken_only_reacts_to_normal_attacks(self) -> None:
+        state = build_state([("kraken", 1)], [("cyclops", 1), ("ifrit", 1)])
+        battle_engine.start_battle(state)
+
+        kraken = unit_of(state, "kraken", GUILD_A)
+        attacker = unit_of(state, "cyclops", GUILD_B)
+
+        battle_engine.perform_attack(state, attacker, kraken)
+        self.assertEqual(attacker.speed, attacker.base_speed - 4)
+
+        caster = unit_of(state, "ifrit", GUILD_B)
+        use_skill(state, caster, "ifrit_active", {"main": [kraken.battle_unit_id]})
+        self.assertEqual(caster.speed, caster.base_speed)
+
+    def test_paimon_heals_the_weakest_ally_on_its_turn(self) -> None:
+        state = build_state(
+            [("paimon", 1), ("garm", 1), ("griffin", 1)], [("behemoth", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        weakest = unit_of(state, "garm", GUILD_A)
+        healthy = unit_of(state, "griffin", GUILD_A)
+        weakest.current_hp = 5
+
+        paimon = unit_of(state, "paimon", GUILD_A)
+
+        # ターン開始パッシブは行動順を進めたときに発動する
+        for _ in range(len(state.turn_order)):
+            if state.current_unit_id == paimon.battle_unit_id:
+                break
+            battle_engine.auto_action(state, elapsed_seconds=0)
+
+        self.assertEqual(state.current_unit_id, paimon.battle_unit_id)
+        self.assertEqual(weakest.current_hp, 9)
+        self.assertEqual(healthy.current_hp, healthy.max_hp)
+
+    def test_sphinx_nullifies_only_the_first_status(self) -> None:
+        state = build_state([("sphinx", 1)], [("medusa", 1)])
+        battle_engine.start_battle(state)
+
+        sphinx = unit_of(state, "sphinx", GUILD_A)
+
+        self.assertFalse(
+            skill_engine.apply_status(
+                state, None, sphinx, STATUS_STUN, duration_turns=1
+            )
+        )
+        self.assertTrue(
+            skill_engine.apply_status(
+                state, None, sphinx, STATUS_STUN, duration_turns=1
+            )
+        )
+
+    def test_belial_nullifies_the_first_stun_on_an_ally(self) -> None:
+        state = build_state([("belial", 1), ("garm", 1)], [("medusa", 1)])
+        battle_engine.start_battle(state)
+
+        ally = unit_of(state, "garm", GUILD_A)
+
+        self.assertFalse(
+            skill_engine.apply_status(
+                state, None, ally, STATUS_STUN, duration_turns=1
+            )
+        )
+        self.assertTrue(
+            skill_engine.apply_status(
+                state, None, ally, STATUS_STUN, duration_turns=1
+            )
+        )
+
+    def test_belial_does_not_block_poison(self) -> None:
+        state = build_state([("belial", 1), ("garm", 1)], [("medusa", 1)])
+        battle_engine.start_battle(state)
+
+        ally = unit_of(state, "garm", GUILD_A)
+        self.assertTrue(
+            skill_engine.apply_status(
+                state, None, ally, STATUS_POISON, duration_turns=2, damage=2
+            )
+        )
+
+    def test_loki_reflects_a_status_back_to_its_source(self) -> None:
+        state = build_state([("loki", 1)], [("medusa", 1)])
+        battle_engine.start_battle(state)
+
+        loki = unit_of(state, "loki", GUILD_A)
+        source = unit_of(state, "medusa", GUILD_B)
+
+        use_skill(state, source, "medusa_active", {"main": [loki.battle_unit_id]})
+
+        self.assertFalse(effects.has_status(state, loki, STATUS_STUN))
+        self.assertTrue(effects.has_status(state, source, STATUS_STUN))
+
+    def test_loki_still_takes_the_skill_damage_of_world_poison(self) -> None:
+        # 11節の注記：4スキルダメージは受け、毒だけを無効化・反射する
+        state = build_state([("loki", 1)], [("jormungandr", 1)])
+        battle_engine.start_battle(state)
+
+        loki = unit_of(state, "loki", GUILD_A)
+        caster = unit_of(state, "jormungandr", GUILD_B)
+        before = loki.current_hp
+
+        use_skill(state, caster, "jormungandr_active")
+
+        self.assertEqual(before - loki.current_hp, 4)
+        self.assertFalse(effects.has_status(state, loki, STATUS_POISON))
+        self.assertTrue(effects.has_status(state, caster, STATUS_POISON))
+
+    def test_nidhogg_debuff_does_not_stack_on_the_same_target(self) -> None:
+        state = build_state([("nidhogg", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        attacker = unit_of(state, "nidhogg", GUILD_A)
+        target = unit_of(state, "behemoth", GUILD_B)
+
+        battle_engine.perform_attack(state, attacker, target)
+        battle_engine.perform_attack(state, attacker, target)
+
+        blocks = [
+            effect
+            for effect in state.unit_effects(target.battle_unit_id)
+            if effect.effect_type == EFFECT_HEAL_BLOCK
+        ]
+        self.assertEqual(len(blocks), 1)
+
+
+# ==================================================
+# アクティブスキル（BATTLE_RULES.md 2節・11〜13節）
+# ==================================================
+class ActiveSkillTests(unittest.TestCase):
+    def test_active_skill_can_be_used_once_per_battle(self) -> None:
+        state = build_state([("ifrit", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "ifrit", GUILD_A)
+        target = unit_of(state, "behemoth", GUILD_B)
+
+        use_skill(state, caster, "ifrit_active", {"main": [target.battle_unit_id]})
+
+        with self.assertRaises(Exception):
+            use_skill(
+                state, caster, "ifrit_active", {"main": [target.battle_unit_id]}
+            )
+
+    def test_unlimited_active_skill_can_be_reused(self) -> None:
+        state = build_state([("abaddon", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "abaddon", GUILD_A)
+        target = unit_of(state, "behemoth", GUILD_B)
+
+        before = target.current_hp
+        use_skill(state, caster, "abaddon_active")
+        use_skill(state, caster, "abaddon_active")
+
+        self.assertEqual(before - target.current_hp, 10)
+
+    def test_skill_damage_never_criticals(self) -> None:
+        state = build_state(
+            [("ifrit", 1)], [("behemoth", 1)], rng=AlwaysCriticalRandom()
+        )
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "ifrit", GUILD_A)
+        target = unit_of(state, "behemoth", GUILD_B)
+        before = target.current_hp
+
+        use_skill(state, caster, "ifrit_active", {"main": [target.battle_unit_id]})
+
+        self.assertEqual(before - target.current_hp, 6)
+
+    def test_area_skill_hits_every_living_enemy(self) -> None:
+        state = build_state(
+            [("abaddon", 1)], [("behemoth", 1), ("minotaur", 1), ("garm", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "abaddon", GUILD_A)
+        fallen = unit_of(state, "garm", GUILD_B)
+        fallen.alive = False
+        fallen.current_hp = 0
+
+        targets = [
+            unit_of(state, name, GUILD_B) for name in ("behemoth", "minotaur")
+        ]
+        before = {unit.battle_unit_id: unit.current_hp for unit in targets}
+
+        use_skill(state, caster, "abaddon_active")
+
+        for unit in targets:
+            self.assertEqual(before[unit.battle_unit_id] - unit.current_hp, 5)
+        self.assertEqual(fallen.current_hp, 0)
+
+    def test_surtr_attacks_twice_with_its_own_bonus(self) -> None:
+        state = build_state([("surtr", 1)], [("behemoth", 1), ("minotaur", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "surtr", GUILD_A)  # ATK10
+        first = unit_of(state, "behemoth", GUILD_B)
+        second = unit_of(state, "minotaur", GUILD_B)
+
+        before_first = first.current_hp
+        before_second = second.current_hp
+
+        use_skill(
+            state,
+            caster,
+            "surtr_active",
+            {"main": [first.battle_unit_id, second.battle_unit_id]},
+        )
+
+        self.assertEqual(before_first - first.current_hp, 13)
+        self.assertEqual(before_second - second.current_hp, 13)
+
+        before = first.current_hp
+        battle_engine.perform_attack(state, caster, first)
+        self.assertEqual(before - first.current_hp, 10, "ATK+3は2回攻撃だけ")
+
+    def test_taunt_forces_normal_attacks_but_not_attack_actives(self) -> None:
+        state = build_state(
+            [("surtr", 1), ("garm", 1)], [("leviathan", 1), ("behemoth", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        leviathan = unit_of(state, "leviathan", GUILD_B)
+        other = unit_of(state, "behemoth", GUILD_B)
+        surtr = unit_of(state, "surtr", GUILD_A)
+        garm = unit_of(state, "garm", GUILD_A)
+
+        use_skill(state, leviathan, "leviathan_active")
+
+        self.assertEqual(
+            [
+                unit.battle_unit_id
+                for unit in battle_engine.attack_target_choices(state, garm)
+            ],
+            [leviathan.battle_unit_id],
+        )
+
+        choices = skill_engine.selectable_targets(
+            state, surtr, MASTER.get_skill("surtr_active").targets[0]
+        )
+        self.assertIn(
+            other.battle_unit_id, [unit.battle_unit_id for unit in choices]
+        )
+
+        before = other.current_hp
+        use_skill(
+            state,
+            surtr,
+            "surtr_active",
+            {"main": [other.battle_unit_id, other.battle_unit_id]},
+        )
+        self.assertLess(other.current_hp, before)
+
+        self.assertEqual(
+            [
+                unit.battle_unit_id
+                for unit in battle_engine.attack_target_choices(state, surtr)
+            ],
+            [leviathan.battle_unit_id],
+            "ACTIVE後の通常攻撃は挑発から解放されない",
+        )
+
+    def test_mammon_moves_atk_from_the_enemy_to_itself(self) -> None:
+        state = build_state([("mammon", 1)], [("garm", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "mammon", GUILD_A)
+        target = unit_of(state, "garm", GUILD_B)
+
+        use_skill(state, caster, "mammon_active", {"main": [target.battle_unit_id]})
+
+        self.assertEqual(effects.compute_atk(state, caster), caster.base_atk + 2)
+        self.assertEqual(effects.compute_atk(state, target), target.base_atk - 2)
+
+    def test_kyubi_and_yuki_onna_lower_speed(self) -> None:
+        state = build_state(
+            [("kyubi", 1), ("yuki_onna", 1)], [("griffin", 1), ("garm", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        kyubi = unit_of(state, "kyubi", GUILD_A)
+        yuki = unit_of(state, "yuki_onna", GUILD_A)
+        griffin = unit_of(state, "griffin", GUILD_B)
+        garm = unit_of(state, "garm", GUILD_B)
+
+        use_skill(state, kyubi, "kyubi_active", {"main": [griffin.battle_unit_id]})
+        self.assertEqual(griffin.speed, griffin.base_speed - 20)
+
+        use_skill(state, yuki, "yuki_onna_active")
+        self.assertEqual(griffin.speed, griffin.base_speed - 25)
+        self.assertEqual(garm.speed, garm.base_speed - 5)
+
+    def test_atk_swap_exchanges_current_atk(self) -> None:
+        state = build_state([("loki", 1), ("pegasus", 1)], [("cyclops", 1)])
+        battle_engine.start_battle(state)
+
+        loki = unit_of(state, "loki", GUILD_A)
+        ally = unit_of(state, "pegasus", GUILD_A)  # ATK5
+        enemy = unit_of(state, "cyclops", GUILD_B)  # ATK10
+
+        use_skill(
+            state,
+            loki,
+            "loki_active",
+            {"main": [enemy.battle_unit_id], "ally": [ally.battle_unit_id]},
+        )
+
+        self.assertEqual(effects.compute_atk(state, ally), 10)
+        self.assertEqual(effects.compute_atk(state, enemy), 5)
+
+    def test_heal_never_exceeds_max_hp_and_skips_defeated_units(self) -> None:
+        state = build_state([("fafnir", 1), ("garm", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "fafnir", GUILD_A)
+        ally = unit_of(state, "garm", GUILD_A)
+
+        ally.current_hp = ally.max_hp - 3
+        use_skill(state, caster, "fafnir_active", {"main": [ally.battle_unit_id]})
         self.assertEqual(ally.current_hp, ally.max_hp)
 
         ally.alive = False
         ally.current_hp = 0
-        healed = battle_engine.heal_unit(state, lucifer, ally, 10)
-        self.assertEqual(healed, 0)
+        self.assertEqual(battle_engine.heal_unit(state, caster, ally, 20), 0)
+
+    def test_attack_consuming_actives_are_marked(self) -> None:
+        # 2節：攻撃権を消費するACTIVEには必ず記載する
+        self.assertTrue(MASTER.get_skill("ifrit_active").consumes_attack)
+        self.assertTrue(MASTER.get_skill("surtr_active").consumes_attack)
+        self.assertFalse(MASTER.get_skill("fenrir_active").consumes_attack)
+        self.assertFalse(MASTER.get_skill("loki_active").consumes_attack)
+
+        for skill in MASTER.skills.values():
+            if skill.is_active and skill.consumes_attack:
+                self.assertIn(
+                    "このターンの攻撃を消費する", skill.description, skill.skill_id
+                )
 
 
 # ==================================================

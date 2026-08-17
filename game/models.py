@@ -43,21 +43,22 @@ def is_opposite_gender(left: str | None, right: str | None) -> bool:
 
 
 # ==================================================
-# 状態異常（20節・21節）
+# 状態異常（BATTLE_RULES.md 8節）
+# 石化・魅了・凍結などは演出名で、効果は「行動不能」に統一する
 # ==================================================
+STATUS_STUN = "stun"
 STATUS_POISON = "poison"
-STATUS_CHARM = "charm"
-STATUS_PETRIFY = "petrify"
+STATUS_ACTIVE_LOCK = "active_lock"
 
-STATUS_TYPES = frozenset({STATUS_POISON, STATUS_CHARM, STATUS_PETRIFY})
+STATUS_TYPES = frozenset({STATUS_STUN, STATUS_POISON, STATUS_ACTIVE_LOCK})
 
-# 次の自身の行動を行えなくする状態異常
-ACTION_BLOCKING_STATUSES = frozenset({STATUS_CHARM, STATUS_PETRIFY})
+# その使い魔の行動そのものを行えなくする状態異常
+ACTION_BLOCKING_STATUSES = frozenset({STATUS_STUN})
 
 STATUS_LABELS = {
+    STATUS_STUN: "行動不能",
     STATUS_POISON: "毒",
-    STATUS_CHARM: "魅了",
-    STATUS_PETRIFY: "石化",
+    STATUS_ACTIVE_LOCK: "ACTIVE使用不能",
 }
 
 
@@ -81,6 +82,7 @@ TRIGGER_HP_THRESHOLD = "hp_threshold"
 TRIGGER_TURN_END = "turn_end"
 TRIGGER_BEFORE_DEFEAT = "before_defeat"
 TRIGGER_ON_DEFEAT = "on_defeat"
+TRIGGER_ON_REVIVE = "on_revive"
 TRIGGER_ROUND_END = "round_end"
 TRIGGER_ALWAYS = "always"
 
@@ -98,6 +100,7 @@ TRIGGERS = frozenset(
         TRIGGER_TURN_END,
         TRIGGER_BEFORE_DEFEAT,
         TRIGGER_ON_DEFEAT,
+        TRIGGER_ON_REVIVE,
         TRIGGER_ROUND_END,
         TRIGGER_ALWAYS,
     }
@@ -156,6 +159,11 @@ EFFECT_CLEANSE_STATUS = "cleanse_status"
 EFFECT_ATK_SWAP = "atk_swap"
 EFFECT_TAUNT = "taunt"
 EFFECT_ACTIVE_LOCK = "active_lock"
+EFFECT_SPEED_MODIFIER = "speed_modifier"
+EFFECT_ATTACK_DAMAGE_REDUCTION = "attack_damage_reduction"
+EFFECT_CLEANSE_DEBUFF = "cleanse_debuff"
+EFFECT_HEAL_BLOCK = "heal_block"
+EFFECT_POISON_AMPLIFY = "poison_amplify"
 
 EFFECT_TYPES = frozenset(
     {
@@ -178,8 +186,57 @@ EFFECT_TYPES = frozenset(
         EFFECT_ATK_SWAP,
         EFFECT_TAUNT,
         EFFECT_ACTIVE_LOCK,
+        EFFECT_SPEED_MODIFIER,
+        EFFECT_ATTACK_DAMAGE_REDUCTION,
+        EFFECT_CLEANSE_DEBUFF,
+        EFFECT_HEAL_BLOCK,
+        EFFECT_POISON_AMPLIFY,
     }
 )
+
+
+# ==================================================
+# 効果の分類（BATTLE_RULES.md 8節）
+# 「状態異常無効」「状態異常解除」「デバフ解除」が何に効くかを決める
+# ==================================================
+CATEGORY_STATUS = "status"
+CATEGORY_DEBUFF = "debuff"
+CATEGORY_BUFF = "buff"
+CATEGORY_PROTECTION = "protection"
+CATEGORY_OTHER = "other"
+
+# 継続保存する効果の分類。ここに無い効果種別は CATEGORY_OTHER 扱い。
+EFFECT_CATEGORIES = {
+    EFFECT_STATUS: CATEGORY_STATUS,
+    EFFECT_ACTIVE_LOCK: CATEGORY_STATUS,
+    EFFECT_HEAL_BLOCK: CATEGORY_DEBUFF,
+    EFFECT_STATUS_IMMUNE: CATEGORY_PROTECTION,
+    EFFECT_ATTACK_DAMAGE_REDUCTION: CATEGORY_PROTECTION,
+    EFFECT_SURVIVE_WITH_HP: CATEGORY_PROTECTION,
+    EFFECT_NULLIFY_DAMAGE: CATEGORY_PROTECTION,
+    EFFECT_NULLIFY_STATUS: CATEGORY_PROTECTION,
+    EFFECT_STATUS_REFLECT: CATEGORY_PROTECTION,
+    EFFECT_POISON_AMPLIFY: CATEGORY_OTHER,
+    EFFECT_TAUNT: CATEGORY_OTHER,
+    EFFECT_ATK_SWAP: CATEGORY_OTHER,
+}
+
+
+def effect_category(effect_type: str, value: int | None = None) -> str:
+    """効果種別（と符号）から分類を返す。
+
+    ATK・SPDの変化は、値がプラスならバフ、マイナスならデバフです。
+    """
+
+    if effect_type in (
+        EFFECT_ATK_MODIFIER,
+        EFFECT_CONDITIONAL_ATK_MODIFIER,
+        EFFECT_NEXT_ATTACK_ATK_MODIFIER,
+        EFFECT_SPEED_MODIFIER,
+    ):
+        return CATEGORY_DEBUFF if (value or 0) < 0 else CATEGORY_BUFF
+
+    return EFFECT_CATEGORIES.get(effect_type, CATEGORY_OTHER)
 
 # 戦闘用使い魔へ継続的に保存する効果（instant以外）
 DURATION_INSTANT = "instant"
@@ -201,6 +258,7 @@ DURATION_TYPES = frozenset(
 # 効果の対象区分
 TARGET_SELF = "self"
 TARGET_ALLY_ALL = "ally_all"
+TARGET_ALLY_DEFEATED = "ally_defeated"
 TARGET_ENEMY_ALL = "enemy_all"
 TARGET_EVENT_UNIT = "event_unit"
 TARGET_EVENT_SOURCE = "event_source"
@@ -273,6 +331,9 @@ class SkillEffect:
     target_type: str = TARGET_SELF
     duration_type: str = DURATION_INSTANT
     params: dict[str, Any] = field(default_factory=dict)
+    # 複数のタイミングを持つスキルで、この効果を出すタイミングを限定する。
+    # None のときはスキルのどのタイミングでも出す。
+    on_trigger: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -283,6 +344,7 @@ class SkillEffect:
             "target_type": self.target_type,
             "duration_type": self.duration_type,
             "params": dict(self.params),
+            "on_trigger": self.on_trigger,
         }
 
     @classmethod
@@ -295,6 +357,7 @@ class SkillEffect:
             target_type=data.get("target_type") or TARGET_SELF,
             duration_type=data.get("duration_type") or DURATION_INSTANT,
             params=dict(data.get("params") or {}),
+            on_trigger=data.get("on_trigger"),
         )
 
 
@@ -328,6 +391,9 @@ class Skill:
     description: str
     skill_type: str
     trigger: str | None = None
+    # 1つのパッシブが複数のタイミングで働く場合に使う（スルト「終末の巨人」など）。
+    # 空の場合は trigger だけを見る。
+    extra_triggers: tuple[str, ...] = ()
     target_type: str | None = None
     priority: int = 100
     max_uses_per_battle: int | None = None
@@ -349,6 +415,25 @@ class Skill:
     def requires_selection(self) -> bool:
         return bool(self.targets)
 
+    @property
+    def triggers(self) -> tuple[str, ...]:
+        """このスキルが反応するタイミングをすべて返す。"""
+
+        found = [self.trigger] if self.trigger else []
+        found.extend(
+            trigger for trigger in self.extra_triggers if trigger not in found
+        )
+        return tuple(found)
+
+    def effects_for(self, trigger: str) -> tuple["SkillEffect", ...]:
+        """指定タイミングで出す効果だけを返す。"""
+
+        return tuple(
+            effect
+            for effect in self.effects
+            if effect.on_trigger is None or effect.on_trigger == trigger
+        )
+
 
 @dataclass(frozen=True)
 class FamiliarMaster:
@@ -365,6 +450,8 @@ class FamiliarMaster:
     description: str = ""
     skill_ids: tuple[str, ...] = ()
     image_file: str | None = None
+    # ガチャの抽選対象に含めるか。コンプリート報酬などは False。
+    in_gacha: bool = True
     enabled: bool = True
     version: int = 1
 
@@ -424,9 +511,11 @@ class BattleUnit:
     current_hp: int
     base_atk: int
     current_atk: int
+    # speed は現在SPD。基礎SPDは base_speed で保持し、行動順の同値判定に使う。
     speed: int
     cost: int
     slot: int
+    base_speed: int = 0
     gender: str | None = None
     alive: bool = True
     order_seed: int = 0
@@ -504,6 +593,9 @@ class BattleState:
 
     def living_units(self, guild_id: int) -> list[BattleUnit]:
         return [unit for unit in self.guild_units(guild_id) if unit.alive]
+
+    def defeated_units(self, guild_id: int) -> list[BattleUnit]:
+        return [unit for unit in self.guild_units(guild_id) if not unit.alive]
 
     def enemy_guild_id(self, guild_id: int) -> int:
         return self.guild_b_id if guild_id == self.guild_a_id else self.guild_a_id

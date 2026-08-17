@@ -150,7 +150,10 @@ guild_battle_entries         実際に出場する使い魔（本人が枠内で
   `database.battle.save_battle_state(state, expected_action_seq=...)` が `False` を
   返した場合、Cogは**何も投稿せず**に処理を中断します。
 - 料金・確率・能力値は `data/master/` のJSONが唯一の定義です。値を変更するときは
-  `docs/GAME_SPEC.md` と `tests/test_game_master_data.py` の期待値も同じ変更として更新します。
+  出典の文書と `tests/test_game_master_data.py` の期待値も同じ変更として更新します。
+- 文書の棲み分けは次のとおりです。**戦闘中の判定と使い魔の能力・スキルは
+  `docs/BATTLE_RULES.md`**、**保存・表示・運用は `docs/GAME_SPEC.md`** です。
+  同じことを両方に書かず、GAME_SPECの戦闘関連の節はBATTLE_RULESへのポインタだけを持ちます。
 - Embedでは `field` を使いません。項目は本文へ「【項目】結果」の形で並べます
   （`cogs.game_shared.item_line`、`game.battle_embed.item_line`）。表示幅が端末によって
   変わるうえ、項目が横に並ぶと読み順が崩れるためです。

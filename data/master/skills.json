@@ -1,19 +1,24 @@
 {
-  "version": 1,
-  "note": "docs/FAMILIAR_MASTER.mdのスキル文面をそのまま実装できる形にした定義。文面を変える場合は両方を同じ変更として更新すること。",
+  "version": 2,
+  "note": "docs/BATTLE_RULES.md のスキル文面をそのまま実装できる形にした定義。文面を変える場合は両方を同じ変更として更新すること。",
   "skills": [
     {
       "skill_id": "loki_passive",
       "name": "欺瞞の神",
-      "description": "状態異常を受ける時、その効果を無効化し、効果を与えた敵に同じ効果を返す。",
+      "description": "ロキが状態異常を受ける時、その状態異常を無効化し、効果を与えた敵へ同じ状態異常を返す。",
       "skill_type": "passive",
       "trigger": "before_status_apply",
-      "target_type": "self",
-      "priority": 10,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
       "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [],
-      "conditions": [],
+      "conditions": [
+        {
+          "type": "event_unit_is_self"
+        }
+      ],
       "effects": [
         {
           "effect_type": "status_reflect",
@@ -22,25 +27,37 @@
           "chance": null,
           "target_type": "self",
           "duration_type": "instant",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "loki_active",
       "name": "虚実反転",
-      "description": "生存している敵1体と味方1体を選択し、ラウンド終了まで現在ATKを交換する。",
+      "description": "生存している敵1体と味方1体を選択し、両者の現在ATKをラウンド終了まで交換する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_and_ally",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [
-        {"key": "enemy", "side": "enemy", "count": 1, "filter": []},
-        {"key": "ally", "side": "ally", "count": 1, "filter": []}
+        {
+          "key": "main",
+          "side": "enemy",
+          "count": 1,
+          "filter": []
+        },
+        {
+          "key": "ally",
+          "side": "ally",
+          "count": 1,
+          "filter": []
+        }
       ],
       "conditions": [],
       "effects": [
@@ -49,112 +66,76 @@
           "value": null,
           "duration_turns": null,
           "chance": null,
-          "target_type": "selection:enemy",
+          "target_type": "selection:main",
           "duration_type": "round_end",
-          "params": {"rounds": 1, "partner": "selection:ally"}
+          "params": {
+            "partner": "selection:ally"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "surtr_passive",
       "name": "終末の巨人",
-      "description": "HPが最大HPの50%以下の間、ATK+3。",
+      "description": "受ける攻撃ダメージを-2する。さらに、スルト以外の味方が戦闘不能になるたび、自身のATK+2。",
       "skill_type": "passive",
-      "trigger": "always",
-      "target_type": "self",
+      "trigger": "battle_start",
+      "extra_triggers": [
+        "on_defeat"
+      ],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [],
-      "conditions": [],
+      "conditions": [
+        {
+          "type": "defeated_is_ally",
+          "on_trigger": "on_defeat"
+        },
+        {
+          "type": "defeated_is_not_self",
+          "on_trigger": "on_defeat"
+        }
+      ],
       "effects": [
         {
-          "effect_type": "conditional_atk_modifier",
-          "value": 3,
+          "effect_type": "attack_damage_reduction",
+          "value": -2,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
           "duration_type": "permanent",
-          "params": {"condition": {"type": "hp_ratio_at_most", "value": 0.5}}
+          "params": {},
+          "on_trigger": "battle_start"
+        },
+        {
+          "effect_type": "atk_modifier",
+          "value": 2,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "self",
+          "duration_type": "permanent",
+          "params": {
+            "stack": true
+          },
+          "on_trigger": "on_defeat"
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "surtr_active",
       "name": "終末の進軍",
-      "description": "敵に2回攻撃する。各攻撃の対象は個別に選択できる。このスキルで戦闘不能にした敵1体につきHPを10回復する。",
+      "description": "このACTIVEによる2回の攻撃時、自身のATK+3。敵へ2回攻撃する。各攻撃の対象は個別に選択できる。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_multi",
-      "priority": 100,
-      "max_uses_per_battle": 1,
-      "consumes_attack": true,
-      "targets": [
-        {"key": "main", "side": "enemy", "count": 2, "filter": [], "allow_duplicate": true}
-      ],
-      "conditions": [],
-      "effects": [
-        {
-          "effect_type": "attack",
-          "value": null,
-          "duration_turns": null,
-          "chance": null,
-          "target_type": "selection:main",
-          "duration_type": "instant",
-          "params": {"count": 2, "individual_targets": true}
-        },
-        {
-          "effect_type": "heal_per_defeat",
-          "value": 10,
-          "duration_turns": null,
-          "chance": null,
-          "target_type": "self",
-          "duration_type": "instant",
-          "params": {}
-        }
-      ],
-      "enabled": true,
-      "version": 1
-    },
-    {
-      "skill_id": "fenrir_passive",
-      "name": "先駆の魔狼",
-      "description": "バトル中に行う最初の攻撃1回のみATK+5。",
-      "skill_type": "passive",
-      "trigger": "before_attack",
-      "target_type": "self",
-      "priority": 50,
-      "max_uses_per_battle": 1,
-      "consumes_attack": false,
-      "targets": [],
-      "conditions": [
-        {"type": "first_attack_of_battle"}
-      ],
-      "effects": [
-        {
-          "effect_type": "next_attack_atk_modifier",
-          "value": 5,
-          "duration_turns": null,
-          "chance": null,
-          "target_type": "self",
-          "duration_type": "attacks",
-          "params": {"attacks": 1}
-        }
-      ],
-      "enabled": true,
-      "version": 1
-    },
-    {
-      "skill_id": "fenrir_active",
-      "name": "神喰らい",
-      "description": "このラウンドでまだ行動していない敵1体へ攻撃する。対象は次の自身の行動時、ACTIVEを使用できない。",
-      "skill_type": "active",
-      "trigger": null,
-      "target_type": "enemy_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": true,
@@ -162,12 +143,25 @@
         {
           "key": "main",
           "side": "enemy",
-          "count": 1,
-          "filter": [{"type": "not_acted_this_round"}]
+          "count": 2,
+          "filter": [],
+          "allow_duplicate": true
         }
       ],
       "conditions": [],
       "effects": [
+        {
+          "effect_type": "next_attack_atk_modifier",
+          "value": 3,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "self",
+          "duration_type": "attacks",
+          "params": {
+            "attacks": 2
+          },
+          "on_trigger": null
+        },
         {
           "effect_type": "attack",
           "value": null,
@@ -175,30 +169,101 @@
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "instant",
-          "params": {"count": 1}
+          "params": {
+            "count": 2,
+            "individual_targets": true
+          },
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "fenrir_passive",
+      "name": "先駆の魔狼",
+      "description": "各ラウンドで初めて、まだ行動していない敵を攻撃する時、その攻撃のみATK+6。",
+      "skill_type": "passive",
+      "trigger": "before_attack",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": null,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [
+        {
+          "type": "once_per_round",
+          "key": "fenrir_passive"
         },
         {
-          "effect_type": "active_lock",
+          "type": "target_not_acted_this_round"
+        }
+      ],
+      "effects": [
+        {
+          "effect_type": "next_attack_atk_modifier",
+          "value": 6,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "self",
+          "duration_type": "attacks",
+          "params": {
+            "attacks": 1
+          },
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "fenrir_active",
+      "name": "神喰らい",
+      "description": "敵1体をACTIVE使用不能（1ターン）にする。",
+      "skill_type": "active",
+      "trigger": null,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": 1,
+      "consumes_attack": false,
+      "targets": [
+        {
+          "key": "main",
+          "side": "enemy",
+          "count": 1,
+          "filter": []
+        }
+      ],
+      "conditions": [],
+      "effects": [
+        {
+          "effect_type": "status",
           "value": null,
           "duration_turns": 1,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "turns",
-          "params": {}
+          "params": {
+            "status": "active_lock"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "jormungandr_passive",
       "name": "世界を囲む蛇",
-      "description": "バトル開始時、敵全体のATK-1。第1ラウンド終了時に解除する。",
+      "description": "バトル開始時、敵全体のATK-1。",
       "skill_type": "passive",
       "trigger": "battle_start",
-      "target_type": "enemy_all",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [],
       "conditions": [],
@@ -209,20 +274,22 @@
           "duration_turns": null,
           "chance": null,
           "target_type": "enemy_all",
-          "duration_type": "round_end",
-          "params": {"rounds": 1}
+          "duration_type": "permanent",
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "jormungandr_active",
       "name": "世界毒",
-      "description": "生存している敵全体へ4ダメージを与え、毒を付与する。毒は対象自身の行動終了時に2ダメージを与え、2回発生する。",
+      "description": "生存している敵全体へ、4スキルダメージ + 毒（2ダメージ×2ターン）。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_all",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": true,
@@ -236,7 +303,10 @@
           "chance": null,
           "target_type": "enemy_all",
           "duration_type": "instant",
-          "params": {"can_critical": true}
+          "params": {
+            "damage_kind": "skill"
+          },
+          "on_trigger": null
         },
         {
           "effect_type": "status",
@@ -245,26 +315,32 @@
           "chance": null,
           "target_type": "enemy_all",
           "duration_type": "turns",
-          "params": {"status": "poison", "damage": 2}
+          "params": {
+            "status": "poison",
+            "damage": 2
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "hel_passive",
       "name": "冥府の呼び声",
-      "description": "ヘル以外の味方が最初に戦闘不能になった時、その使い魔をHP10で蘇生する。",
+      "description": "味方がバトル中初めて戦闘不能になった時、その使い魔をHP10で蘇生する。",
       "skill_type": "passive",
       "trigger": "on_defeat",
-      "target_type": "event_unit",
-      "priority": 30,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": false,
       "targets": [],
       "conditions": [
-        {"type": "defeated_is_ally"},
-        {"type": "defeated_is_not_self"}
+        {
+          "type": "defeated_is_ally"
+        }
       ],
       "effects": [
         {
@@ -274,24 +350,31 @@
           "chance": null,
           "target_type": "event_unit",
           "duration_type": "instant",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "hel_active",
       "name": "死の宣告",
-      "description": "敵1体を即座に戦闘不能にする。",
+      "description": "敵1体を即座に戦闘不能にする。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": true,
       "targets": [
-        {"key": "main", "side": "enemy", "count": 1, "filter": []}
+        {
+          "key": "main",
+          "side": "enemy",
+          "count": 1,
+          "filter": []
+        }
       ],
       "conditions": [],
       "effects": [
@@ -302,142 +385,225 @@
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "instant",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "lucifer_active",
-      "name": "明星の恩寵",
-      "description": "味方1体のHPを14回復する。",
+      "name": "明星の加護",
+      "description": "味方1体は状態異常を受けない（2ターン）。すでに受けている状態異常は解除しない。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "ally_single",
-      "priority": 100,
-      "max_uses_per_battle": 1,
-      "consumes_attack": false,
-      "targets": [
-        {"key": "main", "side": "ally", "count": 1, "filter": []}
-      ],
-      "conditions": [],
-      "effects": [
-        {
-          "effect_type": "heal",
-          "value": 14,
-          "duration_turns": null,
-          "chance": null,
-          "target_type": "selection:main",
-          "duration_type": "instant",
-          "params": {}
-        }
-      ],
-      "enabled": true,
-      "version": 1
-    },
-    {
-      "skill_id": "beelzebub_passive",
-      "name": "蠅王の瘴気",
-      "description": "最初に通常攻撃でダメージを与えた敵へ毒を付与する。毒は対象自身の行動終了時に2ダメージを与え、3回発生する。",
-      "skill_type": "passive",
-      "trigger": "after_attack",
-      "target_type": "event_unit",
-      "priority": 60,
-      "max_uses_per_battle": 1,
-      "consumes_attack": false,
-      "targets": [],
-      "conditions": [
-        {"type": "attack_is_normal"},
-        {"type": "damage_dealt_at_least", "value": 1}
-      ],
-      "effects": [
-        {
-          "effect_type": "status",
-          "value": null,
-          "duration_turns": 3,
-          "chance": null,
-          "target_type": "event_unit",
-          "duration_type": "turns",
-          "params": {"status": "poison", "damage": 2}
-        }
-      ],
-      "enabled": true,
-      "version": 1
-    },
-    {
-      "skill_id": "asmodeus_active",
-      "name": "色欲の魔眼",
-      "description": "異性の敵1体を魅了し、対象は次の自身の行動を行えない。",
-      "skill_type": "active",
-      "trigger": null,
-      "target_type": "enemy_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": false,
       "targets": [
         {
           "key": "main",
-          "side": "enemy",
+          "side": "ally",
           "count": 1,
-          "filter": [{"type": "opposite_gender"}]
+          "filter": []
         }
       ],
       "conditions": [],
+      "effects": [
+        {
+          "effect_type": "status_immune",
+          "value": null,
+          "duration_turns": 2,
+          "chance": null,
+          "target_type": "selection:main",
+          "duration_type": "turns",
+          "params": {},
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "satan_active",
+      "name": "憤怒の解放",
+      "description": "味方全員に付与されているデバフをすべて解除する。状態異常は解除しない。",
+      "skill_type": "active",
+      "trigger": null,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": 1,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [],
+      "effects": [
+        {
+          "effect_type": "cleanse_debuff",
+          "value": null,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "ally_all",
+          "duration_type": "instant",
+          "params": {},
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "beelzebub_passive",
+      "name": "蠅王の瘴気",
+      "description": "バトル開始時、敵全体に毒（3ダメージ×2ターン）を付与する。",
+      "skill_type": "passive",
+      "trigger": "battle_start",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": null,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [],
+      "effects": [
+        {
+          "effect_type": "status",
+          "value": null,
+          "duration_turns": 2,
+          "chance": null,
+          "target_type": "enemy_all",
+          "duration_type": "turns",
+          "params": {
+            "status": "poison",
+            "damage": 3
+          },
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "asmodeus_passive",
+      "name": "色欲の権能",
+      "description": "バトル開始時、味方全員のATK+1。",
+      "skill_type": "passive",
+      "trigger": "battle_start",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": null,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [],
+      "effects": [
+        {
+          "effect_type": "atk_modifier",
+          "value": 1,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "ally_all",
+          "duration_type": "permanent",
+          "params": {},
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "belphegor_passive",
+      "name": "怠惰の権能",
+      "description": "男性の敵へ攻撃ダメージを与えた時、対象を行動不能（1ターン）にする。",
+      "skill_type": "passive",
+      "trigger": "after_attack",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": null,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [
+        {
+          "type": "damage_is_attack"
+        },
+        {
+          "type": "damage_dealt_at_least",
+          "value": 1
+        },
+        {
+          "type": "target_is_gender",
+          "value": "male"
+        }
+      ],
       "effects": [
         {
           "effect_type": "status",
           "value": null,
           "duration_turns": 1,
           "chance": null,
-          "target_type": "selection:main",
+          "target_type": "event_unit",
           "duration_type": "turns",
-          "params": {"status": "charm"}
+          "params": {
+            "status": "stun"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
-      "skill_id": "belphegor_passive",
-      "name": "怠惰の権能",
-      "description": "通常攻撃を受けるたび、攻撃した敵の次の攻撃のみATK-2。同一対象には重複しない。",
-      "skill_type": "passive",
-      "trigger": "on_damage",
-      "target_type": "event_source",
-      "priority": 40,
-      "max_uses_per_battle": null,
+      "skill_id": "leviathan_active",
+      "name": "深海の威圧",
+      "description": "敵全体を挑発（1ターン）する。挑発が強制するのは通常攻撃のみ。",
+      "skill_type": "active",
+      "trigger": null,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": 1,
       "consumes_attack": false,
       "targets": [],
-      "conditions": [
-        {"type": "attack_is_normal"}
-      ],
+      "conditions": [],
       "effects": [
         {
-          "effect_type": "next_attack_atk_modifier",
-          "value": -2,
-          "duration_turns": null,
+          "effect_type": "taunt",
+          "value": null,
+          "duration_turns": 1,
           "chance": null,
-          "target_type": "event_source",
-          "duration_type": "attacks",
-          "params": {"attacks": 1, "no_stack_per_target": true}
+          "target_type": "enemy_all",
+          "duration_type": "turns",
+          "params": {
+            "forced_target": "caster"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "mammon_active",
       "name": "強欲",
-      "description": "敵1体のATK-2、自身のATK+2。現在ラウンド終了まで継続する。",
+      "description": "敵1体のATK-2。さらに自身のATK+2。両方ともラウンド終了まで継続する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [
-        {"key": "main", "side": "enemy", "count": 1, "filter": []}
+        {
+          "key": "main",
+          "side": "enemy",
+          "count": 1,
+          "filter": []
+        }
       ],
       "conditions": [],
       "effects": [
@@ -448,7 +614,8 @@
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "round_end",
-          "params": {"rounds": 1}
+          "params": {},
+          "on_trigger": null
         },
         {
           "effect_type": "atk_modifier",
@@ -457,50 +624,94 @@
           "chance": null,
           "target_type": "self",
           "duration_type": "round_end",
-          "params": {"rounds": 1}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "nidhogg_passive",
       "name": "根喰らい",
-      "description": "通常攻撃でダメージを与えた敵のATK-1。対象の次の自身の行動終了時に解除する。同一対象には重複しない。",
+      "description": "攻撃ダメージを与えた敵に回復阻害デバフ（2ターン）を付与する。対象はHPを回復できず、蘇生もできない。",
       "skill_type": "passive",
       "trigger": "after_attack",
-      "target_type": "event_unit",
-      "priority": 60,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
       "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [],
       "conditions": [
-        {"type": "attack_is_normal"},
-        {"type": "damage_dealt_at_least", "value": 1}
+        {
+          "type": "damage_is_attack"
+        },
+        {
+          "type": "damage_dealt_at_least",
+          "value": 1
+        }
       ],
       "effects": [
         {
-          "effect_type": "atk_modifier",
-          "value": -1,
-          "duration_turns": 1,
+          "effect_type": "heal_block",
+          "value": null,
+          "duration_turns": 2,
           "chance": null,
           "target_type": "event_unit",
           "duration_type": "turns",
-          "params": {"no_stack_per_target": true}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
+    },
+    {
+      "skill_id": "fafnir_active",
+      "name": "黄金の加護",
+      "description": "味方1体のHPを20回復する。",
+      "skill_type": "active",
+      "trigger": null,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": 1,
+      "consumes_attack": false,
+      "targets": [
+        {
+          "key": "main",
+          "side": "ally",
+          "count": 1,
+          "filter": []
+        }
+      ],
+      "conditions": [],
+      "effects": [
+        {
+          "effect_type": "heal",
+          "value": 20,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "selection:main",
+          "duration_type": "instant",
+          "params": {},
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
     },
     {
       "skill_id": "abaddon_active",
       "name": "奈落崩壊",
-      "description": "生存している敵全体へ5ダメージを与える。",
+      "description": "生存している敵全体へ5スキルダメージ。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_all",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": true,
       "targets": [],
       "conditions": [],
@@ -512,25 +723,63 @@
           "chance": null,
           "target_type": "enemy_all",
           "duration_type": "instant",
-          "params": {"can_critical": true}
+          "params": {
+            "damage_kind": "skill"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
+    },
+    {
+      "skill_id": "belial_passive",
+      "name": "魔王の先見",
+      "description": "味方がバトル中初めて行動不能になる時、その行動不能を無効化する。",
+      "skill_type": "passive",
+      "trigger": "before_status_apply",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 50,
+      "max_uses_per_battle": 1,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [
+        {
+          "type": "status_is",
+          "value": "stun"
+        },
+        {
+          "type": "event_unit_is_ally"
+        }
+      ],
+      "effects": [
+        {
+          "effect_type": "nullify_status",
+          "value": null,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "self",
+          "duration_type": "instant",
+          "params": {},
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
     },
     {
       "skill_id": "astaroth_active",
       "name": "魔王の叡智",
-      "description": "味方1体の状態異常をすべて解除する。さらに対象は次の自身の行動終了まで新たな状態異常を受けない。",
+      "description": "味方全員に付与されている状態異常をすべて解除する。デバフは解除しない。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "ally_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": false,
-      "targets": [
-        {"key": "main", "side": "ally", "count": 1, "filter": []}
-      ],
+      "targets": [],
       "conditions": [],
       "effects": [
         {
@@ -538,146 +787,173 @@
           "value": null,
           "duration_turns": null,
           "chance": null,
-          "target_type": "selection:main",
+          "target_type": "ally_all",
           "duration_type": "instant",
-          "params": {}
-        },
-        {
-          "effect_type": "status_immune",
-          "value": null,
-          "duration_turns": 1,
-          "chance": null,
-          "target_type": "selection:main",
-          "duration_type": "turns",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "kyubi_active",
       "name": "妖狐幻術",
-      "description": "敵1体のATK-4。対象の次の自身の行動終了時に解除する。",
+      "description": "敵1体のSPD-20（2ターン）。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [
-        {"key": "main", "side": "enemy", "count": 1, "filter": []}
+        {
+          "key": "main",
+          "side": "enemy",
+          "count": 1,
+          "filter": []
+        }
       ],
       "conditions": [],
       "effects": [
         {
-          "effect_type": "atk_modifier",
-          "value": -4,
-          "duration_turns": 1,
+          "effect_type": "speed_modifier",
+          "value": -20,
+          "duration_turns": 2,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "turns",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "lilith_passive",
       "name": "夜の誘惑",
-      "description": "異性の敵から最初に受ける通常攻撃1回のダメージを0にする。",
+      "description": "バトル開始時、男性の敵全体のATK-2。",
       "skill_type": "passive",
-      "trigger": "on_damage",
-      "target_type": "self",
-      "priority": 40,
-      "max_uses_per_battle": 1,
-      "consumes_attack": false,
-      "targets": [],
-      "conditions": [
-        {"type": "attack_is_normal"},
-        {"type": "source_is_opposite_gender"}
-      ],
-      "effects": [
-        {
-          "effect_type": "nullify_damage",
-          "value": null,
-          "duration_turns": null,
-          "chance": null,
-          "target_type": "self",
-          "duration_type": "instant",
-          "params": {}
-        }
-      ],
-      "enabled": true,
-      "version": 1
-    },
-    {
-      "skill_id": "phoenix_passive",
-      "name": "不死鳥",
-      "description": "自身が最初に戦闘不能になった時、HP14で蘇生する。",
-      "skill_type": "passive",
-      "trigger": "on_defeat",
-      "target_type": "self",
-      "priority": 30,
-      "max_uses_per_battle": 1,
-      "consumes_attack": false,
-      "targets": [],
-      "conditions": [
-        {"type": "defeated_is_self"}
-      ],
-      "effects": [
-        {
-          "effect_type": "revive",
-          "value": 14,
-          "duration_turns": null,
-          "chance": null,
-          "target_type": "self",
-          "duration_type": "instant",
-          "params": {}
-        }
-      ],
-      "enabled": true,
-      "version": 1
-    },
-    {
-      "skill_id": "hraesvelgr_active",
-      "name": "氷嵐",
-      "description": "生存している敵全体へ3ダメージを与える。",
-      "skill_type": "active",
-      "trigger": null,
-      "target_type": "enemy_all",
+      "trigger": "battle_start",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
-      "consumes_attack": true,
+      "max_uses_per_battle": null,
+      "consumes_attack": false,
       "targets": [],
       "conditions": [],
       "effects": [
         {
-          "effect_type": "damage",
-          "value": 3,
+          "effect_type": "atk_modifier",
+          "value": -2,
           "duration_turns": null,
           "chance": null,
           "target_type": "enemy_all",
-          "duration_type": "instant",
-          "params": {"can_critical": true}
+          "duration_type": "permanent",
+          "params": {
+            "gender": "male"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
-      "skill_id": "medusa_active",
-      "name": "石化の魔眼",
-      "description": "敵1体を石化させ、対象は次の自身の行動を行えない。",
+      "skill_id": "phoenix_active",
+      "name": "再誕の炎",
+      "description": "戦闘不能の味方1体をHP16で蘇生する。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": true,
       "targets": [
-        {"key": "main", "side": "enemy", "count": 1, "filter": []}
+        {
+          "key": "main",
+          "side": "ally",
+          "count": 1,
+          "filter": [
+            {
+              "type": "defeated"
+            }
+          ]
+        }
+      ],
+      "conditions": [],
+      "effects": [
+        {
+          "effect_type": "revive",
+          "value": 16,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "selection:main",
+          "duration_type": "instant",
+          "params": {},
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "hraesvelgr_passive",
+      "name": "暴風の翼",
+      "description": "攻撃ダメージを与えた敵のSPD-5（1ターン）。",
+      "skill_type": "passive",
+      "trigger": "after_attack",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": null,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [
+        {
+          "type": "damage_is_attack"
+        },
+        {
+          "type": "damage_dealt_at_least",
+          "value": 1
+        }
+      ],
+      "effects": [
+        {
+          "effect_type": "speed_modifier",
+          "value": -5,
+          "duration_turns": 1,
+          "chance": null,
+          "target_type": "event_unit",
+          "duration_type": "turns",
+          "params": {},
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "medusa_active",
+      "name": "石化の魔眼",
+      "description": "敵1体を行動不能（1ターン）にする。このターンの攻撃を消費する。",
+      "skill_type": "active",
+      "trigger": null,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": 1,
+      "consumes_attack": true,
+      "targets": [
+        {
+          "key": "main",
+          "side": "enemy",
+          "count": 1,
+          "filter": []
+        }
       ],
       "conditions": [],
       "effects": [
@@ -688,132 +964,229 @@
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "turns",
-          "params": {"status": "petrify"}
+          "params": {
+            "status": "stun"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
-      "skill_id": "hydra_passive",
-      "name": "再生する首",
-      "description": "自身の行動終了時、HPを3回復する。",
+      "skill_id": "cerberus_passive",
+      "name": "三頭の狩り",
+      "description": "HP50%以下の敵を攻撃する時、その攻撃のみATK+2。",
       "skill_type": "passive",
-      "trigger": "turn_end",
-      "target_type": "self",
-      "priority": 70,
+      "trigger": "before_attack",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
       "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [],
       "conditions": [
-        {"type": "turn_owner_is_self"}
+        {
+          "type": "target_hp_ratio_at_most",
+          "value": 0.5
+        }
       ],
       "effects": [
         {
-          "effect_type": "heal",
-          "value": 3,
+          "effect_type": "next_attack_atk_modifier",
+          "value": 2,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
-          "duration_type": "instant",
-          "params": {}
+          "duration_type": "attacks",
+          "params": {
+            "attacks": 1
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
+    },
+    {
+      "skill_id": "hydra_passive",
+      "name": "猛毒増幅",
+      "description": "敵に毒が付与される時、その毒のダメージ+1、継続ターン+1。同じ毒に対して1回のみ適用。",
+      "skill_type": "passive",
+      "trigger": "battle_start",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 10,
+      "max_uses_per_battle": null,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [],
+      "effects": [
+        {
+          "effect_type": "poison_amplify",
+          "value": null,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "self",
+          "duration_type": "permanent",
+          "params": {
+            "damage_bonus": 1,
+            "turn_bonus": 1
+          },
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
+    },
+    {
+      "skill_id": "chimera_passive",
+      "name": "異形の狩り",
+      "description": "状態異常またはデバフを受けている敵を攻撃する時、その攻撃のみATK+2。",
+      "skill_type": "passive",
+      "trigger": "before_attack",
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": null,
+      "consumes_attack": false,
+      "targets": [],
+      "conditions": [
+        {
+          "type": "target_has_status_or_debuff"
+        }
+      ],
+      "effects": [
+        {
+          "effect_type": "next_attack_atk_modifier",
+          "value": 2,
+          "duration_turns": null,
+          "chance": null,
+          "target_type": "self",
+          "duration_type": "attacks",
+          "params": {
+            "attacks": 1
+          },
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
     },
     {
       "skill_id": "yuki_onna_active",
-      "name": "吹雪",
-      "description": "生存している敵全体のATK-1。各対象の次の自身の行動終了時に解除する。",
+      "name": "凍てつく風",
+      "description": "敵全体のSPD-5（1ターン）。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_all",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": true,
       "targets": [],
       "conditions": [],
       "effects": [
         {
-          "effect_type": "atk_modifier",
-          "value": -1,
+          "effect_type": "speed_modifier",
+          "value": -5,
           "duration_turns": 1,
           "chance": null,
           "target_type": "enemy_all",
           "duration_type": "turns",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "azazel_active",
       "name": "堕天の鼓舞",
-      "description": "味方1体のATK+2。対象の行動終了2回分継続する。",
+      "description": "味方1体のATK+1（2ターン）。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "ally_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [
-        {"key": "main", "side": "ally", "count": 1, "filter": []}
+        {
+          "key": "main",
+          "side": "ally",
+          "count": 1,
+          "filter": []
+        }
       ],
       "conditions": [],
       "effects": [
         {
           "effect_type": "atk_modifier",
-          "value": 2,
+          "value": 1,
           "duration_turns": 2,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "turns",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "paimon_passive",
-      "name": "王の威光",
-      "description": "第1ラウンド中、自身のATK+2。",
+      "name": "王の施し",
+      "description": "自分のターン開始時、生存している味方の中で現在HPが最も低い1体のHPを4回復する。",
       "skill_type": "passive",
-      "trigger": "always",
-      "target_type": "self",
+      "trigger": "turn_start",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": null,
       "consumes_attack": false,
       "targets": [],
-      "conditions": [],
+      "conditions": [
+        {
+          "type": "turn_owner_is_self"
+        }
+      ],
       "effects": [
         {
-          "effect_type": "conditional_atk_modifier",
-          "value": 2,
+          "effect_type": "heal",
+          "value": 4,
           "duration_turns": null,
           "chance": null,
-          "target_type": "self",
-          "duration_type": "permanent",
-          "params": {"condition": {"type": "round_at_most", "value": 1}}
+          "target_type": "ally_all",
+          "duration_type": "instant",
+          "params": {
+            "pick": "lowest_hp"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "sphinx_passive",
-      "name": "謎かけ",
-      "description": "自身が最初に状態異常を受ける時、その状態異常を無効化する。",
+      "name": "古代の守護",
+      "description": "自身がバトル中初めて受ける状態異常を無効化する。",
       "skill_type": "passive",
       "trigger": "before_status_apply",
-      "target_type": "self",
-      "priority": 10,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": false,
       "targets": [],
-      "conditions": [],
+      "conditions": [
+        {
+          "type": "event_unit_is_self"
+        }
+      ],
       "effects": [
         {
           "effect_type": "nullify_status",
@@ -822,86 +1195,95 @@
           "chance": null,
           "target_type": "self",
           "duration_type": "instant",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
-      "skill_id": "siren_active",
-      "name": "誘惑の歌",
-      "description": "異性の敵1体のATK-3。対象の行動終了2回分継続する。",
-      "skill_type": "active",
-      "trigger": null,
-      "target_type": "enemy_single",
+      "skill_id": "siren_passive",
+      "name": "惑わしの歌",
+      "description": "バトル開始時、男性の敵の中で最もATKが高い1体のATK-1。",
+      "skill_type": "passive",
+      "trigger": "battle_start",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": false,
-      "targets": [
-        {
-          "key": "main",
-          "side": "enemy",
-          "count": 1,
-          "filter": [{"type": "opposite_gender"}]
-        }
-      ],
+      "targets": [],
       "conditions": [],
       "effects": [
         {
           "effect_type": "atk_modifier",
-          "value": -3,
-          "duration_turns": 2,
+          "value": -1,
+          "duration_turns": null,
           "chance": null,
-          "target_type": "selection:main",
-          "duration_type": "turns",
-          "params": {}
+          "target_type": "enemy_all",
+          "duration_type": "permanent",
+          "params": {
+            "gender": "male",
+            "pick": "highest_atk"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
-      "skill_id": "kraken_active",
-      "name": "触手拘束",
-      "description": "敵1体を選択する。対象が次に通常攻撃する場合、攻撃対象はクラーケンでなければならない。対象の次の自身の行動終了時に解除する。",
-      "skill_type": "active",
-      "trigger": null,
-      "target_type": "enemy_single",
+      "skill_id": "kraken_passive",
+      "name": "深海の拘束",
+      "description": "通常攻撃を受けた時、攻撃した敵のSPD-4（1ターン）。",
+      "skill_type": "passive",
+      "trigger": "on_damage",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": false,
-      "targets": [
-        {"key": "main", "side": "enemy", "count": 1, "filter": []}
+      "targets": [],
+      "conditions": [
+        {
+          "type": "attack_is_normal"
+        }
       ],
-      "conditions": [],
       "effects": [
         {
-          "effect_type": "taunt",
-          "value": null,
+          "effect_type": "speed_modifier",
+          "value": -4,
           "duration_turns": 1,
           "chance": null,
-          "target_type": "selection:main",
+          "target_type": "event_source",
           "duration_type": "turns",
-          "params": {"forced_target": "caster"}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "dullahan_passive",
-      "name": "首なしの執念",
-      "description": "戦闘不能になるダメージを最初に受ける時、HP1で耐える。",
+      "name": "首無し騎士",
+      "description": "攻撃ダメージによって戦闘不能になる時、HP1で耐える。スキルダメージ・継続ダメージでは発動しない。",
       "skill_type": "passive",
       "trigger": "before_defeat",
-      "target_type": "self",
-      "priority": 20,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": false,
       "targets": [],
       "conditions": [
-        {"type": "defeat_by_damage"}
+        {
+          "type": "defeat_by_damage"
+        },
+        {
+          "type": "damage_is_attack"
+        }
       ],
       "effects": [
         {
@@ -911,111 +1293,116 @@
           "chance": null,
           "target_type": "self",
           "duration_type": "instant",
-          "params": {}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
       "skill_id": "ifrit_active",
-      "name": "灼熱撃",
-      "description": "敵1体へ12ダメージを与える。",
+      "name": "灼熱",
+      "description": "敵1体へ6スキルダメージ。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
-      "target_type": "enemy_single",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
       "max_uses_per_battle": 1,
       "consumes_attack": true,
       "targets": [
-        {"key": "main", "side": "enemy", "count": 1, "filter": []}
+        {
+          "key": "main",
+          "side": "enemy",
+          "count": 1,
+          "filter": []
+        }
       ],
       "conditions": [],
       "effects": [
         {
           "effect_type": "damage",
-          "value": 12,
+          "value": 6,
           "duration_turns": null,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "instant",
-          "params": {"can_critical": true}
+          "params": {
+            "damage_kind": "skill"
+          },
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
     },
     {
-      "skill_id": "banshee_active",
-      "name": "死の絶叫",
-      "description": "生存している敵全体へ2ダメージを与え、ATK-1を付与する。ATK低下は各対象の次の自身の行動終了時に解除する。",
-      "skill_type": "active",
-      "trigger": null,
-      "target_type": "enemy_all",
+      "skill_id": "banshee_passive",
+      "name": "死者の慟哭",
+      "description": "味方が蘇生した時、その使い魔のHPをさらに8回復する。",
+      "skill_type": "passive",
+      "trigger": "on_revive",
+      "extra_triggers": [],
+      "target_type": null,
       "priority": 100,
-      "max_uses_per_battle": 1,
-      "consumes_attack": true,
-      "targets": [],
-      "conditions": [],
-      "effects": [
-        {
-          "effect_type": "damage",
-          "value": 2,
-          "duration_turns": null,
-          "chance": null,
-          "target_type": "enemy_all",
-          "duration_type": "instant",
-          "params": {"can_critical": true}
-        },
-        {
-          "effect_type": "atk_modifier",
-          "value": -1,
-          "duration_turns": 1,
-          "chance": null,
-          "target_type": "enemy_all",
-          "duration_type": "turns",
-          "params": {}
-        }
-      ],
-      "enabled": true,
-      "version": 1
-    },
-    {
-      "skill_id": "pegasus_active",
-      "name": "天馬の加護",
-      "description": "味方1体のHPを8回復する。さらに対象の次の攻撃1回のみATK+1。",
-      "skill_type": "active",
-      "trigger": null,
-      "target_type": "ally_single",
-      "priority": 100,
-      "max_uses_per_battle": 1,
+      "max_uses_per_battle": null,
       "consumes_attack": false,
-      "targets": [
-        {"key": "main", "side": "ally", "count": 1, "filter": []}
+      "targets": [],
+      "conditions": [
+        {
+          "type": "event_unit_is_ally"
+        }
       ],
-      "conditions": [],
       "effects": [
         {
           "effect_type": "heal",
           "value": 8,
           "duration_turns": null,
           "chance": null,
-          "target_type": "selection:main",
+          "target_type": "event_unit",
           "duration_type": "instant",
-          "params": {}
-        },
-        {
-          "effect_type": "next_attack_atk_modifier",
-          "value": 1,
-          "duration_turns": null,
-          "chance": null,
-          "target_type": "selection:main",
-          "duration_type": "attacks",
-          "params": {"attacks": 1}
+          "params": {},
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 1
+      "version": 2
+    },
+    {
+      "skill_id": "pegasus_active",
+      "name": "天駆の加護",
+      "description": "味方1体のSPD+12（2ターン）。",
+      "skill_type": "active",
+      "trigger": null,
+      "extra_triggers": [],
+      "target_type": null,
+      "priority": 100,
+      "max_uses_per_battle": 1,
+      "consumes_attack": false,
+      "targets": [
+        {
+          "key": "main",
+          "side": "ally",
+          "count": 1,
+          "filter": []
+        }
+      ],
+      "conditions": [],
+      "effects": [
+        {
+          "effect_type": "speed_modifier",
+          "value": 12,
+          "duration_turns": 2,
+          "chance": null,
+          "target_type": "selection:main",
+          "duration_type": "turns",
+          "params": {},
+          "on_trigger": null
+        }
+      ],
+      "enabled": true,
+      "version": 2
     }
   ]
 }

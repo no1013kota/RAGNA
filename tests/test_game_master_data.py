@@ -1,6 +1,6 @@
 """使い魔・スキル・ガチャのマスターデータが仕様どおりかを確認するテスト。
 
-docs/FAMILIAR_MASTER.md と docs/GAME_SPEC.md の数値を変更した場合は、
+docs/BATTLE_RULES.md と docs/GAME_SPEC.md の数値を変更した場合は、
 このテストの期待値も同じ変更として更新してください。
 """
 
@@ -26,33 +26,53 @@ from game.models import (
 MASTER = load_master_data()
 
 ROOT = Path(__file__).resolve().parents[1]
-FAMILIAR_DOC = ROOT / "docs" / "FAMILIAR_MASTER.md"
+BATTLE_RULES_DOC = ROOT / "docs" / "BATTLE_RULES.md"
 
-GENDER_LABELS = {"male": "男性", "female": "女性", "none": "性別なし"}
+GENDER_LABELS = {"male": "男性", "female": "女性", "none": "なし"}
 
 
 class DocumentConsistencyTests(unittest.TestCase):
-    """docs/FAMILIAR_MASTER.md と data/master/familiars.json のずれを防ぐ。"""
+    """docs/BATTLE_RULES.md と data/master/*.json のずれを防ぐ。"""
 
     def setUp(self) -> None:
-        self.document = FAMILIAR_DOC.read_text(encoding="utf-8")
+        self.document = BATTLE_RULES_DOC.read_text(encoding="utf-8")
 
-    def parse_document(self) -> dict[str, dict[str, str]]:
-        """文書から使い魔ごとの項目を読み取る。"""
+    def parse_document(self) -> dict[str, tuple[int, int, int, str]]:
+        """文書の表から ``ID → (HP, ATK, SPD, 性別)`` を読み取る。
 
-        entries: dict[str, dict[str, str]] = {}
-        current: str | None = None
+        Sランクは1体ずつ、A・B・Cランクは一覧表で書いているため、どちらの形も
+        読めるように ``| `id` |`` を含む行だけを対象にします。
+        """
+
+        entries: dict[str, tuple[int, int, int, str]] = {}
 
         for line in self.document.split("\n"):
-            id_match = re.match(r"^- ID：`([a-z_]+)`$", line)
-            if id_match:
-                current = id_match.group(1)
-                entries[current] = {}
+            if "`" not in line or not line.startswith("|"):
                 continue
 
-            field_match = re.match(r"^- (HP|ATK|SPD|COST|性別)：(.+)$", line)
-            if current and field_match:
-                entries[current][field_match.group(1)] = field_match.group(2).strip()
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            ids = [
+                cell.strip("`")
+                for cell in cells
+                if cell.startswith("`") and cell.endswith("`")
+            ]
+            if len(ids) != 1:
+                continue
+
+            # B・Cランクは先頭に連番の列があるため、ID列より後ろだけを見る
+            after_id = cells[cells.index(f"`{ids[0]}`") + 1 :]
+            numbers = [cell for cell in after_id if cell.isdigit()]
+            genders = [cell for cell in after_id if cell in GENDER_LABELS.values()]
+
+            if len(numbers) < 3 or not genders:
+                continue
+
+            entries[ids[0]] = (
+                int(numbers[0]),
+                int(numbers[1]),
+                int(numbers[2]),
+                genders[0],
+            )
 
         return entries
 
@@ -64,22 +84,15 @@ class DocumentConsistencyTests(unittest.TestCase):
     def test_document_stats_match_the_master_data(self) -> None:
         entries = self.parse_document()
 
-        for familiar_id, fields in entries.items():
+        for familiar_id, (hp, atk, speed, gender) in entries.items():
             familiar = MASTER.get_familiar(familiar_id)
 
-            self.assertEqual(fields.get("HP"), str(familiar.base_hp), familiar_id)
-            self.assertEqual(fields.get("ATK"), str(familiar.base_atk), familiar_id)
-            self.assertEqual(fields.get("SPD"), str(familiar.speed), familiar_id)
-            self.assertEqual(fields.get("COST"), str(familiar.cost), familiar_id)
-
-    def test_document_genders_match_the_master_data(self) -> None:
-        entries = self.parse_document()
-
-        for familiar_id, fields in entries.items():
-            familiar = MASTER.get_familiar(familiar_id)
-            expected = GENDER_LABELS.get(familiar.gender)
-
-            self.assertEqual(fields.get("性別"), expected, familiar_id)
+            self.assertEqual(hp, familiar.base_hp, familiar_id)
+            self.assertEqual(atk, familiar.base_atk, familiar_id)
+            self.assertEqual(speed, familiar.speed, familiar_id)
+            self.assertEqual(
+                gender, GENDER_LABELS.get(familiar.gender), familiar_id
+            )
 
 
 class RoundingTests(unittest.TestCase):
@@ -96,18 +109,36 @@ class RoundingTests(unittest.TestCase):
 
 class FamiliarMasterTests(unittest.TestCase):
     def test_registered_counts(self) -> None:
-        self.assertEqual(len(MASTER.familiars), 40)
+        # BATTLE_RULES.md 10節：S5 + A15 + B20 + C10 = 50体
+        self.assertEqual(len(MASTER.familiars), 50)
         self.assertEqual(len(MASTER.familiars_by_rank("S")), 5)
         self.assertEqual(len(MASTER.familiars_by_rank("A")), 15)
         self.assertEqual(len(MASTER.familiars_by_rank("B")), 20)
+        self.assertEqual(len(MASTER.familiars_by_rank("C")), 10)
 
-    def test_c_rank_is_not_registered_yet(self) -> None:
-        # 受領データにCランクが含まれていないことを明示的に記録する（10.6節）。
-        self.assertEqual(MASTER.familiars_by_rank("C"), [])
-        self.assertEqual(MASTER.missing_ranks(), ["C"])
+    def test_every_rank_is_registered(self) -> None:
+        # 全ランクが登録済みなので、排出率の寄せ替えは発生しない
+        self.assertEqual(MASTER.missing_ranks(), [])
+
+    def test_hel_is_a_complete_reward_and_not_in_the_gacha(self) -> None:
+        # 11節：ヘルはコンプリート報酬の特別使い魔
+        self.assertEqual(
+            [familiar.familiar_id for familiar in MASTER.complete_reward_familiars()],
+            ["hel"],
+        )
+        self.assertNotIn(
+            "hel",
+            [familiar.familiar_id for familiar in MASTER.gacha_familiars_by_rank("S")],
+        )
+        self.assertEqual(len(MASTER.gacha_familiars_by_rank("S")), 4)
+
+    def test_base_speeds_never_collide(self) -> None:
+        # 1節「基礎SPDは原則として全使い魔で重複させない」
+        speeds = [familiar.speed for familiar in MASTER.familiars.values()]
+        self.assertEqual(len(speeds), len(set(speeds)))
 
     def test_every_familiar_has_a_registered_gender(self) -> None:
-        # 性別は魅了の成否に影響するため、全個体に登録しておく（FAMILIAR_MASTER.md 1節）。
+        # 性別は性別条件の効果に影響するため、全個体に登録しておく（BATTLE_RULES.md 10節）。
         for familiar in MASTER.familiars.values():
             self.assertIn(familiar.gender, GENDER_VALUES, familiar.familiar_id)
 
@@ -126,12 +157,13 @@ class FamiliarMasterTests(unittest.TestCase):
     def test_known_stats_match_the_document(self) -> None:
         expected = {
             "loki": (46, 8, 84, 5, "S"),
-            "hel": (59, 6, 5, 5, "S"),
+            "hel": (58, 6, 5, 5, "S"),
             "fenrir": (34, 11, 95, 5, "S"),
-            "satan": (36, 11, 31, 4, "A"),
-            "leviathan": (48, 8, 27, 4, "A"),
-            "cyclops": (24, 10, 14, 3, "B"),
-            "pegasus": (26, 7, 93, 3, "B"),
+            "satan": (36, 9, 46, 4, "A"),
+            "leviathan": (49, 6, 27, 4, "A"),
+            "cyclops": (25, 10, 26, 3, "B"),
+            "pegasus": (34, 5, 98, 3, "B"),
+            "dark_elf": (14, 8, 83, 2, "C"),
         }
 
         for familiar_id, (hp, atk, speed, cost, rank) in expected.items():
@@ -175,11 +207,33 @@ class SkillMasterTests(unittest.TestCase):
                 self.assertEqual(skill.skill_type, SKILL_TYPE_ACTIVE)
                 self.assertIsNone(skill.trigger, skill.skill_id)
 
-    def test_active_skills_default_to_one_use_per_battle(self) -> None:
-        # 19.2節「各アクティブスキルの初期使用上限は1バトル1回です」
+    def test_unlimited_actives_are_declared_without_a_limit(self) -> None:
+        # BATTLE_RULES.md：「回数制限なし」と書かれたACTIVEだけ上限を持たない
+        unlimited = {
+            skill.skill_id
+            for skill in MASTER.skills.values()
+            if skill.is_active and skill.max_uses_per_battle is None
+        }
+        self.assertEqual(
+            unlimited,
+            {
+                "loki_active",
+                "mammon_active",
+                "abaddon_active",
+                "kyubi_active",
+                "yuki_onna_active",
+                "azazel_active",
+            },
+        )
+
         for skill in MASTER.skills.values():
-            if skill.is_active:
+            if skill.is_active and skill.max_uses_per_battle is not None:
                 self.assertEqual(skill.max_uses_per_battle, 1, skill.skill_id)
+
+    def test_passive_extra_triggers_are_supported(self) -> None:
+        for skill in MASTER.skills.values():
+            for trigger in skill.triggers:
+                self.assertIn(trigger, TRIGGERS, skill.skill_id)
 
     def test_selection_targets_are_declared(self) -> None:
         for skill in MASTER.skills.values():

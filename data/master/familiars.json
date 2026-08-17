@@ -1,48 +1,682 @@
 {
-  "version": 1,
-  "note": "docs/FAMILIAR_MASTER.mdの正式データ。genderは神話・伝承上の性別に基づく暫定値で、none（性別なし）は異性条件の効果を受けない。Cランクは未登録のため、その排出率はBランクへ寄せている。",
+  "version": 2,
+  "note": "docs/BATTLE_RULES.md 11〜14節の正式データ。genderは神話・伝承上の性別に基づく値で、none（なし）は性別条件の効果を受けない。文面や数値を変える場合は、この JSON と BATTLE_RULES.md を同じ変更として更新すること。",
   "familiars": [
-    {"familiar_id": "loki", "name": "ロキ", "rank": "S", "base_hp": 46, "base_atk": 8, "speed": 84, "cost": 5, "gender": "male", "description": "状態異常を跳ね返し、敵味方のATKを入れ替える策略型。", "skills": ["loki_passive", "loki_active"]},
-    {"familiar_id": "surtr", "name": "スルト", "rank": "S", "base_hp": 42, "base_atk": 10, "speed": 18, "cost": 5, "gender": "male", "description": "追い詰められるほど火力が上がる終末の巨人。", "skills": ["surtr_passive", "surtr_active"]},
-    {"familiar_id": "fenrir", "name": "フェンリル", "rank": "S", "base_hp": 34, "base_atk": 11, "speed": 95, "cost": 5, "gender": "male", "description": "最速で先手を取り、初撃に火力を集中する魔狼。", "skills": ["fenrir_passive", "fenrir_active"]},
-    {"familiar_id": "jormungandr", "name": "ヨルムンガンド", "rank": "S", "base_hp": 45, "base_atk": 9, "speed": 45, "cost": 5, "gender": "male", "description": "全体弱体と毒で試合を長期戦へ引き込む大蛇。", "skills": ["jormungandr_passive", "jormungandr_active"]},
-    {"familiar_id": "hel", "name": "ヘル", "rank": "S", "base_hp": 59, "base_atk": 6, "speed": 5, "cost": 5, "gender": "female", "description": "味方を蘇生し、敵を即死させる冥府の女王。", "skills": ["hel_passive", "hel_active"]},
-
-    {"familiar_id": "lucifer", "name": "ルシファー", "rank": "A", "base_hp": 36, "base_atk": 9, "speed": 72, "cost": 4, "gender": "male", "description": "大きな回復量で前線を支える明星。", "skills": ["lucifer_active"]},
-    {"familiar_id": "satan", "name": "サタン", "rank": "A", "base_hp": 36, "base_atk": 11, "speed": 31, "cost": 4, "gender": "male", "description": "A最高クラスの純粋火力型。", "skills": []},
-    {"familiar_id": "beelzebub", "name": "ベルゼブブ", "rank": "A", "base_hp": 38, "base_atk": 8, "speed": 57, "cost": 4, "gender": "male", "description": "通常攻撃から毒を広げる蠅の王。", "skills": ["beelzebub_passive"]},
-    {"familiar_id": "asmodeus", "name": "アスモデウス", "rank": "A", "base_hp": 34, "base_atk": 9, "speed": 76, "cost": 4, "gender": "male", "description": "異性の敵を魅了し行動を封じる。", "skills": ["asmodeus_active"]},
-    {"familiar_id": "belphegor", "name": "ベルフェゴール", "rank": "A", "base_hp": 40, "base_atk": 8, "speed": 22, "cost": 4, "gender": "male", "description": "攻撃してきた敵の火力を削ぐ怠惰の魔王。", "skills": ["belphegor_passive"]},
-    {"familiar_id": "leviathan", "name": "レヴィアタン", "rank": "A", "base_hp": 48, "base_atk": 8, "speed": 27, "cost": 4, "gender": "none", "description": "A最高クラスのHPを持つ超耐久型。", "skills": []},
-    {"familiar_id": "mammon", "name": "マモン", "rank": "A", "base_hp": 32, "base_atk": 10, "speed": 67, "cost": 4, "gender": "male", "description": "敵の力を奪って自分の火力に変える強欲の魔王。", "skills": ["mammon_active"]},
-    {"familiar_id": "nidhogg", "name": "ニーズヘッグ", "rank": "A", "base_hp": 38, "base_atk": 9, "speed": 40, "cost": 4, "gender": "male", "description": "攻撃するたび相手の火力を削り続ける竜。", "skills": ["nidhogg_passive"]},
-    {"familiar_id": "fafnir", "name": "ファフニール", "rank": "A", "base_hp": 44, "base_atk": 9, "speed": 34, "cost": 4, "gender": "male", "description": "高HPと安定したATKを両立する耐久型。", "skills": []},
-    {"familiar_id": "abaddon", "name": "アバドン", "rank": "A", "base_hp": 34, "base_atk": 10, "speed": 52, "cost": 4, "gender": "male", "description": "敵全体を巻き込む範囲攻撃役。", "skills": ["abaddon_active"]},
-    {"familiar_id": "belial", "name": "ベリアル", "rank": "A", "base_hp": 40, "base_atk": 10, "speed": 61, "cost": 4, "gender": "male", "description": "A基準値そのままの万能型。", "skills": []},
-    {"familiar_id": "astaroth", "name": "アスタロト", "rank": "A", "base_hp": 36, "base_atk": 9, "speed": 79, "cost": 4, "gender": "male", "description": "味方の状態異常を解除し、再付与も防ぐ支援役。", "skills": ["astaroth_active"]},
-    {"familiar_id": "kyubi", "name": "キュウビ", "rank": "A", "base_hp": 34, "base_atk": 10, "speed": 88, "cost": 4, "gender": "female", "description": "高速で動き、敵の火力を大きく削る妖狐。", "skills": ["kyubi_active"]},
-    {"familiar_id": "lilith", "name": "リリス", "rank": "A", "base_hp": 36, "base_atk": 9, "speed": 81, "cost": 4, "gender": "female", "description": "異性からの初撃を無効化する夜の魔女。", "skills": ["lilith_passive"]},
-    {"familiar_id": "phoenix", "name": "フェニックス", "rank": "A", "base_hp": 34, "base_atk": 9, "speed": 70, "cost": 4, "gender": "none", "description": "一度だけ自力で蘇る不死鳥。", "skills": ["phoenix_passive"]},
-
-    {"familiar_id": "garm", "name": "ガルム", "rank": "B", "base_hp": 32, "base_atk": 8, "speed": 64, "cost": 3, "gender": "male", "description": "標準型アタッカー。", "skills": []},
-    {"familiar_id": "hraesvelgr", "name": "フレースヴェルグ", "rank": "B", "base_hp": 26, "base_atk": 7, "speed": 91, "cost": 3, "gender": "male", "description": "高速で全体攻撃を放つ風の巨鳥。", "skills": ["hraesvelgr_active"]},
-    {"familiar_id": "medusa", "name": "メドゥーサ", "rank": "B", "base_hp": 26, "base_atk": 7, "speed": 73, "cost": 3, "gender": "female", "description": "敵1体の行動を石化で止める。", "skills": ["medusa_active"]},
-    {"familiar_id": "cerberus", "name": "ケルベロス", "rank": "B", "base_hp": 28, "base_atk": 9, "speed": 66, "cost": 3, "gender": "male", "description": "低HP・高ATK型。", "skills": []},
-    {"familiar_id": "minotaur", "name": "ミノタウロス", "rank": "B", "base_hp": 36, "base_atk": 7, "speed": 29, "cost": 3, "gender": "male", "description": "高HPの前衛型。", "skills": []},
-    {"familiar_id": "hydra", "name": "ヒュドラ", "rank": "B", "base_hp": 32, "base_atk": 6, "speed": 24, "cost": 3, "gender": "female", "description": "行動するたび自己回復する多頭竜。", "skills": ["hydra_passive"]},
-    {"familiar_id": "chimera", "name": "キマイラ", "rank": "B", "base_hp": 32, "base_atk": 8, "speed": 55, "cost": 3, "gender": "female", "description": "B基準値そのままの万能型。", "skills": []},
-    {"familiar_id": "yuki_onna", "name": "雪女", "rank": "B", "base_hp": 28, "base_atk": 7, "speed": 69, "cost": 3, "gender": "female", "description": "敵全体の火力を一時的に下げる。", "skills": ["yuki_onna_active"]},
-    {"familiar_id": "azazel", "name": "アザゼル", "rank": "B", "base_hp": 26, "base_atk": 8, "speed": 78, "cost": 3, "gender": "male", "description": "味方1体の火力を持続的に高める。", "skills": ["azazel_active"]},
-    {"familiar_id": "paimon", "name": "パイモン", "rank": "B", "base_hp": 30, "base_atk": 7, "speed": 75, "cost": 3, "gender": "male", "description": "序盤の火力が高い王。", "skills": ["paimon_passive"]},
-    {"familiar_id": "behemoth", "name": "ベヒーモス", "rank": "B", "base_hp": 40, "base_atk": 6, "speed": 12, "cost": 3, "gender": "none", "description": "B最高クラスのHPを持つ超耐久型。", "skills": []},
-    {"familiar_id": "sphinx", "name": "スフィンクス", "rank": "B", "base_hp": 28, "base_atk": 7, "speed": 63, "cost": 3, "gender": "female", "description": "最初の状態異常を1度だけ無効化する。", "skills": ["sphinx_passive"]},
-    {"familiar_id": "siren", "name": "セイレーン", "rank": "B", "base_hp": 26, "base_atk": 7, "speed": 82, "cost": 3, "gender": "female", "description": "異性の敵の火力を大きく削る歌い手。", "skills": ["siren_active"]},
-    {"familiar_id": "griffin", "name": "グリフォン", "rank": "B", "base_hp": 28, "base_atk": 9, "speed": 89, "cost": 3, "gender": "none", "description": "高SPD・高ATK・低HPの高速型。", "skills": []},
-    {"familiar_id": "kraken", "name": "クラーケン", "rank": "B", "base_hp": 32, "base_atk": 6, "speed": 20, "cost": 3, "gender": "none", "description": "敵の通常攻撃を自分へ引き付ける海の怪物。", "skills": ["kraken_active"]},
-    {"familiar_id": "cyclops", "name": "サイクロプス", "rank": "B", "base_hp": 24, "base_atk": 10, "speed": 14, "cost": 3, "gender": "male", "description": "B最高クラスのATKを持つ超鈍足アタッカー。", "skills": []},
-    {"familiar_id": "dullahan", "name": "デュラハン", "rank": "B", "base_hp": 30, "base_atk": 6, "speed": 48, "cost": 3, "gender": "male", "description": "致命傷を一度だけHP1で耐える。", "skills": ["dullahan_passive"]},
-    {"familiar_id": "ifrit", "name": "イフリート", "rank": "B", "base_hp": 24, "base_atk": 8, "speed": 60, "cost": 3, "gender": "male", "description": "単体へ大ダメージを与える炎の精霊。", "skills": ["ifrit_active"]},
-    {"familiar_id": "banshee", "name": "バンシー", "rank": "B", "base_hp": 28, "base_atk": 7, "speed": 86, "cost": 3, "gender": "female", "description": "敵全体へダメージと弱体を同時に与える。", "skills": ["banshee_active"]},
-    {"familiar_id": "pegasus", "name": "ペガサス", "rank": "B", "base_hp": 26, "base_atk": 7, "speed": 93, "cost": 3, "gender": "male", "description": "回復と攻撃強化を同時に行う支援役。", "skills": ["pegasus_active"]}
+    {
+      "familiar_id": "loki",
+      "name": "ロキ",
+      "rank": "S",
+      "base_hp": 46,
+      "base_atk": 8,
+      "speed": 84,
+      "cost": 5,
+      "gender": "male",
+      "description": "状態異常を跳ね返し、敵味方のATKを入れ替える策略型。",
+      "skills": [
+        "loki_passive",
+        "loki_active"
+      ]
+    },
+    {
+      "familiar_id": "surtr",
+      "name": "スルト",
+      "rank": "S",
+      "base_hp": 42,
+      "base_atk": 10,
+      "speed": 18,
+      "cost": 5,
+      "gender": "male",
+      "description": "攻撃ダメージを軽減し、味方が倒れるほど火力が上がる巨人。",
+      "skills": [
+        "surtr_passive",
+        "surtr_active"
+      ]
+    },
+    {
+      "familiar_id": "fenrir",
+      "name": "フェンリル",
+      "rank": "S",
+      "base_hp": 34,
+      "base_atk": 11,
+      "speed": 95,
+      "cost": 5,
+      "gender": "male",
+      "description": "最速級の先制アタッカー。未行動の敵へ大きく踏み込む。",
+      "skills": [
+        "fenrir_passive",
+        "fenrir_active"
+      ]
+    },
+    {
+      "familiar_id": "jormungandr",
+      "name": "ヨルムンガンド",
+      "rank": "S",
+      "base_hp": 52,
+      "base_atk": 7,
+      "speed": 55,
+      "cost": 5,
+      "gender": "male",
+      "description": "敵全体のATKを削り、全体毒で削り切る大蛇。",
+      "skills": [
+        "jormungandr_passive",
+        "jormungandr_active"
+      ]
+    },
+    {
+      "familiar_id": "hel",
+      "name": "ヘル",
+      "rank": "S",
+      "base_hp": 58,
+      "base_atk": 6,
+      "speed": 5,
+      "cost": 5,
+      "gender": "female",
+      "description": "味方を一度だけ蘇生し、敵1体を即死させる冥府の女王。",
+      "in_gacha": false,
+      "skills": [
+        "hel_passive",
+        "hel_active"
+      ]
+    },
+    {
+      "familiar_id": "lucifer",
+      "name": "ルシファー",
+      "rank": "A",
+      "base_hp": 38,
+      "base_atk": 8,
+      "speed": 90,
+      "cost": 4,
+      "gender": "male",
+      "description": "味方1体を状態異常から守る高速支援。",
+      "skills": [
+        "lucifer_active"
+      ]
+    },
+    {
+      "familiar_id": "satan",
+      "name": "サタン",
+      "rank": "A",
+      "base_hp": 36,
+      "base_atk": 9,
+      "speed": 46,
+      "cost": 4,
+      "gender": "male",
+      "description": "味方全員のデバフをまとめて解除する。",
+      "skills": [
+        "satan_active"
+      ]
+    },
+    {
+      "familiar_id": "beelzebub",
+      "name": "ベルゼブブ",
+      "rank": "A",
+      "base_hp": 40,
+      "base_atk": 8,
+      "speed": 58,
+      "cost": 4,
+      "gender": "male",
+      "description": "開幕から敵全体へ毒をまく。",
+      "skills": [
+        "beelzebub_passive"
+      ]
+    },
+    {
+      "familiar_id": "asmodeus",
+      "name": "アスモデウス",
+      "rank": "A",
+      "base_hp": 30,
+      "base_atk": 10,
+      "speed": 82,
+      "cost": 4,
+      "gender": "male",
+      "description": "開幕に味方全員のATKを上げる。",
+      "skills": [
+        "asmodeus_passive"
+      ]
+    },
+    {
+      "familiar_id": "belphegor",
+      "name": "ベルフェゴール",
+      "rank": "A",
+      "base_hp": 41,
+      "base_atk": 8,
+      "speed": 24,
+      "cost": 4,
+      "gender": "male",
+      "description": "男性の敵を殴って行動不能にする。",
+      "skills": [
+        "belphegor_passive"
+      ]
+    },
+    {
+      "familiar_id": "leviathan",
+      "name": "レヴィアタン",
+      "rank": "A",
+      "base_hp": 49,
+      "base_atk": 6,
+      "speed": 27,
+      "cost": 4,
+      "gender": "none",
+      "description": "敵全体を挑発して攻撃を引き受ける低速タンク。",
+      "skills": [
+        "leviathan_active"
+      ]
+    },
+    {
+      "familiar_id": "mammon",
+      "name": "マモン",
+      "rank": "A",
+      "base_hp": 31,
+      "base_atk": 10,
+      "speed": 68,
+      "cost": 4,
+      "gender": "male",
+      "description": "敵のATKを奪い、自分のATKを上げる。",
+      "skills": [
+        "mammon_active"
+      ]
+    },
+    {
+      "familiar_id": "nidhogg",
+      "name": "ニーズヘッグ",
+      "rank": "A",
+      "base_hp": 36,
+      "base_atk": 9,
+      "speed": 50,
+      "cost": 4,
+      "gender": "male",
+      "description": "攻撃した敵の回復と蘇生を封じる。",
+      "skills": [
+        "nidhogg_passive"
+      ]
+    },
+    {
+      "familiar_id": "fafnir",
+      "name": "ファフニール",
+      "rank": "A",
+      "base_hp": 45,
+      "base_atk": 7,
+      "speed": 30,
+      "cost": 4,
+      "gender": "male",
+      "description": "味方1体を大きく回復する。",
+      "skills": [
+        "fafnir_active"
+      ]
+    },
+    {
+      "familiar_id": "abaddon",
+      "name": "アバドン",
+      "rank": "A",
+      "base_hp": 32,
+      "base_atk": 10,
+      "speed": 52,
+      "cost": 4,
+      "gender": "male",
+      "description": "敵全体へ毎ラウンド固定ダメージを与える。",
+      "skills": [
+        "abaddon_active"
+      ]
+    },
+    {
+      "familiar_id": "belial",
+      "name": "ベリアル",
+      "rank": "A",
+      "base_hp": 34,
+      "base_atk": 9,
+      "speed": 92,
+      "cost": 4,
+      "gender": "male",
+      "description": "味方の行動不能を一度だけ無効化する。",
+      "skills": [
+        "belial_passive"
+      ]
+    },
+    {
+      "familiar_id": "astaroth",
+      "name": "アスタロト",
+      "rank": "A",
+      "base_hp": 40,
+      "base_atk": 8,
+      "speed": 56,
+      "cost": 4,
+      "gender": "male",
+      "description": "味方全員の状態異常をまとめて解除する。",
+      "skills": [
+        "astaroth_active"
+      ]
+    },
+    {
+      "familiar_id": "kyubi",
+      "name": "キュウビ",
+      "rank": "A",
+      "base_hp": 34,
+      "base_atk": 9,
+      "speed": 97,
+      "cost": 4,
+      "gender": "female",
+      "description": "最速級。敵1体のSPDを大きく削って行動順を崩す。",
+      "skills": [
+        "kyubi_active"
+      ]
+    },
+    {
+      "familiar_id": "lilith",
+      "name": "リリス",
+      "rank": "A",
+      "base_hp": 35,
+      "base_atk": 9,
+      "speed": 74,
+      "cost": 4,
+      "gender": "female",
+      "description": "開幕に男性の敵全体のATKを下げる。",
+      "skills": [
+        "lilith_passive"
+      ]
+    },
+    {
+      "familiar_id": "phoenix",
+      "name": "フェニックス",
+      "rank": "A",
+      "base_hp": 35,
+      "base_atk": 9,
+      "speed": 64,
+      "cost": 4,
+      "gender": "none",
+      "description": "戦闘不能の味方1体を蘇生する。",
+      "skills": [
+        "phoenix_active"
+      ]
+    },
+    {
+      "familiar_id": "garm",
+      "name": "ガルム",
+      "rank": "B",
+      "base_hp": 27,
+      "base_atk": 9,
+      "speed": 69,
+      "cost": 3,
+      "gender": "male",
+      "description": "高速・高ATK型。スキルなし。",
+      "skills": []
+    },
+    {
+      "familiar_id": "hraesvelgr",
+      "name": "フレースヴェルグ",
+      "rank": "B",
+      "base_hp": 26,
+      "base_atk": 7,
+      "speed": 86,
+      "cost": 3,
+      "gender": "male",
+      "description": "攻撃した敵のSPDを下げる。",
+      "skills": [
+        "hraesvelgr_passive"
+      ]
+    },
+    {
+      "familiar_id": "medusa",
+      "name": "メドゥーサ",
+      "rank": "B",
+      "base_hp": 27,
+      "base_atk": 7,
+      "speed": 79,
+      "cost": 3,
+      "gender": "female",
+      "description": "敵1体を行動不能にする。",
+      "skills": [
+        "medusa_active"
+      ]
+    },
+    {
+      "familiar_id": "cerberus",
+      "name": "ケルベロス",
+      "rank": "B",
+      "base_hp": 24,
+      "base_atk": 8,
+      "speed": 43,
+      "cost": 3,
+      "gender": "male",
+      "description": "HPが減った敵へのATKが上がる。",
+      "skills": [
+        "cerberus_passive"
+      ]
+    },
+    {
+      "familiar_id": "minotaur",
+      "name": "ミノタウロス",
+      "rank": "B",
+      "base_hp": 38,
+      "base_atk": 7,
+      "speed": 14,
+      "cost": 3,
+      "gender": "male",
+      "description": "超低速・高耐久型。スキルなし。",
+      "skills": []
+    },
+    {
+      "familiar_id": "hydra",
+      "name": "ヒュドラ",
+      "rank": "B",
+      "base_hp": 32,
+      "base_atk": 6,
+      "speed": 41,
+      "cost": 3,
+      "gender": "female",
+      "description": "味方が与える毒を強化する。",
+      "skills": [
+        "hydra_passive"
+      ]
+    },
+    {
+      "familiar_id": "chimera",
+      "name": "キマイラ",
+      "rank": "B",
+      "base_hp": 27,
+      "base_atk": 7,
+      "speed": 60,
+      "cost": 3,
+      "gender": "female",
+      "description": "弱っている敵へのATKが上がる。",
+      "skills": [
+        "chimera_passive"
+      ]
+    },
+    {
+      "familiar_id": "yuki_onna",
+      "name": "雪女",
+      "rank": "B",
+      "base_hp": 31,
+      "base_atk": 6,
+      "speed": 72,
+      "cost": 3,
+      "gender": "female",
+      "description": "敵全体のSPDを下げる。",
+      "skills": [
+        "yuki_onna_active"
+      ]
+    },
+    {
+      "familiar_id": "azazel",
+      "name": "アザゼル",
+      "rank": "B",
+      "base_hp": 27,
+      "base_atk": 7,
+      "speed": 67,
+      "cost": 3,
+      "gender": "male",
+      "description": "味方1体のATKを上げる。",
+      "skills": [
+        "azazel_active"
+      ]
+    },
+    {
+      "familiar_id": "paimon",
+      "name": "パイモン",
+      "rank": "B",
+      "base_hp": 31,
+      "base_atk": 6,
+      "speed": 71,
+      "cost": 3,
+      "gender": "male",
+      "description": "毎ターン、最も弱った味方を小回復する。",
+      "skills": [
+        "paimon_passive"
+      ]
+    },
+    {
+      "familiar_id": "behemoth",
+      "name": "ベヒーモス",
+      "rank": "B",
+      "base_hp": 42,
+      "base_atk": 6,
+      "speed": 10,
+      "cost": 3,
+      "gender": "none",
+      "description": "超耐久型。スキルなし。",
+      "skills": []
+    },
+    {
+      "familiar_id": "sphinx",
+      "name": "スフィンクス",
+      "rank": "B",
+      "base_hp": 33,
+      "base_atk": 6,
+      "speed": 35,
+      "cost": 3,
+      "gender": "female",
+      "description": "初めて受ける状態異常を無効化する。",
+      "skills": [
+        "sphinx_passive"
+      ]
+    },
+    {
+      "familiar_id": "siren",
+      "name": "セイレーン",
+      "rank": "B",
+      "base_hp": 26,
+      "base_atk": 7,
+      "speed": 80,
+      "cost": 3,
+      "gender": "female",
+      "description": "開幕に男性の敵で最もATKが高い1体を弱める。",
+      "skills": [
+        "siren_passive"
+      ]
+    },
+    {
+      "familiar_id": "griffin",
+      "name": "グリフォン",
+      "rank": "B",
+      "base_hp": 30,
+      "base_atk": 8,
+      "speed": 89,
+      "cost": 3,
+      "gender": "none",
+      "description": "高速型。スキルなし。",
+      "skills": []
+    },
+    {
+      "familiar_id": "kraken",
+      "name": "クラーケン",
+      "rank": "B",
+      "base_hp": 33,
+      "base_atk": 6,
+      "speed": 22,
+      "cost": 3,
+      "gender": "none",
+      "description": "通常攻撃してきた敵のSPDを下げる。",
+      "skills": [
+        "kraken_passive"
+      ]
+    },
+    {
+      "familiar_id": "cyclops",
+      "name": "サイクロプス",
+      "rank": "B",
+      "base_hp": 25,
+      "base_atk": 10,
+      "speed": 26,
+      "cost": 3,
+      "gender": "male",
+      "description": "ATK極振り型。スキルなし。",
+      "skills": []
+    },
+    {
+      "familiar_id": "dullahan",
+      "name": "デュラハン",
+      "rank": "B",
+      "base_hp": 29,
+      "base_atk": 7,
+      "speed": 38,
+      "cost": 3,
+      "gender": "male",
+      "description": "攻撃ダメージで倒れるとき一度だけ耐える。",
+      "skills": [
+        "dullahan_passive"
+      ]
+    },
+    {
+      "familiar_id": "ifrit",
+      "name": "イフリート",
+      "rank": "B",
+      "base_hp": 24,
+      "base_atk": 8,
+      "speed": 48,
+      "cost": 3,
+      "gender": "male",
+      "description": "敵1体へ固定ダメージを与える。",
+      "skills": [
+        "ifrit_active"
+      ]
+    },
+    {
+      "familiar_id": "banshee",
+      "name": "バンシー",
+      "rank": "B",
+      "base_hp": 27,
+      "base_atk": 7,
+      "speed": 66,
+      "cost": 3,
+      "gender": "female",
+      "description": "味方が蘇生したとき追加で回復する。",
+      "skills": [
+        "banshee_passive"
+      ]
+    },
+    {
+      "familiar_id": "pegasus",
+      "name": "ペガサス",
+      "rank": "B",
+      "base_hp": 34,
+      "base_atk": 5,
+      "speed": 98,
+      "cost": 3,
+      "gender": "male",
+      "description": "味方1体のSPDを大きく上げる。",
+      "skills": [
+        "pegasus_active"
+      ]
+    },
+    {
+      "familiar_id": "slime",
+      "name": "スライム",
+      "rank": "C",
+      "base_hp": 30,
+      "base_atk": 5,
+      "speed": 8,
+      "cost": 2,
+      "gender": "none",
+      "description": "低速・高耐久の基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "skeleton",
+      "name": "スケルトン",
+      "rank": "C",
+      "base_hp": 25,
+      "base_atk": 6,
+      "speed": 20,
+      "cost": 2,
+      "gender": "none",
+      "description": "低速の基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "goblin",
+      "name": "ゴブリン",
+      "rank": "C",
+      "base_hp": 20,
+      "base_atk": 7,
+      "speed": 57,
+      "cost": 2,
+      "gender": "male",
+      "description": "中速アタッカーの基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "mandragora",
+      "name": "マンドラゴラ",
+      "rank": "C",
+      "base_hp": 34,
+      "base_atk": 4,
+      "speed": 6,
+      "cost": 2,
+      "gender": "none",
+      "description": "最低速・最高耐久の基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "mimic",
+      "name": "ミミック",
+      "rank": "C",
+      "base_hp": 29,
+      "base_atk": 5,
+      "speed": 28,
+      "cost": 2,
+      "gender": "none",
+      "description": "低速でHPが高い基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "imp",
+      "name": "インプ",
+      "rank": "C",
+      "base_hp": 18,
+      "base_atk": 7,
+      "speed": 87,
+      "cost": 2,
+      "gender": "male",
+      "description": "高速アタッカーの基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "will_o_wisp",
+      "name": "ウィスプ",
+      "rank": "C",
+      "base_hp": 26,
+      "base_atk": 5,
+      "speed": 94,
+      "cost": 2,
+      "gender": "none",
+      "description": "最速級の基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "fairy",
+      "name": "フェアリー",
+      "rank": "C",
+      "base_hp": 27,
+      "base_atk": 5,
+      "speed": 73,
+      "cost": 2,
+      "gender": "female",
+      "description": "中速の基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "carbuncle",
+      "name": "カーバンクル",
+      "rank": "C",
+      "base_hp": 29,
+      "base_atk": 5,
+      "speed": 34,
+      "cost": 2,
+      "gender": "none",
+      "description": "低速でHPが高い基本使い魔。",
+      "skills": []
+    },
+    {
+      "familiar_id": "dark_elf",
+      "name": "ダークエルフ",
+      "rank": "C",
+      "base_hp": 14,
+      "base_atk": 8,
+      "speed": 83,
+      "cost": 2,
+      "gender": "female",
+      "description": "高速・高ATKだが最も脆い基本使い魔。",
+      "skills": []
+    }
   ]
 }

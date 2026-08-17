@@ -33,6 +33,7 @@ from .models import (
     TRIGGER_BEFORE_DEFEAT,
     TRIGGER_ON_DAMAGE,
     TRIGGER_ON_DEFEAT,
+    TRIGGER_ON_REVIVE,
     TRIGGER_ROUND_END,
     TRIGGER_ROUND_START,
     TRIGGER_TURN_END,
@@ -105,6 +106,7 @@ def build_unit_payloads(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "max_hp": stats.max_hp,
                 "base_atk": stats.atk,
                 "speed": stats.speed,
+                "base_speed": stats.speed,
                 "cost": familiar.cost,
                 "gender": familiar.gender,
                 "slot": int(entry["slot"]),
@@ -141,18 +143,61 @@ def start_battle(state: BattleState) -> None:
     _begin_round(state, first=True)
 
 
+def _order_key(unit: BattleUnit) -> tuple[int, int, int, int]:
+    """行動順の並び替えキー（BATTLE_RULES.md 1節）。
+
+    現在SPDが高い順。同値なら基礎SPDが高い方を先にし、基礎SPDも同じ場合は
+    ラウンド開始時に振った乱数で決める。
+    """
+
+    return (
+        -unit.speed,
+        -effects_module.base_speed_of(unit),
+        unit.order_seed,
+        unit.battle_unit_id,
+    )
+
+
 def _order_units(state: BattleState) -> list[int]:
-    """SPD降順で行動順を決める。同値はラウンド開始時の乱数で固定する（15節）。"""
+    """ラウンド開始時の行動順を決める。"""
 
     units = list(state.units.values())
 
     for unit in units:
         unit.order_seed = _rng.randrange(1_000_000)
 
-    units.sort(
-        key=lambda unit: (-unit.speed, unit.order_seed, unit.battle_unit_id)
-    )
+    units.sort(key=_order_key)
     return [unit.battle_unit_id for unit in units]
+
+
+def resort_pending_turns(state: BattleState) -> None:
+    """SPDが変化したとき、まだ行動していない分だけ並び替える（1節）。
+
+    行動済みの並びは変えず、再行動も起こしません。現在の行動者も動かしません。
+    """
+
+    if not state.turn_order:
+        return
+
+    # 行動中の使い魔は動かさないため、その次から並び替える。
+    start = state.turn_index
+    if state.current_unit_id is not None:
+        start = state.turn_index + 1
+
+    if start >= len(state.turn_order):
+        return
+
+    pending = [state.unit(unit_id) for unit_id in state.turn_order[start:]]
+    pending_units = [unit for unit in pending if unit is not None]
+
+    if len(pending_units) < 2:
+        return
+
+    pending_units.sort(key=_order_key)
+    state.turn_order = (
+        state.turn_order[:start]
+        + [unit.battle_unit_id for unit in pending_units]
+    )
 
 
 def _begin_round(state: BattleState, *, first: bool = False) -> None:
@@ -162,6 +207,10 @@ def _begin_round(state: BattleState, *, first: bool = False) -> None:
     state.turn_index = 0
     state.turn_order = _order_units(state)
     state.current_unit_id = None
+
+    # ラウンドをまたいで「行動済み」の記録を持ち越さない（蘇生の判定に使う）
+    for unit in state.units.values():
+        unit.state_flags.pop("acted_round", None)
 
     state.add_log(BattleEvent.ROUND_START)
 
@@ -206,8 +255,14 @@ def _advance(state: BattleState) -> BattleUnit | None:
 
         unit = state.unit(state.turn_order[state.turn_index])
 
-        # 戦闘不能はギルド持ち時間を消費せず自動スキップする（15節）
-        if unit is None or not unit.alive:
+        # 戦闘不能はギルド持ち時間を消費せず自動スキップする。
+        # ただし本来の行動順が来た時点で、持続ターンは1減らす（5節・7節）。
+        if unit is None:
+            state.turn_index += 1
+            continue
+
+        if not unit.alive:
+            _tick_defeated_turn(state, unit)
             state.turn_index += 1
             continue
 
@@ -270,6 +325,10 @@ def _begin_round_without_advance(state: BattleState) -> None:
     state.turn_order = _order_units(state)
     state.current_unit_id = None
 
+    # ラウンドをまたいで「行動済み」の記録を持ち越さない（蘇生の判定に使う）
+    for unit in state.units.values():
+        unit.state_flags.pop("acted_round", None)
+
     state.add_log(BattleEvent.ROUND_START)
 
     context = skill_engine.EventContext(trigger=TRIGGER_ROUND_START)
@@ -284,12 +343,31 @@ def current_actor(state: BattleState) -> BattleUnit | None:
 # ==================================================
 # ターン終了
 # ==================================================
+def _tick_defeated_turn(state: BattleState, unit: BattleUnit) -> None:
+    """戦闘不能中の使い魔の行動順が来たときの処理（5節）。
+
+    行動はしませんが、効果時間だけを経過させます。毒などの継続ダメージは
+    戦闘不能中には適用しません。
+    """
+
+    if unit.state_flags.get("ticked_round") == state.current_round:
+        return
+
+    unit.state_flags["ticked_round"] = state.current_round
+    unit.state_flags["acted_round"] = state.current_round
+
+    effects_module.decrement_turn_effects(state, unit)
+    effects_module.refresh_all_stats(state)
+    resort_pending_turns(state)
+
+
 def _finish_turn(
     state: BattleState, unit: BattleUnit, *, advance: bool = True
 ) -> None:
     """ターン終了処理（毒・残りターン・ターン終了パッシブ）。"""
 
     unit.state_flags["acted_round"] = state.current_round
+    unit.state_flags["ticked_round"] = state.current_round
     unit.state_flags.pop("skill_used_this_turn", None)
 
     context = skill_engine.EventContext(trigger=TRIGGER_TURN_END, turn_owner=unit)
@@ -312,7 +390,8 @@ def _finish_turn(
         )
 
     effects_module.decrement_turn_effects(state, unit)
-    effects_module.refresh_all_atk(state)
+    effects_module.refresh_all_stats(state)
+    resort_pending_turns(state)
 
     state.add_log(BattleEvent.TURN_END, actor_unit_id=unit.battle_unit_id)
 
@@ -338,21 +417,36 @@ def deal_damage(
     can_critical: bool = True,
     context: skill_engine.EventContext | None = None,
 ) -> int:
-    """ダメージを与える。クリティカル判定と被ダメージパッシブを処理する。"""
+    """ダメージを与える。クリティカル判定と被ダメージパッシブを処理する。
+
+    ``attack_type`` はダメージの分類です（BATTLE_RULES.md 3節）。
+
+    - ``"normal"`` / ``"skill_attack"``：攻撃ダメージ。クリティカルと
+      「攻撃ダメージ軽減」の対象。
+    - ``"skill"``：スキルダメージ。固定値で、クリティカルも軽減も受けない。
+    - ``"poison"``：継続ダメージ。クリティカルも軽減も受けない。
+    """
 
     if not target.alive:
         return 0
 
     master = load_master_data()
     base_amount = max(0, int(amount))
+    is_attack_damage = attack_type in ATTACK_DAMAGE_TYPES
 
     critical = False
-    if can_critical and base_amount > 0:
+    if can_critical and is_attack_damage and base_amount > 0:
         critical = roll_permille(state, master.battle.critical_chance_permille)
         if critical:
             base_amount = round_half_up(
                 base_amount * master.battle.critical_multiplier
             )
+
+    # 軽減はクリティカル計算の後に適用する（4節）
+    if is_attack_damage and base_amount > 0:
+        base_amount = max(
+            0, base_amount - effects_module.attack_damage_reduction(state, target)
+        )
 
     damage_context = skill_engine.EventContext(
         trigger=TRIGGER_ON_DAMAGE,
@@ -388,7 +482,9 @@ def deal_damage(
     effects_module.refresh_all_atk(state)
 
     if target.current_hp <= 0:
-        defeated = _resolve_defeat(state, target, source, by_damage=True)
+        defeated = _resolve_defeat(
+            state, target, source, by_damage=True, attack_type=attack_type
+        )
         if defeated and context is not None:
             context.defeats_caused += 1
     else:
@@ -397,12 +493,16 @@ def deal_damage(
     return final_damage
 
 
+ATTACK_DAMAGE_TYPES = frozenset({"normal", "skill_attack"})
+
+
 def _resolve_defeat(
     state: BattleState,
     target: BattleUnit,
     source: BattleUnit | None,
     *,
     by_damage: bool,
+    attack_type: str | None = None,
 ) -> bool:
     """戦闘不能の確定処理。耐える・蘇生するパッシブをここで処理する（18.5節）。"""
 
@@ -411,6 +511,7 @@ def _resolve_defeat(
         event_unit=target,
         event_source=source,
         defeat_by_damage=by_damage,
+        attack_type=attack_type,
     )
     skill_engine.run_passives(
         state, TRIGGER_BEFORE_DEFEAT, before_context, candidates=[target]
@@ -457,9 +558,22 @@ def heal_unit(
     *,
     skill_id: str | None = None,
 ) -> int:
-    """HPを回復する。戦闘不能の使い魔は通常回復の対象にできない（18.3節）。"""
+    """HPを回復する。戦闘不能の使い魔は通常回復の対象にできない（18.3節）。
+
+    回復阻害デバフを受けている使い魔は回復しません（BATTLE_RULES.md 8節）。
+    """
 
     if not target.alive or amount <= 0:
+        return 0
+
+    if effects_module.is_heal_blocked(state, target):
+        state.add_log(
+            BattleEvent.EFFECT,
+            actor_unit_id=source.battle_unit_id if source else None,
+            target_unit_id=target.battle_unit_id,
+            skill_id=skill_id,
+            text="回復阻害により回復できない",
+        )
         return 0
 
     hp_before = target.current_hp
@@ -490,9 +604,23 @@ def revive_unit(
     *,
     skill_id: str | None = None,
 ) -> bool:
-    """戦闘不能の使い魔を蘇生する。残っているバフ・デバフは引き継ぐ（18.5節）。"""
+    """戦闘不能の使い魔を蘇生する。残っているバフ・デバフは引き継ぐ（5節）。
+
+    回復阻害デバフを受けている使い魔は蘇生できません（8節）。蘇生後、そのラウンドで
+    まだ行動していなければ行動順へ復帰します。
+    """
 
     if target.alive:
+        return False
+
+    if effects_module.is_heal_blocked(state, target):
+        state.add_log(
+            BattleEvent.EFFECT,
+            actor_unit_id=source.battle_unit_id if source else None,
+            target_unit_id=target.battle_unit_id,
+            skill_id=skill_id,
+            text="回復阻害により蘇生できない",
+        )
         return False
 
     target.alive = True
@@ -506,7 +634,17 @@ def revive_unit(
         amount=target.current_hp,
         text=f"HP{target.current_hp}で復活",
     )
-    effects_module.refresh_all_atk(state)
+    effects_module.refresh_all_stats(state)
+
+    # 蘇生時パッシブ（バンシー「死者の慟哭」など）
+    revive_context = skill_engine.EventContext(
+        trigger=TRIGGER_ON_REVIVE,
+        event_unit=target,
+        event_source=source,
+    )
+    skill_engine.run_passives(state, TRIGGER_ON_REVIVE, revive_context)
+    effects_module.refresh_all_stats(state)
+
     return True
 
 
@@ -557,16 +695,24 @@ def perform_attack(
     skill_id: str | None = None,
     context: skill_engine.EventContext | None = None,
 ) -> int:
-    """通常攻撃を1回実行する（18.1節・18.4節）。"""
+    """攻撃を1回実行する（BATTLE_RULES.md 2節・3節）。
+
+    ``skill_id`` があるものは攻撃型ACTIVEによる攻撃（``skill_attack``）として
+    扱います。どちらも攻撃ダメージなので、クリティカルと攻撃ダメージ軽減の
+    対象ですが、「通常攻撃を受けた時」に反応するパッシブ（クラーケン
+    「深海の拘束」など）は通常攻撃だけに反応します。
+    """
 
     if not attacker.alive or not target.alive:
         return 0
+
+    attack_type = "normal" if skill_id is None else "skill_attack"
 
     before_context = skill_engine.EventContext(
         trigger=TRIGGER_BEFORE_ATTACK,
         event_unit=target,
         event_source=attacker,
-        attack_type="normal",
+        attack_type=attack_type,
         skill_id=skill_id,
     )
     skill_engine.run_passives(
@@ -594,7 +740,7 @@ def perform_attack(
         attacker,
         target,
         attack_power,
-        attack_type="normal",
+        attack_type=attack_type,
         skill_id=skill_id,
         can_critical=True,
         context=context,
@@ -608,14 +754,14 @@ def perform_attack(
         trigger=TRIGGER_AFTER_ATTACK,
         event_unit=target,
         event_source=attacker,
-        attack_type="normal",
+        attack_type=attack_type,
         damage=damage,
         skill_id=skill_id,
     )
     skill_engine.run_passives(
         state, TRIGGER_AFTER_ATTACK, after_context, candidates=[attacker]
     )
-    effects_module.refresh_all_atk(state)
+    effects_module.refresh_all_stats(state)
 
     return damage
 

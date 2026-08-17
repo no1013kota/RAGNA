@@ -282,8 +282,8 @@ class FamiliarTests(GameDatabaseTestCase):
                 "SELECT COUNT(*) FROM familiar_skills"
             ).fetchone()[0]
 
-        self.assertEqual(familiars, 40)
-        self.assertEqual(skills, 34)
+        self.assertEqual(familiars, 50)
+        self.assertEqual(skills, 40)
 
     def test_gacha_saves_every_result_in_one_transaction(self) -> None:
         self.add_coin(500, 100_000)

@@ -170,6 +170,27 @@ class MasterData:
             key=lambda familiar: familiar.familiar_id,
         )
 
+    def gacha_familiars_by_rank(self, rank: str) -> list[FamiliarMaster]:
+        """ガチャで抽選できる使い魔だけを返す。
+
+        コンプリート報酬など、``in_gacha`` が偽の使い魔は除きます。
+        """
+
+        return [
+            familiar
+            for familiar in self.familiars_by_rank(rank)
+            if familiar.in_gacha
+        ]
+
+    def complete_reward_familiars(self) -> list[FamiliarMaster]:
+        """コンプリート報酬として解放される使い魔を返す。"""
+
+        return [
+            familiar
+            for familiar in self.familiars.values()
+            if familiar.enabled and not familiar.in_gacha
+        ]
+
     def registered_ranks(self) -> list[str]:
         """1体以上のマスターデータがあるランクを、弱い順に返す。"""
 
@@ -193,7 +214,7 @@ class MasterData:
         return [
             rank
             for rank in self.familiar.rank_order
-            if rank in wanted and not self.familiars_by_rank(rank)
+            if rank in wanted and not self.gacha_familiars_by_rank(rank)
         ]
 
     # ==================================================
@@ -439,11 +460,25 @@ def _load_skills() -> dict[str, Skill]:
             raise MasterDataError(f"{skill_id}: 未対応のskill_typeです: {skill_type}")
 
         trigger = entry.get("trigger")
+        extra_triggers = tuple(entry.get("extra_triggers") or ())
+
         if skill_type == "passive":
             if trigger not in TRIGGERS:
                 raise MasterDataError(f"{skill_id}: 未対応のtriggerです: {trigger}")
-        elif trigger is not None:
-            raise MasterDataError(f"{skill_id}: アクティブスキルにtriggerは設定できません")
+            for extra in extra_triggers:
+                if extra not in TRIGGERS:
+                    raise MasterDataError(
+                        f"{skill_id}: 未対応のextra_triggersです: {extra}"
+                    )
+        else:
+            if trigger is not None:
+                raise MasterDataError(
+                    f"{skill_id}: アクティブスキルにtriggerは設定できません"
+                )
+            if extra_triggers:
+                raise MasterDataError(
+                    f"{skill_id}: アクティブスキルにextra_triggersは設定できません"
+                )
 
         max_uses = entry.get("max_uses_per_battle")
         if max_uses is not None and int(max_uses) <= 0:
@@ -492,6 +527,14 @@ def _load_skills() -> dict[str, Skill]:
                         f"{skill_id}: partnerに存在しない選択キーです: {key}"
                     )
 
+            if effect.on_trigger is not None:
+                allowed = {trigger, *extra_triggers}
+                if effect.on_trigger not in allowed:
+                    raise MasterDataError(
+                        f"{skill_id}: on_trigger がこのスキルのタイミングに"
+                        f"ありません: {effect.on_trigger}"
+                    )
+
             effects.append(effect)
 
         if not effects:
@@ -503,6 +546,7 @@ def _load_skills() -> dict[str, Skill]:
             description=entry["description"],
             skill_type=skill_type,
             trigger=trigger,
+            extra_triggers=extra_triggers,
             target_type=entry.get("target_type"),
             priority=int(entry.get("priority", 100)),
             max_uses_per_battle=None if max_uses is None else int(max_uses),
@@ -572,6 +616,7 @@ def _load_familiars(
             description=entry.get("description") or "",
             skill_ids=skill_ids,
             image_file=entry.get("image_file"),
+            in_gacha=bool(entry.get("in_gacha", True)),
             enabled=bool(entry.get("enabled", True)),
             version=int(entry.get("version", 1)),
         )

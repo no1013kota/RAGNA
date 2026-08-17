@@ -11,6 +11,8 @@ from typing import Any
 from .master_data import load_master_data
 from .models import (
     ACTION_BLOCKING_STATUSES,
+    CATEGORY_DEBUFF,
+    CATEGORY_STATUS,
     DURATION_ATTACKS,
     DURATION_PERMANENT,
     DURATION_ROUND_END,
@@ -18,16 +20,22 @@ from .models import (
     EFFECT_ACTIVE_LOCK,
     EFFECT_ATK_MODIFIER,
     EFFECT_ATK_SWAP,
+    EFFECT_ATTACK_DAMAGE_REDUCTION,
     EFFECT_CONDITIONAL_ATK_MODIFIER,
+    EFFECT_HEAL_BLOCK,
     EFFECT_NEXT_ATTACK_ATK_MODIFIER,
+    EFFECT_POISON_AMPLIFY,
+    EFFECT_SPEED_MODIFIER,
     EFFECT_STATUS,
     EFFECT_STATUS_IMMUNE,
     EFFECT_TAUNT,
+    STATUS_ACTIVE_LOCK,
     STATUS_LABELS,
     STATUS_POISON,
     BattleEffectState,
     BattleState,
     BattleUnit,
+    effect_category,
 )
 
 
@@ -42,6 +50,10 @@ PERSISTENT_EFFECT_TYPES = frozenset(
         EFFECT_ACTIVE_LOCK,
         EFFECT_TAUNT,
         EFFECT_ATK_SWAP,
+        EFFECT_SPEED_MODIFIER,
+        EFFECT_ATTACK_DAMAGE_REDUCTION,
+        EFFECT_HEAL_BLOCK,
+        EFFECT_POISON_AMPLIFY,
     }
 )
 
@@ -68,8 +80,43 @@ def evaluate_state_condition(
     if condition_type == "round_at_least":
         return state.current_round >= int(condition.get("value", 0))
 
+    if condition_type == "has_status_or_debuff":
+        return has_status_or_debuff(state, unit)
+
+    if condition_type == "not_acted_this_round":
+        return unit.state_flags.get("acted_round") != state.current_round
+
+    if condition_type == "is_gender":
+        return unit.gender == condition.get("value")
+
     # 未知の条件は満たさないものとして扱う（誤発動より不発動を選ぶ）。
     return False
+
+
+def _same_source_effect(
+    state: BattleState,
+    unit: BattleUnit,
+    effect_type: str,
+    source_skill_id: str | None,
+    source_unit: BattleUnit | None,
+) -> BattleEffectState | None:
+    """同じ使い魔・同じスキル・同じ対象で既に付いている効果を返す（7節）。
+
+    発生元の使い魔が違えば別効果として重複します（毒の重複など）。
+    """
+
+    if source_skill_id is None or source_unit is None:
+        return None
+
+    for effect in state.unit_effects(unit.battle_unit_id):
+        if (
+            effect.effect_type == effect_type
+            and effect.source_skill_id == source_skill_id
+            and effect.source_unit_id == source_unit.battle_unit_id
+        ):
+            return effect
+
+    return None
 
 
 def _same_source_count(
@@ -107,6 +154,29 @@ def apply_effect(
     params = dict(params or {})
     master = load_master_data()
 
+    if duration_type == DURATION_TURNS:
+        wanted = duration_turns if duration_turns is not None else 1
+    elif duration_type == DURATION_ATTACKS:
+        wanted = int(params.get("attacks", 1))
+    else:
+        wanted = None
+
+    # 同じ使い魔が同じスキルを同じ対象へ再使用しても重複させない。
+    # 付け直しで短くならないよう、残りターンは長い方へ揃える（7節）。
+    # 「味方が倒れるたびATK+2」のように積み上がる効果は params.stack で除外する。
+    existing = (
+        None
+        if params.get("stack")
+        else _same_source_effect(
+            state, unit, effect_type, source_skill_id, source_unit
+        )
+    )
+    if existing is not None:
+        if wanted is not None and (existing.remaining or 0) < wanted:
+            existing.remaining = wanted
+        refresh_stats(state, unit)
+        return existing
+
     # 「同一対象には重複しない」パッシブ用の制限
     if params.get("no_stack_per_target"):
         if _same_source_count(state, unit, effect_type, source_skill_id):
@@ -118,12 +188,7 @@ def apply_effect(
         if _same_source_count(state, unit, effect_type, source_skill_id) >= limit:
             return None
 
-    if duration_type == DURATION_TURNS:
-        remaining = duration_turns if duration_turns is not None else 1
-    elif duration_type == DURATION_ATTACKS:
-        remaining = int(params.get("attacks", 1))
-    else:
-        remaining = None
+    remaining = wanted
 
     # 自分のターン中に自分へ付けた効果を、その場で1減らさないための記録
     params["applied_turn_index"] = state.turn_index
@@ -143,7 +208,7 @@ def apply_effect(
     )
     state.effects.append(effect)
 
-    refresh_atk(state, unit)
+    refresh_stats(state, unit)
     return effect
 
 
@@ -231,7 +296,148 @@ def refresh_atk(state: BattleState, unit: BattleUnit) -> None:
 
 def refresh_all_atk(state: BattleState) -> None:
     for unit in state.units.values():
-        refresh_atk(state, unit)
+        refresh_stats(state, unit)
+
+
+def refresh_stats(state: BattleState, unit: BattleUnit) -> None:
+    """現在ATKと現在SPDを再計算する。"""
+
+    refresh_atk(state, unit)
+    refresh_speed(state, unit)
+
+
+def refresh_all_stats(state: BattleState) -> None:
+    for unit in state.units.values():
+        refresh_stats(state, unit)
+
+
+# ==================================================
+# 現在SPD（BATTLE_RULES.md 1節・8節）
+# ==================================================
+def compute_speed(state: BattleState, unit: BattleUnit) -> int:
+    """現在SPDを計算する。基礎SPDへバフ・デバフを加算し、0未満にはしない。"""
+
+    total = 0
+    for effect in state.unit_effects(unit.battle_unit_id):
+        if effect.effect_type == EFFECT_SPEED_MODIFIER:
+            total += int(effect.value or 0)
+
+    return max(0, base_speed_of(unit) + total)
+
+
+def base_speed_of(unit: BattleUnit) -> int:
+    """基礎SPDを返す。未設定の古いデータは現在SPDを基礎SPDとして扱う。"""
+
+    return unit.base_speed if unit.base_speed else unit.speed
+
+
+def refresh_speed(state: BattleState, unit: BattleUnit) -> None:
+    unit.speed = compute_speed(state, unit)
+
+
+# ==================================================
+# 攻撃ダメージ軽減（保護効果）
+# ==================================================
+def attack_damage_reduction(state: BattleState, unit: BattleUnit) -> int:
+    """その使い魔が受ける攻撃ダメージの軽減量を返す。
+
+    スキルダメージ・継続ダメージには適用しません（3節）。
+    """
+
+    total = 0
+    for effect in state.unit_effects(unit.battle_unit_id):
+        if effect.effect_type == EFFECT_ATTACK_DAMAGE_REDUCTION:
+            total += abs(int(effect.value or 0))
+
+    return total
+
+
+# ==================================================
+# 回復阻害（デバフ）
+# ==================================================
+def is_heal_blocked(state: BattleState, unit: BattleUnit) -> bool:
+    """HP回復と蘇生が阻害されているか。"""
+
+    return any(
+        effect.effect_type == EFFECT_HEAL_BLOCK
+        for effect in state.unit_effects(unit.battle_unit_id)
+    )
+
+
+# ==================================================
+# 毒強化（ヒュドラ「猛毒増幅」）
+# ==================================================
+def poison_amplifiers(state: BattleState, guild_id: int) -> list[BattleEffectState]:
+    """``guild_id`` の敵へ付く毒を強化する効果を返す。"""
+
+    return [
+        effect
+        for effect in state.effects
+        if effect.effect_type == EFFECT_POISON_AMPLIFY
+        and (unit := state.unit(effect.battle_unit_id)) is not None
+        and unit.alive
+        and unit.guild_id != guild_id
+    ]
+
+
+def amplify_poison(
+    state: BattleState, target: BattleUnit, *, damage: int, turns: int
+) -> tuple[int, int, int]:
+    """毒のダメージと継続ターンへ強化を適用する。
+
+    同じ毒に対して、1つの強化効果は1回だけ適用します。戻り値は
+    ``(強化後ダメージ, 強化後ターン, 適用した強化の数)`` です。
+    """
+
+    applied = 0
+
+    for effect in poison_amplifiers(state, target.guild_id):
+        damage += int(effect.params.get("damage_bonus", 0))
+        turns += int(effect.params.get("turn_bonus", 0))
+        applied += 1
+
+    return damage, turns, applied
+
+
+# ==================================================
+# 分類別の解除
+# ==================================================
+def categorized_effects(
+    state: BattleState, unit: BattleUnit, category: str
+) -> list[BattleEffectState]:
+    """指定した分類の効果だけを返す（8節）。"""
+
+    return [
+        effect
+        for effect in state.unit_effects(unit.battle_unit_id)
+        if effect_category(effect.effect_type, effect.value) == category
+    ]
+
+
+def has_status_or_debuff(state: BattleState, unit: BattleUnit) -> bool:
+    """状態異常またはデバフを受けているか（キマイラ「異形の狩り」）。"""
+
+    for effect in state.unit_effects(unit.battle_unit_id):
+        if effect_category(effect.effect_type, effect.value) in (
+            CATEGORY_STATUS,
+            CATEGORY_DEBUFF,
+        ):
+            return True
+
+    return False
+
+
+def remove_debuffs(state: BattleState, unit: BattleUnit) -> int:
+    """デバフだけをすべて解除する。状態異常は解除しない（8節）。"""
+
+    targets = categorized_effects(state, unit, CATEGORY_DEBUFF)
+    for effect in targets:
+        remove_effect(state, effect)
+
+    if targets:
+        refresh_stats(state, unit)
+
+    return len(targets)
 
 
 def attack_atk(state: BattleState, unit: BattleUnit) -> int:
@@ -283,7 +489,7 @@ def consume_attack_modifiers(
     for effect in expired:
         remove_effect(state, effect)
 
-    refresh_atk(state, unit)
+    refresh_stats(state, unit)
 
 
 # ==================================================
@@ -320,14 +526,18 @@ def is_status_immune(state: BattleState, unit: BattleUnit) -> bool:
 
 
 def remove_statuses(state: BattleState, unit: BattleUnit) -> list[str]:
-    """状態異常だけをすべて解除する。能力値変化は解除しない（20節）。"""
+    """状態異常だけをすべて解除する。デバフ・バフは解除しない（8節）。"""
 
     removed = []
-    for effect in status_effects(state, unit):
-        name = effect.status_name
-        if name:
-            removed.append(name)
+    for effect in categorized_effects(state, unit, CATEGORY_STATUS):
+        name = effect.status_name or STATUS_LABELS.get(
+            effect.effect_type, effect.effect_type
+        )
+        removed.append(name)
         remove_effect(state, effect)
+
+    if removed:
+        refresh_stats(state, unit)
 
     return removed
 
@@ -346,12 +556,15 @@ def is_action_blocked(
 
 
 def is_active_locked(state: BattleState, unit: BattleUnit) -> bool:
-    """ACTIVEスキルの使用が禁止されているか。"""
+    """ACTIVEスキルの使用が禁止されているか（状態異常「ACTIVE使用不能」）。"""
 
-    return any(
-        effect.effect_type == EFFECT_ACTIVE_LOCK
-        for effect in state.unit_effects(unit.battle_unit_id)
-    )
+    for effect in state.unit_effects(unit.battle_unit_id):
+        if effect.effect_type == EFFECT_ACTIVE_LOCK:
+            return True
+        if effect.status_name == STATUS_ACTIVE_LOCK:
+            return True
+
+    return False
 
 
 def forced_target_id(state: BattleState, unit: BattleUnit) -> int | None:

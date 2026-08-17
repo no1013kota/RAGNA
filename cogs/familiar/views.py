@@ -408,6 +408,22 @@ class GachaConfirmView(discord.ui.View):
             )
             await game_shared.respond(interaction, embed=embed)
 
+            # すべての使い魔を集めたらコンプリート報酬を解放する
+            try:
+                granted = service.check_complete_rewards(interaction.user.id)
+            except Exception:
+                logger.exception(
+                    "コンプリート報酬の判定に失敗しました: user_id=%s",
+                    interaction.user.id,
+                )
+                granted = []
+
+            if granted:
+                await interaction.followup.send(
+                    embed=service.build_complete_reward_embed(granted),
+                    ephemeral=True,
+                )
+
         except service.GachaUnavailableError:
             logger.exception("ガチャの抽選対象が不足しています")
             await game_shared.respond(

@@ -7,7 +7,7 @@ RailwayではWebサービスではなく、常駐Workerとして起動します�
 - [設計・開発ガイド](docs/ARCHITECTURE.md)
 - [Discord Intent・使用情報一覧](docs/DISCORD_SETTINGS.md)
 - [RAGNA Online ギルド・ギルドバトル仕様](docs/GAME_SPEC.md)
-- [RAGNA Online 使い魔マスターデータ](docs/FAMILIAR_MASTER.md)
+- [RAGNA Online 戦闘ルール・使い魔データ](docs/BATTLE_RULES.md)
 
 ## 必要な設定
 
@@ -137,7 +137,7 @@ Bot起動時に整合性を確認して/data/ragna.dbへ取り込み、直前の
    - 使い魔画像（`assets/familiars/<使い魔ID>.png`）
      未登録の個体は共通の仮画像 `default.png` を表示します。
    - 性別は神話・伝承に基づく暫定値を登録済みです。変更する場合は
-     `data/master/familiars.json` と `docs/FAMILIAR_MASTER.md` を同時に更新してください。
+     `data/master/familiars.json` と `docs/BATTLE_RULES.md` を同時に更新してください。
 
 4. `GAME_ENABLED=true` を設定してデプロイします。5分以内に各パネルが設置されます。
 

@@ -27,29 +27,23 @@ class RankTableTests(unittest.TestCase):
             table = service.build_rank_table(POOL, slot_type)
             self.assertEqual(sum(weight for _, weight in table), 1000, slot_type)
 
-    def test_unregistered_ranks_are_excluded(self) -> None:
-        # Cランクは未登録のため抽選対象に出さない（34.2節）
-        table = service.build_rank_table(POOL, "normal")
-        self.assertNotIn("C", [rank for rank, _ in table])
-
-    def test_missing_rank_share_goes_to_the_fallback_rank(self) -> None:
-        # 34.2節：未登録ランクの排出率は missing_rank_fallback へまとめて寄せる。
-        # Cランク45%はBランクへ加算され、A・Sの確率は本文どおり据え置き。
-        self.assertEqual(POOL.missing_rank_fallback, "B")
-
+    def test_every_rank_is_drawable(self) -> None:
+        # 全ランクが登録済みなので、そのまま4ランクとも抽選対象になる
         table = dict(service.build_rank_table(POOL, "normal"))
-        original = POOL.rates["normal"]
+        self.assertEqual(set(table), {"C", "B", "A", "S"})
 
-        self.assertEqual(table["B"], original["B"] + original["C"])
-        self.assertEqual(table["A"], original["A"])
-        self.assertEqual(table["S"], original["S"])
+    def test_rates_match_the_spec_without_adjustment(self) -> None:
+        # 10.2節：C45% B45% A9% S1%
+        self.assertEqual(
+            dict(service.build_rank_table(POOL, "normal")), POOL.rates["normal"]
+        )
 
-    def test_notice_explains_where_the_share_moved(self) -> None:
-        notice = service.rank_table_notice(POOL)
+    def test_no_notice_is_shown_when_nothing_was_adjusted(self) -> None:
+        self.assertIsNone(service.rank_table_notice(POOL))
 
-        self.assertIsNotNone(notice)
-        self.assertIn("C", notice)
-        self.assertIn("B", notice)
+    def test_the_fallback_rank_is_still_configured(self) -> None:
+        # ランクを増やしたときに備えて寄せ先の設定は残しておく（34.2節）
+        self.assertEqual(POOL.missing_rank_fallback, "B")
 
     def test_guaranteed_slot_is_unaffected_by_redistribution(self) -> None:
         # 保証枠にはCランクが含まれないため、本文どおりの確率がそのまま使われる
@@ -124,16 +118,21 @@ class RateListEmbedTests(unittest.TestCase):
         self.assertTrue(self.has_familiars)
 
         for rank, _ in service.build_rank_table(POOL, "normal"):
-            for familiar in MASTER.familiars_by_rank(rank):
+            for familiar in MASTER.gacha_familiars_by_rank(rank):
                 self.assertIn(familiar.name, self.body, familiar.familiar_id)
 
-    def test_unregistered_ranks_are_not_listed(self) -> None:
-        # Cランクは未登録なので、確率の行を出さない
-        self.assertNotIn("【C】", self.body)
+    def test_complete_reward_familiars_are_not_listed(self) -> None:
+        # ヘルはコンプリート報酬なのでガチャ一覧へ出さない
+        for familiar in MASTER.complete_reward_familiars():
+            self.assertNotIn(familiar.name, self.body, familiar.familiar_id)
+
+    def test_every_rank_is_listed(self) -> None:
+        for rank in ("S", "A", "B", "C"):
+            self.assertIn(f"【{rank}】", self.body)
 
     def test_rank_rate_and_per_familiar_rate_are_shown(self) -> None:
-        # 例：「【B】90.0%（20体・各4.50%）」
-        self.assertIn("【B】90.0%（20体・各4.50%）", self.body)
+        # 例：「【B】45.0%（20体・各2.25%）」
+        self.assertIn("【B】45.0%（20体・各2.25%）", self.body)
 
     def test_rank_labels_have_no_emoji(self) -> None:
         # 排出率の表示は絵文字を使わない
