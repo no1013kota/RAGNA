@@ -406,6 +406,7 @@ def build_action_log_messages(
     *,
     player_names: dict[int, str] | None = None,
     guild_names: dict[int, str] | None = None,
+    bet_coin: int | None = None,
 ) -> list[LogMessage]:
     """行動ログを、投稿単位のEmbedへまとめる（23節）。
 
@@ -463,16 +464,19 @@ def build_action_log_messages(
                 title=f"── ラウンド {log.round} ──", color=COLOR_INFO
             )
             group.items.append(("行動順", turn_queue_text(state, limit=10)))
-            for guild_id in (state.guild_a_id, state.guild_b_id):
-                group.items.append(
-                    (
-                        guild_names.get(guild_id, f"ギルド{guild_id}")
-                        if guild_names
-                        else f"ギルド{guild_id}",
-                        survivor_text(state, guild_id),
+            flush()
+
+            # ラウンドごとに戦況を1件残す。あとから見返したときに、
+            # そのラウンドが始まった時点の状況が分かるようにする（24節）。
+            messages.append(
+                LogMessage(
+                    embed=build_status_embed(
+                        state,
+                        guild_names=guild_names or {},
+                        bet_coin=bet_coin,
                     )
                 )
-            flush()
+            )
             continue
 
         if event == BattleEvent.ATTACK.value:
@@ -795,6 +799,7 @@ def build_status_embed(
     guild_names: dict[int, str],
     highlight_guild_id: int | None = None,
     turn_remaining_seconds: int | None = None,
+    bet_coin: int | None = None,
 ) -> discord.Embed:
     """その時点の戦況をまとめたEmbedを作る（17節・24節）。"""
 
@@ -848,9 +853,10 @@ def build_status_embed(
         description="\n\n".join(["\n".join(header), *sections])[:4000],
         color=COLOR_INFO,
     )
+    amount = master.battle.bet.coin if bet_coin is None else int(bet_coin)
     embed.set_footer(
         text=(
-            f"ベット 1人 {master.battle.bet.coin:,} coin　"
+            f"ベット ギルドごと {amount:,} coin（出場者で均等に分担）　"
             f"🔺バフ 🔻デバフ ☠状態異常 ◆その他"
         )
     )
@@ -865,6 +871,7 @@ def build_turn_embed(
     unit: BattleUnit,
     *,
     turn_seconds: int,
+    bet_coin: int | None = None,
 ) -> discord.Embed:
     """バトル専用チャンネルへ出すターン通知（16節・17節）。
 
@@ -916,10 +923,11 @@ def build_turn_embed(
         description="\n".join(lines),
         color=COLOR_ATTACK,
     )
+    amount = master.battle.bet.coin if bet_coin is None else int(bet_coin)
     embed.set_footer(
         text=(
-            f"勝てば1人 {master.battle.bet.coin:,} coin と {master.battle.bet.win_xp} XP／"
-            f"負ければ {master.battle.bet.coin:,} coin を失います"
+            f"ベット ギルドごと {amount:,} coin（出場者で均等に分担）／"
+            f"勝利 {master.battle.bet.win_xp} XP・敗北 {master.battle.bet.lose_xp} XP"
         )
     )
     return embed
@@ -930,6 +938,7 @@ def build_result_embed(
     *,
     guild_names: dict[int, str],
     reward_text: str | None = None,
+    bet_coin: int | None = None,
 ) -> discord.Embed:
     """勝敗の結果Embed（26節）。"""
 
@@ -970,7 +979,12 @@ def build_result_embed(
             "決着理由", reasons.get(state.end_reason or "", state.end_reason or "—")
         ),
         item_line("ラウンド数", state.current_round),
-        item_line("ベット額", f"1人 {master.battle.bet.coin:,} coin"),
+        item_line(
+            "ベット額",
+            f"ギルドごと {master.battle.bet.coin:,} coin"
+            if bet_coin is None
+            else f"ギルドごと {int(bet_coin):,} coin",
+        ),
     ]
 
     if reward_text:

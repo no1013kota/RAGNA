@@ -1740,10 +1740,13 @@ class SkillTargetFlow:
 
         if group.allow_duplicate:
             need = 1
-            label = f"{self.skill.name}：対象{self.pick_index + 1}体目"
+            label = (
+                f"{self.skill.name}：{group.display_label}"
+                f"{self.pick_index + 1}体目"
+            )
         else:
             need = min(group.count, len(candidates))
-            label = f"{self.skill.name}：対象を{need}体選択"
+            label = f"{self.skill.name}：{group.display_label}を{need}体選択"
 
         options = [_unit_option(candidate, state) for candidate in candidates]
         view = SkillTargetSelectView(self, group, options, need=need, label=label)
@@ -1780,7 +1783,11 @@ class SkillTargetFlow:
                 for unit_id in self.selections.get(group.key, [])
             ]
             if names:
-                lines.append(f"{group.key}：{'・'.join(names)}")
+                lines.append(
+                    game_shared.item_line(
+                        group.display_label, "・".join(names)
+                    )
+                )
 
         embed = discord.Embed(
             title=f"✦ SKILL「{self.skill.name}」を使用しますか？",

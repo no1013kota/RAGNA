@@ -28,6 +28,7 @@ from .models import (
     EFFECT_SPEED_MODIFIER,
     EFFECT_STATUS,
     EFFECT_STATUS_IMMUNE,
+    EFFECT_SURVIVE_WITH_HP,
     EFFECT_TAUNT,
     STATUS_ACTIVE_LOCK,
     STATUS_LABELS,
@@ -737,6 +738,18 @@ def buff_summary(state: BattleState, unit: BattleUnit) -> dict[str, list[str]]:
 
         elif effect.effect_type == EFFECT_TAUNT:
             others.append(f"攻撃対象固定（{label}）")
+
+        elif effect.effect_type == EFFECT_ATTACK_DAMAGE_REDUCTION:
+            others.append(f"被ダメージ-{abs(int(effect.value or 0))}")
+
+        elif effect.effect_type == EFFECT_HEAL_BLOCK:
+            others.append(f"回復阻害（{label}）" if label else "回復阻害")
+
+        elif effect.effect_type == EFFECT_POISON_AMPLIFY:
+            others.append("猛毒増幅")
+
+        elif effect.effect_type == EFFECT_SURVIVE_WITH_HP:
+            others.append("戦闘不能耐性")
 
         elif effect.effect_type == EFFECT_ATK_SWAP:
             others.append("ATK交換中")

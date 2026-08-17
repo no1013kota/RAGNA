@@ -370,6 +370,23 @@ class TargetGroup:
     count: int = 1
     filter: tuple[dict[str, Any], ...] = ()
     allow_duplicate: bool = False
+    # 利用者へ見せる呼び名。未設定なら key と side から決める。
+    label: str | None = None
+
+    @property
+    def display_label(self) -> str:
+        """「対象」「味方」など、選択欄に出す呼び名を返す。
+
+        内部キー（``main`` など）はそのまま見せません。
+        """
+
+        if self.label:
+            return self.label
+
+        if self.key == "main":
+            return "対象"
+
+        return "味方" if self.side == "ally" else "敵"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TargetGroup":
@@ -379,6 +396,7 @@ class TargetGroup:
             count=int(data.get("count", 1)),
             filter=tuple(data.get("filter") or ()),
             allow_duplicate=bool(data.get("allow_duplicate", False)),
+            label=data.get("label"),
         )
 
 

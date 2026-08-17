@@ -889,6 +889,7 @@ async def post_action_logs(
         state.logs,
         player_names=player_names(bot, state),
         guild_names=guild_names(state),
+        bet_coin=battle_bet_coin(state.battle_id),
     )
 
     for message in messages:
@@ -930,6 +931,7 @@ async def refresh_status_embeds(
             guild_names=names,
             highlight_guild_id=highlight_guild_id,
             turn_remaining_seconds=turn_remaining,
+            bet_coin=battle_bet_coin(state.battle_id),
         )
 
         message_id = battle_row.get(_side_key(state, guild_id, "status_message_id"))
@@ -977,7 +979,10 @@ async def announce_turn(
 
     channel = channels.get(unit.guild_id)
     embed = battle_embed.build_turn_embed(
-        state, unit, turn_seconds=master.battle.turn_time_seconds
+        state,
+        unit,
+        turn_seconds=master.battle.turn_time_seconds,
+        bet_coin=battle_bet_coin(state.battle_id),
     )
     attachment = battle_embed.thumbnail_file(unit.familiar_id)
     if attachment is not None:
@@ -1281,7 +1286,9 @@ async def finish_battle_flow(
     names = guild_names(state)
 
     # 1. 勝敗確定 → 2. 結果Embedを両チャンネルへ投稿
-    result_embed = battle_embed.build_result_embed(state, guild_names=names)
+    result_embed = battle_embed.build_result_embed(
+        state, guild_names=names, bet_coin=battle_bet_coin(state.battle_id)
+    )
     for channel in channels.values():
         await _safe_send(channel, embed=result_embed)
 

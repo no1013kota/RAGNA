@@ -50,13 +50,15 @@
           "key": "main",
           "side": "enemy",
           "count": 1,
-          "filter": []
+          "filter": [],
+          "label": "敵"
         },
         {
           "key": "ally",
           "side": "ally",
           "count": 1,
-          "filter": []
+          "filter": [],
+          "label": "味方"
         }
       ],
       "conditions": [],

@@ -702,6 +702,58 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(len(passive), 1, [m.embed.title for m in passive])
         self.assertIn("2件", passive[0].embed.title)
 
+    def test_damage_reduction_is_labelled_as_incoming_damage(self) -> None:
+        # 「攻撃ダメージ-2」ではなく「被ダメージ-2」と出す
+        from game import battle_embed
+
+        state = build_state([("surtr", 1)], [("cyclops", 1)])
+        start = len(state.logs)
+        battle_engine.start_battle(state)
+
+        body = "\n".join(
+            m.embed.description or ""
+            for m in battle_embed.build_action_log_messages(state, state.logs[start:])
+        )
+        self.assertIn("被ダメージ-2", body)
+        self.assertNotIn("スルト：攻撃ダメージ-2", body)
+
+        surtr = unit_of(state, "surtr", GUILD_A)
+        self.assertIn("被ダメージ-2", effects.buff_summary(state, surtr)["others"])
+
+    def test_each_round_posts_a_status_log(self) -> None:
+        # ラウンドが始まるたびに戦況を1件残す
+        from game import battle_embed
+
+        state = build_state([("garm", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        messages = battle_embed.build_action_log_messages(
+            state, state.logs, guild_names={GUILD_A: "A", GUILD_B: "B"}
+        )
+        titles = [m.embed.title for m in messages]
+
+        self.assertIn("── ラウンド 1 ──", titles)
+        self.assertEqual(titles.count("【戦況】"), 1, titles)
+        # 見出しの直後に戦況が来る
+        self.assertEqual(
+            titles[titles.index("── ラウンド 1 ──") + 1], "【戦況】", titles
+        )
+
+    def test_target_groups_show_a_readable_label(self) -> None:
+        # 内部キー（main）ではなく「対象」「敵」「味方」を見せる
+        self.assertEqual(
+            MASTER.get_skill("mammon_active").targets[0].display_label, "対象"
+        )
+
+        loki = MASTER.get_skill("loki_active")
+        self.assertEqual(
+            [group.display_label for group in loki.targets], ["敵", "味方"]
+        )
+
+        for skill in MASTER.skills.values():
+            for group in skill.targets:
+                self.assertNotEqual(group.display_label, group.key, skill.skill_id)
+
     def test_passive_logs_include_the_skill_description(self) -> None:
         from game import battle_embed
 

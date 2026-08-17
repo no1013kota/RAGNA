@@ -854,7 +854,7 @@ def _effect_log_text(effect_type: str, effect: SkillEffect) -> str:
         return text
 
     if effect_type == EFFECT_ATTACK_DAMAGE_REDUCTION:
-        return f"攻撃ダメージ-{abs(value)}"
+        return f"被ダメージ-{abs(value)}"
 
     if effect_type == EFFECT_HEAL_BLOCK:
         text = "回復阻害"
