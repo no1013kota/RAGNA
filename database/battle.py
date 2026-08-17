@@ -141,6 +141,50 @@ def _remaining_seconds(state: BattleState, guild_id: int, fallback: int) -> int:
 # ==================================================
 # 出場者セット（9節）
 # ==================================================
+def _familiar_cost(conn: sqlite3.Connection, instance_id: int) -> int:
+    """所有使い魔1体の編成COSTを返す。使い魔マスターの同期結果から引く。"""
+
+    row = conn.execute(
+        """
+        SELECT master.cost
+        FROM player_familiars AS owned
+        JOIN familiars AS master
+          ON master.familiar_id = owned.familiar_id
+        WHERE owned.instance_id = ?
+        """,
+        (instance_id,),
+    ).fetchone()
+
+    return int(row["cost"]) if row is not None else 0
+
+
+def _entry_cost_total(conn: sqlite3.Connection, guild_id: int) -> int:
+    """セット済みの使い魔の合計COSTを返す。"""
+
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(master.cost), 0) AS total
+        FROM guild_battle_entries AS entry
+        JOIN player_familiars AS owned
+          ON owned.instance_id = entry.instance_id
+        JOIN familiars AS master
+          ON master.familiar_id = owned.familiar_id
+        WHERE entry.guild_id = ?
+        """,
+        (guild_id,),
+    ).fetchone()
+
+    return int(row["total"]) if row is not None else 0
+
+
+def entry_cost_total(guild_id: int) -> int:
+    """セット済みの使い魔の合計COSTを返す（表示用の公開窓口）。"""
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        return _entry_cost_total(conn, guild_id)
+
+
 def get_player_battle_familiars(user_id: int) -> list[dict[str, Any]]:
     """プレイヤーがバトル用に事前登録した使い魔を、優先順で返す（9節）。
 
@@ -390,7 +434,13 @@ def set_battle_roster(
                 )
 
             released = _release_invalid_entries(conn, guild_id, ordered, timestamp)
-            adopted = _adopt_registered_familiars(conn, guild_id, ordered, timestamp)
+            adopted = _adopt_registered_familiars(
+                conn,
+                guild_id,
+                ordered,
+                timestamp,
+                max_total_cost=master.battle.max_total_cost,
+            )
 
     added = [user_id for user_id in ordered_ids if user_id not in current]
     removed = [user_id for user_id in current if user_id not in set(ordered_ids)]
@@ -453,10 +503,13 @@ def _adopt_registered_familiars(
     guild_id: int,
     assignments: list[tuple[int, int]],
     timestamp: str,
+    max_total_cost: int = 0,
 ) -> list[int]:
     """割り当て体数に足りない分を、事前登録の優先順から自動で埋める（9節）。
 
-    戻り値は自動採用した所有使い魔ID。トランザクション内から呼びます。
+    ``max_total_cost`` が0より大きい場合は、合計COSTがその値を超える使い魔を
+    飛ばして次の候補へ進みます。戻り値は自動採用した所有使い魔IDです。
+    トランザクション内から呼びます。
     """
 
     used_rows = conn.execute(
@@ -480,6 +533,7 @@ def _adopt_registered_familiars(
         (int(row["entry_slot"]) for row in used_rows), default=0
     ) + 1
     adopted: list[int] = []
+    cost_total = _entry_cost_total(conn, guild_id) if max_total_cost > 0 else 0
 
     for user_id, count in assignments:
         missing = count - used_counts.get(user_id, 0)
@@ -507,6 +561,13 @@ def _adopt_registered_familiars(
             instance_id = int(row["instance_id"])
             if instance_id in used_instances:
                 continue
+
+            if max_total_cost > 0:
+                adding = _familiar_cost(conn, instance_id)
+                if cost_total + adding > max_total_cost:
+                    # COST上限を超える候補は飛ばし、次の登録へ進む
+                    continue
+                cost_total += adding
 
             conn.execute(
                 """
@@ -580,13 +641,16 @@ def add_battle_entry(
     instance_id: int,
     *,
     max_units: int,
+    max_total_cost: int = 0,
 ) -> dict[str, Any]:
     """出場者が自分の使い魔を1体セットする（9節・10.3節）。
 
     体数の上限は、マスターがその出場者へ割り当てた ``familiar_count`` です。
     自動採用された使い魔を差し替えたい場合は、先に外してから追加します。
+    ``max_total_cost`` が0より大きい場合は、ギルドの合計COSTがその値を超える
+    セットを拒否します（10.6節）。
     error: "roster_locked" / "not_selected" / "entries_full" /
-           "member_limit" / "already_set" / "not_owned"
+           "member_limit" / "already_set" / "not_owned" / "cost_over"
     """
 
     timestamp = _now()
@@ -662,6 +726,19 @@ def add_battle_entry(
             if int(counts["total"] or 0) >= max_units:
                 conn.rollback()
                 return _failure("entries_full")
+
+            if max_total_cost > 0:
+                current_cost = _entry_cost_total(conn, guild_id)
+                adding = _familiar_cost(conn, instance_id)
+
+                if current_cost + adding > max_total_cost:
+                    conn.rollback()
+                    return _failure(
+                        "cost_over",
+                        current_cost=current_cost,
+                        adding_cost=adding,
+                        max_total_cost=max_total_cost,
+                    )
 
             # 枠番号は詰め直しているが、途中に抜けがあっても衝突しないようにする
             next_slot = int(counts["last_slot"] or 0) + 1

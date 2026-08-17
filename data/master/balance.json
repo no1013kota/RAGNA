@@ -46,7 +46,7 @@
   },
   "battle": {
     "max_units": 5,
-    "max_total_cost": 0,
+    "max_total_cost": 20,
     "max_members": 5,
     "min_members": 1,
     "familiars_per_member": {

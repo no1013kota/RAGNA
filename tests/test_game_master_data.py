@@ -348,9 +348,25 @@ class FusionCostTests(unittest.TestCase):
 
 
 class CostLimitTests(unittest.TestCase):
-    def test_total_cost_limit_is_unset_by_default(self) -> None:
-        # 10.6節：初期リリースでは合計COST制限を設けない
-        self.assertEqual(MASTER.battle.max_total_cost, 0)
+    def test_total_cost_limit(self) -> None:
+        # 10.6節：編成の合計COST上限
+        self.assertEqual(MASTER.battle.max_total_cost, 20)
+
+    def test_rank_costs(self) -> None:
+        expected = {"S": 5, "A": 4, "B": 3, "C": 2}
+
+        for familiar in MASTER.familiars.values():
+            self.assertEqual(
+                familiar.cost, expected[familiar.rank], familiar.familiar_id
+            )
+
+    def test_all_s_rank_cannot_fit_but_all_a_rank_can(self) -> None:
+        # 5体編成：全S=25で上限超過、全A=20でちょうど収まる
+        limit = MASTER.battle.max_total_cost
+        units = MASTER.battle.max_units
+
+        self.assertGreater(5 * units, limit)
+        self.assertLessEqual(4 * units, limit)
 
 
 class UsableRankTests(unittest.TestCase):

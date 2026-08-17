@@ -42,6 +42,9 @@ HP_BAR_EMPTY = "░"
 
 SLOT_MARKS = ("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩")
 
+# ランクを一目で見分けるための記号（cogs へ依存しないよう、ここで定義する）
+RANK_EMOJIS = {"S": "🌟", "A": "💎", "B": "🔷", "C": "⬜"}
+
 # 1つの行動ログEmbedとしてまとめ始めるイベント
 _GROUP_START_EVENTS = {
     BattleEvent.ATTACK.value,
@@ -77,6 +80,80 @@ def unit_name(state: BattleState, unit_id: int | None) -> str:
     if unit is None:
         return "不明"
     return familiar_name(unit.familiar_id)
+
+
+def rank_mark(familiar_id: str) -> str:
+    """使い魔のランク記号を返す。編成表や行動順の見分けに使う。"""
+
+    familiar = load_master_data().get_familiar(familiar_id)
+    if familiar is None:
+        return ""
+
+    return RANK_EMOJIS.get(familiar.rank, "")
+
+
+def unit_label(state: BattleState, unit: BattleUnit) -> str:
+    """「🌟ロキ Lv.3」のような表示名を返す。"""
+
+    return f"{rank_mark(unit.familiar_id)}{familiar_name(unit.familiar_id)} Lv.{unit.level}"
+
+
+def survivor_text(state: BattleState, guild_id: int) -> str:
+    """「3/5体」の生存数を返す。"""
+
+    units = state.guild_units(guild_id)
+    alive = sum(1 for unit in units if unit.alive)
+
+    return f"{alive}/{len(units)}体"
+
+
+def turn_queue_text(state: BattleState, *, limit: int = 6) -> str:
+    """このラウンドの残り行動順を「▶いま → 次 → …」の形で返す（1節）。
+
+    戦闘不能の使い魔は行動しないため飛ばします。次に誰が動くかが分かると、
+    スキルを使うタイミングを判断できます。長くなりすぎないよう、名前は
+    ランク記号＋使い魔名だけにします。
+    """
+
+    if not state.turn_order:
+        return "—"
+
+    parts: list[str] = []
+
+    for index in range(state.turn_index, len(state.turn_order)):
+        unit = state.unit(state.turn_order[index])
+        if unit is None or not unit.alive:
+            continue
+
+        label = f"{rank_mark(unit.familiar_id)}{familiar_name(unit.familiar_id)}"
+        if state.current_unit_id == unit.battle_unit_id:
+            label = f"▶**{label}**"
+
+        parts.append(label)
+
+        if len(parts) >= limit:
+            parts.append("…")
+            break
+
+    if not parts:
+        return "このラウンドの行動は終わりです"
+
+    return " → ".join(parts)
+
+
+def turn_position_text(state: BattleState, unit: BattleUnit) -> str:
+    """「2/6番目」のように、このラウンドでの行動順の位置を返す。"""
+
+    order = [
+        unit_id
+        for unit_id in state.turn_order
+        if (found := state.unit(unit_id)) is not None and found.alive
+    ]
+
+    if unit.battle_unit_id not in order:
+        return "—"
+
+    return f"{order.index(unit.battle_unit_id) + 1}/{len(order)}番目"
 
 
 def hp_bar(current_hp: int, max_hp: int, length: int = HP_BAR_LENGTH) -> str:
@@ -187,6 +264,25 @@ def _player_label(player_names: dict[int, str] | None, player_id: int | None) ->
     return f"<@{player_id}>"
 
 
+def _hp_change_line(
+    unit: BattleUnit | None, before: object, after: object
+) -> str:
+    """「HP 51 → 38」とHPバーを1行で返す。"""
+
+    text = f"HP {before if before is not None else '?'} → **{after if after is not None else '?'}**"
+
+    if unit is None:
+        return text
+
+    try:
+        current = int(after)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        current = unit.current_hp
+
+    bar = hp_bar(current, unit.max_hp)
+    return f"{text}\n`{bar}` {current}/{unit.max_hp}"
+
+
 def _describe_log(
     state: BattleState, log: BattleLogEntry, player_names: dict[int, str] | None
 ) -> str | None:
@@ -194,24 +290,40 @@ def _describe_log(
     detail = log.detail or {}
 
     if event == BattleEvent.DAMAGE.value:
+        unit = state.unit(log.target_unit_id)
         target = unit_name(state, log.target_unit_id)
         amount = log.amount or 0
 
         if detail.get("nullified"):
-            return f"{target} へのダメージを無効化"
+            return f"🛡 {target} へのダメージを無効化"
+
+        kind = {
+            "skill": "スキルダメージ",
+            "poison": "継続ダメージ",
+        }.get(str(detail.get("attack_type")), "攻撃ダメージ")
 
         lines = []
         if detail.get("critical"):
             lines.append("⚡ **CRITICAL**")
-        lines.append(f"**{amount}** DAMAGE → {target}")
-        lines.append(f"HP {detail.get('hp_before', '?')} → {detail.get('hp_after', '?')}")
+
+        lines.append(f"💥 **{amount}** ダメージ → {target}（{kind}）")
+        lines.append(
+            _hp_change_line(
+                unit, detail.get("hp_before"), detail.get("hp_after")
+            )
+        )
         return "\n".join(lines)
 
     if event == BattleEvent.HEAL.value:
+        unit = state.unit(log.target_unit_id)
         target = unit_name(state, log.target_unit_id)
-        return (
-            f"💚 {target} のHPを **{log.amount or 0}** 回復\n"
-            f"HP {detail.get('hp_before', '?')} → {detail.get('hp_after', '?')}"
+        return "\n".join(
+            [
+                f"💚 {target} のHPを **{log.amount or 0}** 回復",
+                _hp_change_line(
+                    unit, detail.get("hp_before"), detail.get("hp_after")
+                ),
+            ]
         )
 
     if event == BattleEvent.STATUS_APPLY.value:
@@ -428,13 +540,15 @@ def _unit_line(state: BattleState, unit: BattleUnit, index: int) -> str:
     mark = SLOT_MARKS[index] if index < len(SLOT_MARKS) else f"{index + 1}."
     name = familiar_name(unit.familiar_id)
 
+    rank = rank_mark(unit.familiar_id)
+
     if not unit.alive:
-        head = f"{mark} ~~{name}~~ 💀 戦闘不能"
+        head = f"{mark}{rank} ~~{name}~~ 💀 戦闘不能"
         bar = HP_BAR_EMPTY * HP_BAR_LENGTH
         return f"{head}\n`{bar}` 0/{unit.max_hp}"
 
     bar = hp_bar(unit.current_hp, unit.max_hp)
-    head = f"{mark} **{name}** Lv.{unit.level}"
+    head = f"{mark}{rank} **{name}** Lv.{unit.level}　COST {unit.cost}"
     stats = (
         f"`{bar}` {unit.current_hp}/{unit.max_hp}"
         f"　ATK {unit.current_atk}　SPD {unit.speed}"
@@ -508,19 +622,29 @@ def build_lineup_embed(
             key=lambda unit: (-unit.speed, unit.battle_unit_id),
         )
 
+        total_cost = sum(unit.cost for unit in units)
+        cap = master.battle.max_total_cost
+        cost_text = f"{total_cost}" if cap <= 0 else f"{total_cost}/{cap}"
+
         lines.append(f"**{side}：{name}**")
+        lines.append(
+            f"　{item_line('合計COST', cost_text)}"
+            f"　{item_line('出場', f'{len(units)}体')}"
+        )
 
         for index, unit in enumerate(units):
             mark = SLOT_MARKS[index] if index < len(SLOT_MARKS) else f"{index + 1}."
-            familiar = master.get_familiar(unit.familiar_id)
-            rank = familiar.rank if familiar else "?"
-
             owner = _player_label(player_names, unit.player_id)
+
             lines.append(
-                f"{mark} **{familiar_name(unit.familiar_id)}** Lv.{unit.level}"
-                f"　{rank}／COST {unit.cost}　{owner}"
+                f"{mark} **{unit_label(state, unit)}**"
+                f"　COST {unit.cost}　{owner}"
             )
-            lines.append(f"　{stat_line(state, unit)}")
+            lines.append(
+                f"　`{hp_bar(unit.current_hp, unit.max_hp)}` "
+                f"{unit.current_hp}/{unit.max_hp}"
+                f"　ATK {unit.current_atk}　SPD {unit.speed}"
+            )
 
             for skill in master.skills_of(unit.familiar_id):
                 kind = "ACTIVE" if skill.is_active else "PASSIVE"
@@ -563,9 +687,7 @@ def build_opponent_turn_embed(
     name = guild_names.get(unit.guild_id, f"ギルド{unit.guild_id}")
 
     lines = [
-        item_line(
-            "行動する使い魔", f"**{familiar_name(unit.familiar_id)}** Lv.{unit.level}"
-        ),
+        item_line("行動する使い魔", f"**{unit_label(state, unit)}**"),
         item_line("所属", name),
         item_line("操作するプレイヤー", _player_label(player_names, unit.player_id)),
         item_line("ステータス", stat_line(state, unit)),
@@ -582,7 +704,13 @@ def build_opponent_turn_embed(
     if marks:
         lines.append(item_line("かかっている効果", " ".join(marks)))
 
-    lines.extend(["", "-# 相手の行動が終わるまでお待ちください。"])
+    lines.extend(
+        [
+            item_line("次の順番", turn_queue_text(state, limit=4)),
+            "",
+            "-# 相手の行動が終わるまでお待ちください。",
+        ]
+    )
 
     return discord.Embed(
         title="⏳ 相手のターンです",
@@ -602,8 +730,12 @@ def build_status_embed(
 
     header = [item_line("ラウンド", state.current_round)]
 
-    if state.current_unit_id:
-        header.append(item_line("行動中", unit_name(state, state.current_unit_id)))
+    current = state.current_unit()
+    if current is not None:
+        owner = guild_names.get(current.guild_id, f"ギルド{current.guild_id}")
+        header.append(
+            item_line("行動中", f"{unit_label(state, current)}（{owner}）")
+        )
 
         if turn_remaining_seconds is not None:
             header.append(
@@ -611,6 +743,8 @@ def build_status_embed(
                     "自動攻撃まで", format_remaining_time(turn_remaining_seconds)
                 )
             )
+
+    header.append(item_line("行動順", turn_queue_text(state)))
 
     sections: list[str] = []
 
@@ -629,7 +763,12 @@ def build_status_embed(
             body = body[:1490] + "\n…"
 
         sections.append(
-            item_line(f"{prefix}{name}", f"残り持ち時間 {remaining}") + "\n" + body
+            item_line(
+                f"{prefix}{name}",
+                f"{survivor_text(state, guild_id)}　残り持ち時間 {remaining}",
+            )
+            + "\n"
+            + body
         )
 
     master = load_master_data()
@@ -689,20 +828,30 @@ def build_turn_embed(
     marks.extend(f"◆{text}" for text in summary["others"])
     lines.append(item_line("かかっている効果", " ".join(marks) if marks else "なし"))
 
+    enemy_guild_id = state.enemy_guild_id(unit.guild_id)
+
     lines.extend(
         [
             "",
+            item_line("行動順", turn_position_text(state, unit)),
+            item_line(
+                "生存",
+                f"味方 {survivor_text(state, unit.guild_id)}"
+                f"／敵 {survivor_text(state, enemy_guild_id)}",
+            ),
             item_line("ラウンド", state.current_round),
             item_line("自動攻撃まで", format_remaining_time(turn_seconds)),
             item_line(
                 "残り持ち時間",
                 format_remaining_time(state.remaining_seconds.get(unit.guild_id, 0)),
             ),
+            "",
+            item_line("次の順番", turn_queue_text(state, limit=4)),
         ]
     )
 
     embed = discord.Embed(
-        title=f"▶ {familiar_name(unit.familiar_id)} Lv.{unit.level} の行動順です",
+        title=f"▶ {unit_label(state, unit)} の行動順です",
         description="\n".join(lines),
         color=COLOR_ATTACK,
     )

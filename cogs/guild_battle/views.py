@@ -729,12 +729,12 @@ class RosterFamiliarAddView(PagedSelectView):
             interaction.user.id,
             int(value),
             max_units=master.battle.max_units,
+            max_total_cost=master.battle.max_total_cost,
         )
 
         if not result["ok"]:
             await game_shared.respond(
-                interaction,
-                entry_error_message(result["error"], limit=result.get("limit")),
+                interaction, entry_error_message(result["error"], detail=result)
             )
             return
 
@@ -804,7 +804,7 @@ class RosterFamiliarSwapView(PagedSelectView):
         )
         if not removed["ok"]:
             await game_shared.respond(
-                interaction, entry_error_message(removed["error"])
+                interaction, entry_error_message(removed["error"], detail=removed)
             )
             return
 
@@ -813,6 +813,7 @@ class RosterFamiliarSwapView(PagedSelectView):
             interaction.user.id,
             int(value),
             max_units=master.battle.max_units,
+            max_total_cost=master.battle.max_total_cost,
         )
 
         if not added["ok"]:
@@ -822,10 +823,10 @@ class RosterFamiliarSwapView(PagedSelectView):
                 interaction.user.id,
                 self.removed_instance_id,
                 max_units=master.battle.max_units,
+                max_total_cost=master.battle.max_total_cost,
             )
             await game_shared.respond(
-                interaction,
-                entry_error_message(added["error"], limit=added.get("limit")),
+                interaction, entry_error_message(added["error"], detail=added)
             )
             return
 
@@ -1123,8 +1124,15 @@ def build_entry_overview(
         if familiar is not None:
             total_cost += familiar.cost
 
+    cap = master.battle.max_total_cost
+    cost_text = f"{total_cost}" if cap <= 0 else f"{total_cost}/{cap}"
+    if cap > 0 and total_cost > cap:
+        cost_text = f"{cost_text} ⚠ 上限超過"
+
     lines.append("")
-    lines.append(game_shared.item_line("合計COST", total_cost))
+    lines.append(game_shared.item_line("合計COST", cost_text))
+    if cap > 0:
+        lines.append("-# COSTはランクで決まります：S 5／A 4／B 3／C 2")
     lines.append(
         "-# 体数はギルドマスターが割り当てます。枠のなかで自由に差し替えできます。"
     )
@@ -1169,15 +1177,33 @@ def roster_is_set(guild_id: int) -> bool:
     return bool(get_battle_roster(guild_id))
 
 
-def entry_error_message(code: str | None, *, limit: int | None = None) -> str:
+def entry_error_message(
+    code: str | None,
+    *,
+    limit: int | None = None,
+    detail: dict | None = None,
+) -> str:
     """使い魔セット固有のエラーを日本語へ変換する。"""
 
     master = load_master_data()
+    detail = detail or {}
+
+    if limit is None:
+        limit = detail.get("limit")
 
     if code == "entries_full":
         return (
             f"このギルドは既に{master.battle.max_units}体セット済みです。"
             "解除してから追加してください。"
+        )
+    if code == "cost_over":
+        current = int(detail.get("current_cost", 0))
+        adding = int(detail.get("adding_cost", 0))
+        cap = int(detail.get("max_total_cost", master.battle.max_total_cost))
+        return (
+            f"編成の合計COST上限を超えます（現在{current} + {adding} > 上限{cap}）。\n"
+            "-# COSTの低い使い魔へ入れ替えるか、先に1体解除してください。\n"
+            "-# COSTはランクで決まります：S 5／A 4／B 3／C 2"
         )
     if code == "member_limit":
         return (
