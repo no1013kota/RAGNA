@@ -21,7 +21,7 @@ import discord
 import config
 
 from discord.ext import commands, tasks
-from utils import ensure_panel_message
+from utils import ensure_panel_message, remove_legacy_panels
 
 from cogs import game_shared
 from database.guild import (
@@ -86,6 +86,14 @@ class Guild(commands.Cog):
         except Exception:
             logger.exception("設立パネルのEmbed作成に失敗しました")
             return
+
+        await remove_legacy_panels(
+            self.bot,
+            guild,
+            config.GUILD_INTRO_CHANNEL_ID,
+            titles=service.LEGACY_PANEL_TITLES,
+            history_limit=100,
+        )
 
         await ensure_panel_message(
             self.bot,

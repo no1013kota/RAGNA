@@ -1069,6 +1069,9 @@ class SellConfirmView(discord.ui.View):
 GACHA_PANEL_TITLE = "ガチャ"
 MANAGE_PANEL_TITLE = "使い魔管理"
 
+# 改名前の表題。見つけたら片づけて、新しいパネルへ置き換える。
+LEGACY_PANEL_TITLES = ("使い魔ガチャ",)
+
 
 def build_gacha_panel_embed() -> discord.Embed:
     """ガチャパネルのEmbedを作る。料金と排出率はマスターデータから取得する。"""
@@ -1158,6 +1161,7 @@ def build_manage_panel_embed() -> discord.Embed:
 
 __all__ = [
     "GACHA_PANEL_TITLE",
+    "LEGACY_PANEL_TITLES",
     "MANAGE_PANEL_TITLE",
     "FamiliarManagePanelView",
     "GachaPanelView",

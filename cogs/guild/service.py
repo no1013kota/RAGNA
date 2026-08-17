@@ -59,6 +59,9 @@ NO_MENTIONS = game_shared.NO_MENTIONS
 # ギルド紹介チャンネルの常設パネルのタイトル（ensure_panel_messageの識別キー）
 PANEL_TITLE = "RAGNA Online"
 
+# 改名前の表題。見つけたら片づけて、新しいパネルへ置き換える。
+LEGACY_PANEL_TITLES = ("RAGNA Online ギルド",)
+
 # マスター専用TC・ギルドTCへ設置する常設パネルのタイトル
 MANAGE_PANEL_TITLE = "ギルド管理"
 MEMBER_PANEL_TITLE = "ギルドメンバー"

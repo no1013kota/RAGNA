@@ -78,6 +78,7 @@ RANKING_PANEL_TITLE = "ギルドランキング"
 # 改名前のパネル表題。見つけたら片づけて、新しいパネルへ置き換える。
 LEGACY_ROSTER_PANEL_TITLES = ("バトル出場者",)
 LEGACY_FAMILIAR_PANEL_TITLES = ("バトル使い魔登録",)
+LEGACY_RANKING_PANEL_TITLES = ("ギルドバトルランキング",)
 
 # 一時Viewの有効時間（秒）
 EPHEMERAL_TIMEOUT = 300

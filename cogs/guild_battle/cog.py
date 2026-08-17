@@ -83,7 +83,7 @@ class GuildBattle(commands.Cog):
             return
 
         await self._ensure_ranking_panel(guild)
-        await self._remove_legacy_register_panel(guild)
+        await self._remove_legacy_panels(guild)
 
         for guild_row in get_active_guilds():
             try:
@@ -118,23 +118,28 @@ class GuildBattle(commands.Cog):
             panel_name="ギルドランキングパネル",
         )
 
-    async def _remove_legacy_register_panel(self, guild: discord.Guild) -> None:
-        """使い魔チャンネルに残った旧「バトル使い魔登録」パネルを片づける。
+    async def _remove_legacy_panels(self, guild: discord.Guild) -> None:
+        """設置先や表題が変わって不要になった旧パネルを片づける。
 
-        事前登録は各ギルドの使い魔セットチャンネルへ移したため、
-        こちらのパネルは不要になりました（9.1節）。
+        - 使い魔チャンネルの旧「バトル使い魔登録」（各ギルドの使い魔セットへ移設）
+        - バトル募集チャンネルの旧「ギルドバトルランキング」（ギルド受付へ移設）
         """
 
-        channel_id = config.FAMILIAR_PANEL_CHANNEL_ID
-        if not channel_id:
-            return
-
-        await remove_legacy_panels(
-            self.bot,
-            guild,
-            channel_id,
-            titles=views.LEGACY_FAMILIAR_PANEL_TITLES,
+        targets = (
+            (config.FAMILIAR_PANEL_CHANNEL_ID, views.LEGACY_FAMILIAR_PANEL_TITLES),
+            (
+                config.GUILD_BATTLE_RECRUITMENT_CHANNEL_ID,
+                views.LEGACY_RANKING_PANEL_TITLES,
+            ),
         )
+
+        for channel_id, titles in targets:
+            if not channel_id:
+                continue
+
+            await remove_legacy_panels(
+                self.bot, guild, channel_id, titles=titles
+            )
 
     @battle_panels.before_loop
     async def before_battle_panels(self) -> None:

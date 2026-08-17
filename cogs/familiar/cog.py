@@ -16,7 +16,7 @@ import config
 from discord.ext import commands, tasks
 
 from cogs import game_shared
-from utils import ensure_panel_message
+from utils import ensure_panel_message, remove_legacy_panels
 
 from . import views
 
@@ -77,6 +77,11 @@ class Familiar(commands.Cog):
         except Exception:
             logger.exception("使い魔パネルのEmbed作成に失敗しました")
             return
+
+        # 改名前のパネルが残っていると新旧が並ぶため、先に片づける
+        await remove_legacy_panels(
+            self.bot, guild, channel_id, titles=views.LEGACY_PANEL_TITLES
+        )
 
         for panel_title, embed, view, panel_name in panels:
             await ensure_panel_message(
