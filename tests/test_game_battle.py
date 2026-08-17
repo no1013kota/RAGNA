@@ -651,6 +651,76 @@ class DisplayTests(unittest.TestCase):
     def test_turn_time_is_two_minutes(self) -> None:
         self.assertEqual(MASTER.battle.turn_time_seconds, 120)
 
+    def test_a_passive_during_an_attack_stays_in_the_attack_log(self) -> None:
+        # 被弾時パッシブを別Embedへ分けると、ダメージ表示がそちらへ移ってしまう
+        from game import battle_embed
+
+        state = build_state([("kraken", 1)], [("cyclops", 1)])
+        battle_engine.start_battle(state)
+
+        target = unit_of(state, "kraken", GUILD_A)
+        attacker = unit_of(state, "cyclops", GUILD_B)
+
+        start = len(state.logs)
+        battle_engine.perform_attack(state, attacker, target)
+
+        messages = battle_embed.build_action_log_messages(state, state.logs[start:])
+        self.assertEqual(len(messages), 1, [m.embed.title for m in messages])
+
+        body = messages[0].embed.description or ""
+        self.assertIn("ダメージ", body)
+        self.assertIn("深海の拘束", body)
+        self.assertIn("SPD", body)
+
+    def test_a_standalone_passive_names_the_skill_in_the_title(self) -> None:
+        from game import battle_embed
+
+        state = build_state([("asmodeus", 1)], [("garm", 1)])
+        start = 0
+        battle_engine.start_battle(state)
+
+        messages = battle_embed.build_action_log_messages(state, state.logs[start:])
+        titles = [m.embed.title for m in messages]
+
+        self.assertTrue(
+            any("色欲の権能" in (title or "") for title in titles), titles
+        )
+
+    def test_several_passives_share_one_log(self) -> None:
+        from game import battle_embed
+
+        state = build_state(
+            [("asmodeus", 1), ("lilith", 1)], [("garm", 1), ("cyclops", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        messages = battle_embed.build_action_log_messages(state, state.logs)
+        passive = [
+            m for m in messages if "PASSIVE" in (m.embed.title or "")
+        ]
+
+        self.assertEqual(len(passive), 1, [m.embed.title for m in passive])
+        self.assertIn("2件", passive[0].embed.title)
+
+    def test_passive_logs_include_the_skill_description(self) -> None:
+        from game import battle_embed
+
+        state = build_state([("belphegor", 1)], [("garm", 1)])
+        battle_engine.start_battle(state)
+
+        attacker = unit_of(state, "belphegor", GUILD_A)
+        target = unit_of(state, "garm", GUILD_B)
+
+        start = len(state.logs)
+        battle_engine.perform_attack(state, attacker, target)
+
+        body = "\n".join(
+            m.embed.description or ""
+            for m in battle_embed.build_action_log_messages(state, state.logs[start:])
+        )
+        self.assertIn("怠惰の権能", body)
+        self.assertIn("男性の敵へ攻撃ダメージを与えた時", body)
+
 
 # ==================================================
 # 現在SPDと行動順（BATTLE_RULES.md 1節・7節）

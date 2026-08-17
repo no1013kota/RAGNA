@@ -885,7 +885,10 @@ async def post_action_logs(
         return
 
     messages = battle_embed.build_action_log_messages(
-        state, state.logs, player_names=player_names(bot, state)
+        state,
+        state.logs,
+        player_names=player_names(bot, state),
+        guild_names=guild_names(state),
     )
 
     for message in messages:

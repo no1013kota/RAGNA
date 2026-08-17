@@ -45,11 +45,12 @@ SLOT_MARKS = ("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "�
 # ランクを一目で見分けるための記号（cogs へ依存しないよう、ここで定義する）
 RANK_EMOJIS = {"S": "🌟", "A": "💎", "B": "🔷", "C": "⬜"}
 
-# 1つの行動ログEmbedとしてまとめ始めるイベント
+# 1つの行動ログEmbedとしてまとめ始めるイベント。
+# パッシブは含めない。攻撃やスキルの途中で発動するため、まとめ始めてしまうと
+# そのあとのダメージ表示がパッシブ側のEmbedへ入ってしまう。
 _GROUP_START_EVENTS = {
     BattleEvent.ATTACK.value,
     BattleEvent.SKILL.value,
-    BattleEvent.PASSIVE.value,
     BattleEvent.SKIP.value,
     BattleEvent.TIMEOUT.value,
     BattleEvent.ROUND_START.value,
@@ -268,6 +269,20 @@ class _Group:
     lines: list[str] = field(default_factory=list)
     # 「【項目】結果」で本文の末尾へ並べる項目
     items: list[tuple[str, str]] = field(default_factory=list)
+    # このグループへ入ったパッシブの件数（表題の出し分けに使う）
+    passive_count: int = 0
+    # パッシブだけで始まったグループか
+    passive_only: bool = False
+
+
+def _skill_description(skill_id: str | None) -> str:
+    """スキルの説明文を返す。何をするスキルかログだけで分かるようにする。"""
+
+    if not skill_id:
+        return ""
+
+    skill = load_master_data().get_skill(skill_id)
+    return skill.description if skill is not None else ""
 
 
 def _player_label(player_names: dict[int, str] | None, player_id: int | None) -> str:
@@ -390,8 +405,13 @@ def build_action_log_messages(
     logs: list[BattleLogEntry],
     *,
     player_names: dict[int, str] | None = None,
+    guild_names: dict[int, str] | None = None,
 ) -> list[LogMessage]:
-    """行動ログを、投稿単位のEmbedへまとめる（23節）。"""
+    """行動ログを、投稿単位のEmbedへまとめる（23節）。
+
+    攻撃やスキルの途中で発動したパッシブは、その流れと同じEmbedへ入れます。
+    別のEmbedへ分けると、ダメージ表示がパッシブ側へ移ってしまうためです。
+    """
 
     messages: list[LogMessage] = []
     group: _Group | None = None
@@ -400,6 +420,11 @@ def build_action_log_messages(
         nonlocal group
         if group is None:
             return
+
+        # 複数のパッシブがまとまった場合は、表題を1つのスキル名に絞らない
+        if group.passive_only and group.passive_count > 1:
+            group.title = f"✦ PASSIVE SKILL（{group.passive_count}件）"
+            group.items.clear()
 
         body = list(group.lines)
         if group.items:
@@ -437,6 +462,16 @@ def build_action_log_messages(
             group = _Group(
                 title=f"── ラウンド {log.round} ──", color=COLOR_INFO
             )
+            group.items.append(("行動順", turn_queue_text(state, limit=10)))
+            for guild_id in (state.guild_a_id, state.guild_b_id):
+                group.items.append(
+                    (
+                        guild_names.get(guild_id, f"ギルド{guild_id}")
+                        if guild_names
+                        else f"ギルド{guild_id}",
+                        survivor_text(state, guild_id),
+                    )
+                )
             flush()
             continue
 
@@ -495,14 +530,35 @@ def build_action_log_messages(
             continue
 
         if event == BattleEvent.PASSIVE.value:
-            group = _Group(
-                title="✦ PASSIVE SKILL",
-                color=COLOR_PASSIVE,
-                familiar_id=actor.familiar_id if actor else None,
-            )
-            group.lines.append(
-                f"{unit_name(state, log.actor_unit_id)}「{detail.get('skill_name', '')}」発動"
-            )
+            skill_name = str(detail.get("skill_name", ""))
+            owner = unit_name(state, log.actor_unit_id)
+            description = _skill_description(log.skill_id)
+
+            if group is None:
+                # 単独で発動したパッシブ（バトル開始時など）
+                group = _Group(
+                    title=f"✦ PASSIVE「{skill_name}」",
+                    color=COLOR_PASSIVE,
+                    familiar_id=actor.familiar_id if actor else None,
+                    passive_only=True,
+                )
+                group.lines.append(f"**{owner}** の「{skill_name}」が発動")
+                if actor is not None:
+                    group.items.append(
+                        (
+                            f"{familiar_name(actor.familiar_id)}"
+                            f"（{_player_label(player_names, actor.player_id)}）",
+                            " ／ ".join(unit_status_lines(state, actor)),
+                        )
+                    )
+            else:
+                # 攻撃やスキルの途中で発動したパッシブは、その流れの中へ差し込む
+                group.lines.append(f"◇ **PASSIVE** {owner}「{skill_name}」")
+
+            if description:
+                group.lines.append(f"-# {description}")
+
+            group.passive_count += 1
             continue
 
         if event == BattleEvent.SKIP.value:
