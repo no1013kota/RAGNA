@@ -60,7 +60,7 @@ from game.models import (
     BattleAction,
     BattleRuleError,
 )
-from utils import ensure_panel_message
+from utils import ensure_panel_message, remove_legacy_panels
 
 from . import service
 
@@ -71,10 +71,13 @@ logger = logging.getLogger(__name__)
 DISABLED_MESSAGE = game_shared.DISABLED_MESSAGE
 
 # 常設パネルのタイトル（``ensure_panel_message`` の重複判定に使う）
-REGISTER_PANEL_TITLE = "バトル使い魔登録"
 BATTLE_PANEL_TITLE = "ギルドバトル"
-ROSTER_PANEL_TITLE = "バトル出場者"
+ROSTER_PANEL_TITLE = "使い魔セット"
 RANKING_PANEL_TITLE = "ギルドランキング"
+
+# 改名前のパネル表題。見つけたら片づけて、新しいパネルへ置き換える。
+LEGACY_ROSTER_PANEL_TITLES = ("バトル出場者",)
+LEGACY_FAMILIAR_PANEL_TITLES = ("バトル使い魔登録",)
 
 # 一時Viewの有効時間（秒）
 EPHEMERAL_TIMEOUT = 300
@@ -122,7 +125,7 @@ def master_guild_of_channel(interaction: discord.Interaction) -> tuple[dict | No
 
 
 def roster_guild_of_channel(interaction: discord.Interaction) -> tuple[dict | None, str | None]:
-    """バトル出場者専用TCの操作であることを確認し、ギルド行を返す（34.1節）。"""
+    """使い魔セットチャンネルの操作であることを確認し、ギルド行を返す（34.1節）。"""
 
     if not game_shared.is_game_enabled():
         return None, DISABLED_MESSAGE
@@ -133,7 +136,7 @@ def roster_guild_of_channel(interaction: discord.Interaction) -> tuple[dict | No
 
     guild_row = get_guild_by_channel(channel.id)
     if guild_row is None or guild_row.get("battle_member_channel_id") != channel.id:
-        return None, "このチャンネルはバトル出場者専用TCではありません。"
+        return None, "このチャンネルは使い魔セットチャンネルではありません。"
 
     if guild_row["status"] != "active":
         return None, "このギルドは現在活動中ではありません。"
@@ -370,7 +373,11 @@ async def apply_roster(
     guild_row: dict,
     assignments: list[tuple[int, int]],
 ) -> None:
-    """出場者セットを確定し、権限とパネルを反映して結果を知らせる。"""
+    """出場者セットを確定し、結果を知らせる。
+
+    使い魔セットチャンネルは所属メンバー全員へ開放しているため、出場者が
+    変わってもチャンネル権限は張り替えません（9.1節）。
+    """
 
     guild_id = int(guild_row["guild_id"])
     master = load_master_data()
@@ -386,13 +393,6 @@ async def apply_roster(
     discord_guild = interaction.guild
 
     if discord_guild is not None:
-        member_ids = [row["user_id"] for row in get_guild_members(guild_id)]
-        await game_shared.apply_guild_permissions(
-            discord_guild,
-            guild_row,
-            member_ids=member_ids,
-            roster_ids=user_ids,
-        )
         await ensure_roster_panel(interaction.client, discord_guild, guild_row)
 
     lines = [
@@ -428,7 +428,8 @@ async def apply_roster(
         )
 
     lines.append(
-        "-# 出場者は「バトル出場者専用tc」で、自分の使い魔を差し替えられます。"
+        f"-# 出場者は「{game_shared.CHANNEL_LABELS['battle_member']}」で、"
+        "自分の使い魔を差し替えられます。"
     )
 
     await game_shared.respond(interaction, "\n".join(lines))
@@ -1812,22 +1813,58 @@ class GuildBattlePanelView(discord.ui.View):
 
 
 # ==================================================
-# 常設View：バトル出場者専用TCのパネル
+# 常設View：使い魔セットチャンネルのパネル
+# 事前登録は全メンバー、出場する使い魔の差し替えは出場者だけ
 # ==================================================
 class BattleMemberPanelView(discord.ui.View):
-    """出場者が持ち込む使い魔をセットするパネル。"""
+    """バトル用使い魔の事前登録と、出場者による差し替えをまとめたパネル。"""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="使い魔セット",
+        label="事前登録",
         style=discord.ButtonStyle.primary,
+        custom_id="guild_battle:register_familiars",
+    )
+    async def register(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        """バトルで使う使い魔を、順番付きで登録する（9.1節）。
+
+        出場者に選ばれていなくても、バトルの進行中でも操作できます。
+        """
+
+        if not game_shared.is_game_enabled():
+            await game_shared.respond(interaction, DISABLED_MESSAGE)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            status = build_register_status(interaction.user.id)
+            view = BattleFamiliarRegisterView(interaction.user.id)
+        except Exception:
+            logger.exception(
+                "バトル使い魔登録の表示に失敗しました: user_id=%s", interaction.user.id
+            )
+            await game_shared.respond(
+                interaction, game_shared.UNEXPECTED_ERROR_MESSAGE
+            )
+            return
+
+        await game_shared.respond(interaction, status, view=view)
+
+    @discord.ui.button(
+        label="出場する使い魔",
+        style=discord.ButtonStyle.success,
         custom_id="guild_battle:set_familiar",
     )
     async def set_familiar(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        """出場者が、割り当ての範囲で使い魔を差し替える（9.3節）。"""
+
         guild_row, error = roster_guild_of_channel(interaction)
         if error is not None:
             await game_shared.respond(interaction, error)
@@ -1853,7 +1890,12 @@ class BattleMemberPanelView(discord.ui.View):
 
         if assigned is None:
             await game_shared.respond(
-                interaction, game_shared.error_message("not_selected")
+                interaction,
+                (
+                    "あなたは出場者に選ばれていません。\n"
+                    "-# 「事前登録」で使い魔を登録しておくと、"
+                    "出場者に選ばれたときに順番どおり自動でセットされます。"
+                ),
             )
             return
 
@@ -1881,13 +1923,12 @@ class BattleMemberPanelView(discord.ui.View):
 
         status = "\n".join(
             [
-                "**使い魔セット**",
+                "**出場する使い魔**",
                 game_shared.item_line(
                     "ギルド合計", f"{len(entries)}/{master.battle.max_units}体"
                 ),
                 game_shared.item_line("あなたの枠", f"{len(mine)}/{assigned}体"),
                 "-# 体数はギルドマスターが割り当てます。枠のなかで自由に差し替えできます。",
-                "-# 事前登録した使い魔は、メンバーセット時に順番どおり自動でセットされます。",
             ]
         )
 
@@ -2304,15 +2345,22 @@ def battle_panel_embed() -> discord.Embed:
 
 
 def roster_panel_embed() -> discord.Embed:
-    """バトル出場者専用TCへ置くパネル。"""
+    """使い魔セットチャンネルへ置くパネル（9節）。"""
+
+    master = load_master_data()
 
     return discord.Embed(
         title=ROSTER_PANEL_TITLE,
         description=(
             "\u200b\n"
-            "**バトルで使用する使い魔を差し替えられます**\n"
+            "**事前登録**\n"
+            "-# バトルで使う使い魔を、順番付きで登録します。"
+            f"（{master.battle.max_units}体まで）\n"
+            "-# 出場者に選ばれていなくても、バトル中でもいつでも変更できます。\n"
+            "-# ギルドマスターがメンバーセットしたとき、この順番で自動セットされます。\n\n"
+            "**出場する使い魔**\n"
+            "-# 出場者に選ばれた人が、実際に出す使い魔を差し替えます。\n"
             "-# 体数はギルドマスターが割り当てます。その枠のなかで自由に選べます。\n"
-            "-# 何もしなければ、事前登録した順番のままセットされます。\n"
             "-# 使役できるランクはプレイヤーランクによって決まります。\n"
             "-# 編成ロック中は変更できません。"
         ),
@@ -2337,11 +2385,24 @@ def ranking_panel_embed() -> discord.Embed:
 async def ensure_roster_panel(
     bot: discord.Client, guild: discord.Guild, guild_row: dict
 ) -> None:
-    """バトル出場者専用TCへ使い魔セット用パネルを（無ければ）設置する。"""
+    """使い魔セットチャンネルへパネルを（無ければ）設置する。
+
+    改名前に作られたギルドのチャンネルは、ここで新しい名前へ寄せます。
+    """
 
     channel_id = guild_row.get("battle_member_channel_id")
     if not channel_id:
         return
+
+    await game_shared.ensure_channel_name(
+        guild,
+        channel_id,
+        game_shared.CHANNEL_LABELS["battle_member"],
+        legacy_names=game_shared.LEGACY_CHANNEL_NAMES["battle_member"],
+    )
+    await remove_legacy_panels(
+        bot, guild, int(channel_id), titles=LEGACY_ROSTER_PANEL_TITLES
+    )
 
     await ensure_panel_message(
         bot,
@@ -2576,57 +2637,3 @@ class BattleFamiliarRegisterView(discord.ui.View):
             build_register_status(interaction.user.id),
             view=BattleFamiliarRegisterView(interaction.user.id),
         )
-
-
-class BattleFamiliarPanelView(discord.ui.View):
-    """バトル使い魔登録パネルの常設View。"""
-
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="登録",
-        style=discord.ButtonStyle.primary,
-        custom_id="guild_battle:register_familiars",
-    )
-    async def register(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        if not game_shared.is_game_enabled():
-            await game_shared.respond(interaction, DISABLED_MESSAGE)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            status = build_register_status(interaction.user.id)
-            view = BattleFamiliarRegisterView(interaction.user.id)
-        except Exception:
-            logger.exception(
-                "バトル使い魔登録の表示に失敗しました: user_id=%s", interaction.user.id
-            )
-            await game_shared.respond(
-                interaction, game_shared.UNEXPECTED_ERROR_MESSAGE
-            )
-            return
-
-        await game_shared.respond(interaction, status, view=view)
-
-
-def register_panel_embed() -> discord.Embed:
-    """使い魔チャンネルへ置くバトル使い魔登録パネル。"""
-
-    master = load_master_data()
-
-    return discord.Embed(
-        title=REGISTER_PANEL_TITLE,
-        description=(
-            "\u200b\n"
-            "**バトルで使う使い魔を、順番付きで登録できます。**\n"
-            f"-# 登録できるのは{master.battle.max_units}体までです。\n"
-            "-# ギルドマスターがメンバーセットしたとき、この順番で自動セットされます。\n"
-            "-# ギルドに所属していなくても、バトル中でもいつでも変更できます。\n"
-            "-# 出場者は「バトル出場者専用tc」で差し替えできます。"
-        ),
-        color=config.COLOR_BLUE,
-    )

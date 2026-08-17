@@ -139,7 +139,7 @@ guild_battle_entries         実際に出場する使い魔（本人が枠内で
 
 ギルドのDiscordチャンネルは次のように分かれます。
 
-- 設立時に作る常設4チャンネル（ギルドTC・VC、マスター専用TC、出場者専用TC）
+- 設立時に作る常設4チャンネル（ギルドTC・VC、マスター専用TC、使い魔セット）
 - 対戦成立時に作るバトル専用チャンネル `バトル-<バトルID>`
   （`guild_battles.guild_a_channel_id` / `guild_b_channel_id` に保存し、
   終了から `battle_channel_retention_days` 日後に自動削除）

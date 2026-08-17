@@ -34,6 +34,64 @@ def format_time(minutes: int) -> str:
 # ==================================================
 # 常設パネルの自動復旧
 # ==================================================
+async def remove_legacy_panels(
+    bot: discord.Client,
+    guild: discord.Guild,
+    channel_id: int,
+    *,
+    titles: tuple[str, ...],
+    history_limit: int = 30,
+) -> int:
+    """表題が変わって不要になった常設パネルを片づける。
+
+    削除するのは「Bot自身が送った・操作部品付き・表題が ``titles`` と完全一致」の
+    メッセージだけです。利用者の投稿や現行パネルには触れません。パネルの表題を
+    変更したとき、古いパネルが残って二重に見えるのを防ぐために使います。
+    """
+
+    if not titles:
+        return 0
+
+    channel = guild.get_channel(channel_id)
+    if channel is None or not hasattr(channel, "history"):
+        return 0
+
+    if bot.user is None:
+        return 0
+
+    removed = 0
+
+    try:
+        async for message in channel.history(limit=history_limit):
+            is_legacy_panel = (
+                message.author.id == bot.user.id
+                and bool(message.embeds)
+                and bool(message.components)
+                and message.embeds[0].title in titles
+            )
+            if not is_legacy_panel:
+                continue
+
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                logger.warning(
+                    "旧パネルの削除に失敗しました: message_id=%s", message.id
+                )
+                continue
+
+            removed += 1
+            logger.info(
+                "旧パネル「%s」を削除しました: channel_id=%s",
+                message.embeds[0].title,
+                channel_id,
+            )
+    except discord.HTTPException:
+        logger.exception("旧パネルの確認に失敗しました: channel_id=%s", channel_id)
+
+    return removed
+
+
 async def ensure_panel_message(
     bot: discord.Client,
     guild: discord.Guild,

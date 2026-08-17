@@ -28,7 +28,6 @@ from database.battle import (
     get_battle_lock,
     get_battle_recruitment,
     get_battle_request,
-    get_battle_roster,
     resolve_battle_recruitment,
     resolve_battle_request,
 )
@@ -162,20 +161,18 @@ async def delete_message(
 async def sync_guild_permissions(
     discord_guild: discord.Guild | None, guild_row: dict
 ) -> None:
-    """現在の所属メンバーと出場者セットをチャンネル権限へ反映する（5.3節）。"""
+    """現在の所属メンバーをチャンネル権限へ反映する（5.3節）。"""
 
     if discord_guild is None:
         return
 
     guild_id = int(guild_row["guild_id"])
     member_ids = [int(row["user_id"]) for row in get_guild_members(guild_id)]
-    roster_ids = [int(row["user_id"]) for row in get_battle_roster(guild_id)]
 
     await game_shared.apply_guild_permissions(
         discord_guild,
         guild_row,
         member_ids=member_ids,
-        roster_ids=roster_ids,
     )
 
 

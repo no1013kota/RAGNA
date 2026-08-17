@@ -214,7 +214,12 @@ CHANNEL_LABELS = {
     "guild_text": "ギルドtc",
     "guild_voice": "ギルドvc",
     "master_text": "ギルドマスター専用tc",
-    "battle_member": "バトル出場者専用tc",
+    "battle_member": "使い魔セット",
+}
+
+# 改名前のチャンネル名。既存ギルドを新しい名前へ寄せるために参照する。
+LEGACY_CHANNEL_NAMES = {
+    "battle_member": ("バトル出場者専用tc",),
 }
 
 # 対戦成立時に作るバトル専用チャンネルの名前（34.14節）
@@ -325,7 +330,7 @@ async def create_guild_channels(
         battle_member = await guild.create_text_channel(
             CHANNEL_LABELS["battle_member"],
             category=category,
-            overwrites=master_perms,
+            overwrites=member_perms,
             reason=reason,
         )
         created.append(battle_member)
@@ -446,14 +451,51 @@ async def delete_channel(guild: discord.Guild, channel_id: int | None) -> bool:
     return True
 
 
+async def ensure_channel_name(
+    guild: discord.Guild,
+    channel_id: int | None,
+    expected: str,
+    *,
+    legacy_names: tuple[str, ...] = (),
+) -> bool:
+    """チャンネル名が古い場合だけ、新しい名前へ変更する。
+
+    ``legacy_names`` を指定した場合は、その名前のときだけ変更します。運営が
+    意図して付けた名前を勝手に書き換えないためです。変更した場合に ``True``。
+    """
+
+    if not channel_id:
+        return False
+
+    channel = guild.get_channel(int(channel_id))
+    if channel is None or channel.name == expected:
+        return False
+
+    if legacy_names and channel.name not in legacy_names:
+        return False
+
+    try:
+        await channel.edit(name=expected, reason="RAGNA Onlineチャンネル名の更新")
+    except (discord.HTTPException, discord.Forbidden):
+        logger.warning("チャンネル名の変更に失敗しました: %s", channel_id)
+        return False
+
+    logger.info("チャンネル名を変更しました: %s → %s", channel_id, expected)
+    return True
+
+
 async def apply_guild_permissions(
     guild: discord.Guild,
     guild_row: dict,
     *,
     member_ids: list[int],
-    roster_ids: list[int],
 ) -> None:
-    """所属メンバーと出場者の変更をチャンネル権限へ反映する。"""
+    """所属メンバーの変更をチャンネル権限へ反映する。
+
+    使い魔セットは、出場者に選ばれていないメンバーも事前登録に使うため、
+    所属メンバー全員へ開放します（9.1節）。出場者だけの制限はチャンネル権限では
+    行わず、ボタンを押した時点で判定します。
+    """
 
     master_id = guild_row["master_id"]
 
@@ -464,11 +506,7 @@ async def apply_guild_permissions(
         (guild_row.get("guild_text_channel_id"), member_ids, True),
         (guild_row.get("guild_voice_channel_id"), member_ids, True),
         (guild_row.get("master_text_channel_id"), [master_id], True),
-        (
-            guild_row.get("battle_member_channel_id"),
-            sorted({*roster_ids, master_id}),
-            True,
-        ),
+        (guild_row.get("battle_member_channel_id"), member_ids, True),
     )
 
     for channel_id, allowed_ids, can_send in targets:
@@ -873,6 +911,7 @@ __all__ = [
     "can_found_guild_member",
     "create_guild_channels",
     "delete_guild_channels",
+    "ensure_channel_name",
     "error_message",
     "format_coin",
     "game_admin_log",

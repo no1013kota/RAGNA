@@ -293,7 +293,7 @@ def check_guild_ready(
         ("category_id", "ギルドカテゴリー"),
         ("guild_text_channel_id", "ギルドTC"),
         ("master_text_channel_id", "ギルドマスター専用TC"),
-        ("battle_member_channel_id", "バトル出場者専用TC"),
+        ("battle_member_channel_id", "使い魔セットチャンネル"),
     )
     for column, label in channel_labels:
         channel_id = guild_row.get(column)
@@ -1041,7 +1041,7 @@ async def finish_battle_flow(
 
             member_ids = [row["user_id"] for row in get_guild_members(guild_id)]
             await game_shared.apply_guild_permissions(
-                discord_guild, guild_row, member_ids=member_ids, roster_ids=[]
+                discord_guild, guild_row, member_ids=member_ids
             )
 
             # バトルログをカテゴリー権限へ同期し、後からの加入者も読めるようにする
