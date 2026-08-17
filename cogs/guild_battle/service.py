@@ -43,6 +43,7 @@ from database.battle import (
     set_battle_status,
     set_battle_turn_timing,
     settle_battle_bet,
+    split_bet_evenly,
 )
 from database.familiar import get_owned_familiar
 from database.guild import get_guild, get_guild_members, get_player_guild
@@ -595,12 +596,17 @@ async def purge_battle_channels(bot: discord.Client) -> int:
 
 
 async def try_start_battle(
-    bot: discord.Client, guild_a_id: int, guild_b_id: int
+    bot: discord.Client,
+    guild_a_id: int,
+    guild_b_id: int,
+    *,
+    bet_coin: int | None = None,
 ) -> dict:
     """開始前チェックを行い、通過したらバトルを開始する（13節）。
 
     1つでも条件が欠けている場合はバトルを作らず、不足内容を両ギルドへ通知し、
-    確保していた占有ロックを解放します。
+    確保していた占有ロックを解放します。``bet_coin`` は申請・募集で決めた
+    ギルドごとのベット額です（未指定ならマスターデータの既定値）。
     """
 
     master = load_master_data()
@@ -639,6 +645,7 @@ async def try_start_battle(
         guild_b_id=guild_ids[1],
         guild_time_seconds=master.battle.guild_time_seconds,
         units=units,
+        bet_coin=default_bet_coin() if bet_coin is None else int(bet_coin),
     )
 
     if not created["ok"]:
@@ -697,6 +704,7 @@ async def start_prepared_battle(bot: discord.Client, battle_id: int) -> bool:
         master = load_master_data()
         channels = battle_channels(bot, state)
         names = guild_names(state)
+        bet_coin = battle_bet_coin(battle_id)
 
         guild_time = battle_embed.format_remaining_time(
             master.battle.guild_time_seconds
@@ -717,13 +725,14 @@ async def start_prepared_battle(bot: discord.Client, battle_id: int) -> bool:
                     ),
                     game_shared.item_line(
                         "ベット額",
-                        f"1人 {game_shared.format_coin(master.battle.bet.coin)}",
+                        f"ギルドごと {game_shared.format_coin(bet_coin)}"
+                        "（出場者で均等に分担）",
                     ),
                     game_shared.item_line(
                         "XP", f"勝利 {master.battle.bet.win_xp}／敗北 {master.battle.bet.lose_xp}"
                     ),
                     "",
-                    f"-# {bet_notice()}",
+                    f"-# {bet_notice(bet_coin)}",
                 ]
             ),
             color=config.COLOR_PURPLE,
@@ -742,7 +751,9 @@ async def start_prepared_battle(bot: discord.Client, battle_id: int) -> bool:
                     guild_id=guild_id,
                     guild_names=names,
                     player_names=labels,
-                    bet_notice=bet_notice(),
+                    bet_notice=bet_share_notice(
+                        bet_coin, len(state.guild_units(guild_id))
+                    ),
                 ),
             )
 
@@ -1067,20 +1078,87 @@ def _no_reward_reason(state: BattleState) -> str | None:
 OUTCOME_LABELS = {"win": "勝利", "lose": "敗北", "draw": "引き分け"}
 
 
-def bet_notice() -> str:
+DEFAULT_BET_LABEL = "既定"
+
+# 自由入力で受け付けるベット額の範囲
+MIN_BET_COIN = 0
+MAX_BET_COIN = 10_000_000
+
+
+def default_bet_coin() -> int:
+    """ベット額の初期値（マスターデータの値）を返す。"""
+
+    return load_master_data().battle.bet.coin
+
+
+def battle_bet_coin(battle_id: int) -> int:
+    """そのバトルのベット額を返す。未保存なら既定値を使う。"""
+
+    battle_row = get_battle(battle_id) or {}
+    saved = battle_row.get("bet_coin")
+
+    return int(saved) if saved is not None else default_bet_coin()
+
+
+def parse_bet_coin(text: str) -> tuple[int | None, str | None]:
+    """自由入力のベット額を読み取る。``(値, エラー文)`` を返す。"""
+
+    cleaned = (text or "").strip().replace(",", "").replace("，", "")
+    if not cleaned:
+        return default_bet_coin(), None
+
+    if not cleaned.isdigit():
+        return None, "ベット額は半角数字で入力してください（例：20000）。"
+
+    value = int(cleaned)
+    if not MIN_BET_COIN <= value <= MAX_BET_COIN:
+        return None, (
+            f"ベット額は{MIN_BET_COIN:,}〜{MAX_BET_COIN:,} coinの範囲で"
+            "入力してください。"
+        )
+
+    return value, None
+
+
+def bet_notice(bet_coin: int | None = None) -> str:
     """ベット額の案内文を返す（バトル開始時と結果に出す）。"""
 
     bet = load_master_data().battle.bet
+    amount = default_bet_coin() if bet_coin is None else bet_coin
 
     return (
-        f"1人 {game_shared.format_coin(bet.coin)} をベットします。"
+        f"ギルドごとに {game_shared.format_coin(amount)} をベットします"
+        "（出場者で均等に分担）。"
         f"負けた側のcoinは勝った側へ移ります"
         f"（勝利 {bet.win_xp} XP／敗北 {bet.lose_xp} XP）。"
     )
 
 
+def bet_share_notice(bet_coin: int, member_count: int) -> str:
+    """1人あたりの分担額を説明する文を返す。"""
+
+    if member_count <= 0:
+        return f"ベット額：{game_shared.format_coin(bet_coin)}"
+
+    shares = split_bet_evenly(bet_coin, member_count)
+    low, high = min(shares), max(shares)
+
+    if low == high:
+        each = game_shared.format_coin(low)
+    else:
+        each = f"{low:,}〜{high:,} coin"
+
+    return (
+        f"ギルド合計 {game_shared.format_coin(bet_coin)}"
+        f"／出場者{member_count}人で分担（1人 {each}）"
+    )
+
+
 def build_settlement_embed(
-    results: list[dict], *, reason: str | None = None
+    results: list[dict],
+    *,
+    reason: str | None = None,
+    bet_coin: int | None = None,
 ) -> discord.Embed:
     """ベットの清算結果Embedを作る。"""
 
@@ -1112,7 +1190,7 @@ def build_settlement_embed(
 
         lines.append("")
 
-    lines.append(f"-# {bet_notice()}")
+    lines.append(f"-# {bet_notice(bet_coin)}")
 
     return discord.Embed(
         title="バトル清算",
@@ -1122,12 +1200,20 @@ def build_settlement_embed(
 
 
 def battle_participants(state: BattleState) -> dict[str, list[dict]]:
-    """出場者を勝ち・負け・引き分けへ分けて返す（同じプレイヤーは1回だけ）。"""
+    """出場者を勝ち・負け・引き分けへ分けて返す（同じプレイヤーは1回だけ）。
+
+    並び順はメンバー選択順（使い魔の枠番号順）です。ベットの端数はこの順に
+    切り上げ → 切り下げで割り振るため、順番を固定しておく必要があります。
+    """
 
     seen: set[int] = set()
     groups: dict[str, list[dict]] = {"win": [], "lose": [], "draw": []}
 
-    for unit in state.units.values():
+    ordered = sorted(
+        state.units.values(), key=lambda unit: (unit.slot, unit.battle_unit_id)
+    )
+
+    for unit in ordered:
         if unit.player_id in seen:
             continue
 
@@ -1159,7 +1245,7 @@ def grant_rewards(state: BattleState) -> tuple[list[dict], str | None]:
         winners=groups["win"],
         losers=groups["lose"],
         drawers=groups["draw"],
-        bet_coin=bet.coin,
+        bet_coin=battle_bet_coin(state.battle_id),
         win_xp=bet.win_xp,
         lose_xp=bet.lose_xp,
         draw_xp=bet.draw_xp,
@@ -1241,7 +1327,9 @@ async def finish_battle_flow(
     else:
         granted, reason = [], None
 
-    reward_embed = build_settlement_embed(granted, reason=reason)
+    reward_embed = build_settlement_embed(
+        granted, reason=reason, bet_coin=battle_bet_coin(state.battle_id)
+    )
     for channel in channels.values():
         await _safe_send(channel, embed=reward_embed)
 

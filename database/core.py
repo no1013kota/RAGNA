@@ -105,6 +105,9 @@ ADDED_COLUMNS = (
     ("guild_battles", "channels_deleted_at", "TEXT"),
     ("guild_battle_members", "familiar_count", "INTEGER NOT NULL DEFAULT 0"),
     ("guild_battle_units", "base_speed", "INTEGER NOT NULL DEFAULT 0"),
+    ("guild_battles", "bet_coin", "INTEGER"),
+    ("guild_battle_requests", "bet_coin", "INTEGER"),
+    ("guild_battle_recruitments", "bet_coin", "INTEGER"),
 )
 
 

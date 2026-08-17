@@ -829,8 +829,13 @@ def release_battle_lock(guild_id: int) -> None:
 # ==================================================
 # バトル申請（12.1節）
 # ==================================================
-def create_battle_request(from_guild_id: int, to_guild_id: int) -> dict[str, Any]:
-    """特定ギルドへのバトル申請を作成し、双方のロックを取得する。"""
+def create_battle_request(
+    from_guild_id: int, to_guild_id: int, *, bet_coin: int | None = None
+) -> dict[str, Any]:
+    """特定ギルドへのバトル申請を作成し、双方のロックを取得する。
+
+    ``bet_coin`` は申請したギルドマスターが決めたベット額（ギルド合計）です。
+    """
 
     if from_guild_id == to_guild_id:
         return _failure("same_guild", request_id=None)
@@ -877,11 +882,12 @@ def create_battle_request(from_guild_id: int, to_guild_id: int) -> dict[str, Any
             inserted = conn.execute(
                 """
                 INSERT INTO guild_battle_requests
-                    (from_guild_id, to_guild_id, status, created_at, updated_at)
+                    (from_guild_id, to_guild_id, status, bet_coin,
+                     created_at, updated_at)
                 VALUES
-                    (?, ?, 'pending', ?, ?)
+                    (?, ?, 'pending', ?, ?, ?)
                 """,
-                (from_guild_id, to_guild_id, timestamp, timestamp),
+                (from_guild_id, to_guild_id, bet_coin, timestamp, timestamp),
             )
             request_id = int(inserted.lastrowid)
 
@@ -1040,13 +1046,16 @@ def resolve_battle_request(request_id: int, status: str) -> dict[str, Any]:
         to_guild_id=request_row["to_guild_id"],
         channel_id=request_row["channel_id"],
         message_id=request_row["message_id"],
+        bet_coin=request_row["bet_coin"],
     )
 
 
 # ==================================================
 # 公開バトル募集（12.2節）
 # ==================================================
-def create_battle_recruitment(guild_id: int) -> dict[str, Any]:
+def create_battle_recruitment(
+    guild_id: int, *, bet_coin: int | None = None
+) -> dict[str, Any]:
     """公開バトル募集を作成し、募集側のロックを取得する。"""
 
     timestamp = _now()
@@ -1059,11 +1068,11 @@ def create_battle_recruitment(guild_id: int) -> dict[str, Any]:
             inserted = conn.execute(
                 """
                 INSERT INTO guild_battle_recruitments
-                    (guild_id, status, created_at, updated_at)
+                    (guild_id, status, bet_coin, created_at, updated_at)
                 VALUES
-                    (?, 'open', ?, ?)
+                    (?, 'open', ?, ?, ?)
                 """,
-                (guild_id, timestamp, timestamp),
+                (guild_id, bet_coin, timestamp, timestamp),
             )
             recruitment_id = int(inserted.lastrowid)
 
@@ -1258,6 +1267,7 @@ def claim_battle_recruitment(
         challenger_guild_id=challenger_guild_id,
         channel_id=recruitment_row["channel_id"],
         message_id=recruitment_row["message_id"],
+        bet_coin=recruitment_row["bet_coin"],
     )
 
 
@@ -1270,6 +1280,7 @@ def create_battle(
     guild_b_id: int,
     guild_time_seconds: int,
     units: list[dict[str, Any]],
+    bet_coin: int | None = None,
 ) -> dict[str, Any]:
     """開始前チェックを通過した対戦のバトルデータと戦闘用使い魔を作成する。
 
@@ -1333,15 +1344,16 @@ def create_battle(
                     (guild_a_id, guild_b_id, status, current_round, turn_index,
                      turn_order, action_seq, log_seq,
                      guild_a_remaining_seconds, guild_b_remaining_seconds,
-                     created_at, updated_at)
+                     bet_coin, created_at, updated_at)
                 VALUES
-                    (?, ?, 'preparing', 0, 0, '[]', 0, 0, ?, ?, ?, ?)
+                    (?, ?, 'preparing', 0, 0, '[]', 0, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     guild_a_id,
                     guild_b_id,
                     guild_time_seconds,
                     guild_time_seconds,
+                    bet_coin,
                     timestamp,
                     timestamp,
                 ),
@@ -2212,6 +2224,20 @@ def build_log_entries(records: list[dict[str, Any]]) -> list[BattleLogEntry]:
 # ==================================================
 # バトル報酬（26.2節）
 # ==================================================
+def split_bet_evenly(total: int, count: int) -> list[int]:
+    """``total`` を ``count`` 人で均等に分ける（26.2節）。
+
+    端数はメンバー選択順に切り上げ → 切り下げで割り振ります。渡された順番が
+    そのままメンバー選択順です。合計は必ず ``total`` になります。
+    """
+
+    if count <= 0 or total <= 0:
+        return [0] * max(0, count)
+
+    base, remainder = divmod(total, count)
+    return [base + (1 if index < remainder else 0) for index in range(count)]
+
+
 def settle_battle_bet(
     battle_id: int,
     *,
@@ -2227,9 +2253,10 @@ def settle_battle_bet(
 ) -> dict[str, Any]:
     """ベットしたcoinを負けた側から勝った側へ移し、XPを付与する（26.2節）。
 
-    - 負けた側の各出場者から最大 ``bet_coin`` を回収します。残高が足りない場合は
-      持っているぶんだけ回収し、マイナス残高は作りません。
-    - 回収した合計を、勝った側の出場者へ均等に分けます。端数は先頭から1coinずつ。
+    - ``bet_coin`` は**ギルド単位**のベット額です。負けた側の出場者で均等に分担し、
+      端数はメンバー選択順に切り上げ → 切り下げで割り振ります。
+    - 残高が足りない出場者からは持っているぶんだけ回収し、マイナス残高は作りません。
+    - 回収できた合計を、勝った側の出場者へ同じ方法（均等・端数は選択順）で分けます。
       coinは移動するだけなので、総量は増えません。
     - XPは新しく付与するため、1プレイヤー1日 ``daily_limit`` 試合までに制限します。
     - 引き分けはcoinを動かさず、XPだけを付与します。
@@ -2266,11 +2293,12 @@ def settle_battle_bet(
                 conn.rollback()
                 return {"pot": 0, "collected": [], "paid": [], "results": []}
 
-            # ---- 1. 負けた側から回収する ----
+            # ---- 1. 負けた側から回収する（ギルド合計を均等に分担） ----
             pot = 0
             collected: list[dict[str, Any]] = []
+            shares = split_bet_evenly(bet_coin, len(losers))
 
-            for entry in losers:
+            for entry, share in zip(losers, shares):
                 user_id = int(entry["user_id"])
 
                 balance_row = conn.execute(
@@ -2278,7 +2306,7 @@ def settle_battle_bet(
                 ).fetchone()
                 balance = int(balance_row["balance"]) if balance_row else 0
 
-                taken = max(0, min(bet_coin, balance))
+                taken = max(0, min(share, balance))
                 if taken:
                     conn.execute(
                         "UPDATE balances SET balance = balance - ? WHERE user_id = ?",
@@ -2295,16 +2323,16 @@ def settle_battle_bet(
                     )
 
                 pot += taken
-                collected.append({"user_id": user_id, "coin": taken})
+                collected.append(
+                    {"user_id": user_id, "coin": taken, "share": share}
+                )
 
             # ---- 2. 勝った側へ均等に配る ----
             paid: list[dict[str, Any]] = []
 
             if winners and pot:
-                base, remainder = divmod(pot, len(winners))
-                for index, entry in enumerate(winners):
+                for entry, amount in zip(winners, split_bet_evenly(pot, len(winners))):
                     user_id = int(entry["user_id"])
-                    amount = base + (1 if index < remainder else 0)
                     if not amount:
                         continue
 

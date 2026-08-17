@@ -1193,15 +1193,98 @@ def entry_error_message(code: str | None, *, limit: int | None = None) -> str:
 
 
 # ==================================================
+# ベット額の入力（12節）
+# ==================================================
+class BetAmountModal(discord.ui.Modal):
+    """ギルドごとのベット額を自由入力するModal。
+
+    申請・募集のたびに額を決められます。空欄なら既定値を使います。
+    """
+
+    def __init__(self, *, title: str, guild_row: dict, on_submit_bet) -> None:
+        super().__init__(title=title[:45])
+
+        self.guild_row = guild_row
+        self._on_submit_bet = on_submit_bet
+
+        default = service.default_bet_coin()
+        self.amount = discord.ui.TextInput(
+            label="ベット額（ギルド合計のcoin）",
+            placeholder=f"未入力なら {default:,}",
+            default=str(default),
+            required=False,
+            max_length=9,
+        )
+        self.add_item(self.amount)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        bet_coin, error = service.parse_bet_coin(str(self.amount.value))
+
+        if error is not None:
+            await game_shared.respond(interaction, error)
+            return
+
+        await self._on_submit_bet(interaction, bet_coin)
+
+
+def opponent_options(guild_id: int) -> list[discord.SelectOption]:
+    """バトル申請を送れる相手ギルドの選択肢を作る。"""
+
+    options: list[discord.SelectOption] = []
+
+    for candidate in get_active_guilds():
+        candidate_id = int(candidate["guild_id"])
+        if candidate_id == guild_id:
+            continue
+        if get_battle_lock(candidate_id) is not None:
+            continue
+
+        options.append(
+            discord.SelectOption(
+                label=candidate["name"][:100],
+                description=(
+                    f"{candidate['wins']}勝 {candidate['losses']}敗 "
+                    f"{candidate['draws']}分"
+                )[:100],
+                value=str(candidate_id),
+            )
+        )
+
+    return options
+
+
+def bet_confirmation(guild_id: int, bet_coin: int) -> str:
+    """決めたベット額を、1人あたりの分担額まで含めて説明する。"""
+
+    roster = get_battle_roster(guild_id)
+
+    return "\n".join(
+        [
+            game_shared.item_line("ベット額", game_shared.format_coin(bet_coin)),
+            f"-# {service.bet_share_notice(bet_coin, len(roster))}",
+            "-# 負けた側のcoinは勝った側へ移ります。残高が足りない場合は"
+            "持っているぶんだけ移ります。",
+        ]
+    )
+
+
+# ==================================================
 # バトル申請（12.1節）
 # ==================================================
 class OpponentSelectView(PagedSelectView):
     """バトル申請の相手ギルドを選ぶ一時View。"""
 
-    def __init__(self, guild_row: dict, options: list[discord.SelectOption]) -> None:
+    def __init__(
+        self,
+        guild_row: dict,
+        options: list[discord.SelectOption],
+        *,
+        bet_coin: int,
+    ) -> None:
         super().__init__(options, placeholder="対戦を申し込むギルドを選択")
 
         self.guild_row = guild_row
+        self.bet_coin = bet_coin
 
     async def on_choice(self, interaction: discord.Interaction, value: str) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -1220,7 +1303,9 @@ class OpponentSelectView(PagedSelectView):
             )
             return
 
-        result = create_battle_request(guild_id, opponent_id)
+        result = create_battle_request(
+            guild_id, opponent_id, bet_coin=self.bet_coin
+        )
         if not result["ok"]:
             await game_shared.respond(
                 interaction, game_shared.error_message(result["error"])
@@ -1251,6 +1336,12 @@ class OpponentSelectView(PagedSelectView):
                     "",
                     game_shared.item_line("申請元", guild_row["name"]),
                     game_shared.item_line("申請先", opponent_row["name"]),
+                    game_shared.item_line(
+                        "ベット額", game_shared.format_coin(self.bet_coin)
+                    ),
+                    "",
+                    "-# 承認すると、負けた側のcoinが勝った側へ移ります。"
+                    "出場者で均等に分担します。",
                 ]
             ),
             color=config.COLOR_PURPLE,
@@ -1263,7 +1354,8 @@ class OpponentSelectView(PagedSelectView):
             interaction,
             (
                 f"**{opponent_row['name']}** へバトル申請を送信しました。\n"
-                "相手が回答する前なら、もう一度「バトル申請」から取り消せます。"
+                f"{bet_confirmation(guild_id, self.bet_coin)}\n"
+                "-# 相手が回答する前なら、もう一度「バトル申請」から取り消せます。"
             ),
         )
 
@@ -1398,10 +1490,13 @@ class RecruitmentCancelView(ConfirmView):
         await game_shared.respond(interaction, "バトル募集を取り消しました。")
 
 
-def recruitment_embed(guild_row: dict, *, state_text: str) -> discord.Embed:
+def recruitment_embed(
+    guild_row: dict, *, state_text: str, bet_coin: int | None = None
+) -> discord.Embed:
     """12.2節の募集Embedを組み立てる。"""
 
     master = load_master_data()
+    amount = service.default_bet_coin() if bet_coin is None else int(bet_coin)
 
     return discord.Embed(
         title="⚔ GUILD BATTLE",
@@ -1413,7 +1508,13 @@ def recruitment_embed(guild_row: dict, *, state_text: str) -> discord.Embed:
                     "出場人数",
                     f"{master.battle.min_members}～{master.battle.max_members}人",
                 ),
+                game_shared.item_line(
+                    "ベット額", f"ギルドごと {game_shared.format_coin(amount)}"
+                ),
                 game_shared.item_line("状態", state_text),
+                "",
+                "-# 申し込むと、負けた側のcoinが勝った側へ移ります。"
+                "出場者で均等に分担します。",
             ]
         ),
         color=config.COLOR_PURPLE,
@@ -1445,7 +1546,12 @@ async def close_recruitment_message(
     try:
         message = await channel.fetch_message(int(message_id))
         await message.edit(
-            embed=recruitment_embed(guild_row, state_text=state_text), view=view
+            embed=recruitment_embed(
+                guild_row,
+                state_text=state_text,
+                bet_coin=payload.get("bet_coin"),
+            ),
+            view=view,
         )
     except discord.NotFound:
         return
@@ -2004,9 +2110,8 @@ class GuildBattlePanelView(discord.ui.View):
                 )
             return
 
-        await interaction.response.defer(ephemeral=True)
-
         # 申し込めない理由をすべて具体的に出す（12節）
+        # Modalは応答前でないと出せないため、ここではdeferしない。
         issues = service.entry_blockers(interaction.client, guild_id)
         if issues:
             await game_shared.respond(
@@ -2014,33 +2119,37 @@ class GuildBattlePanelView(discord.ui.View):
             )
             return
 
-        options = []
-        for candidate in get_active_guilds():
-            candidate_id = int(candidate["guild_id"])
-            if candidate_id == guild_id:
-                continue
-            if get_battle_lock(candidate_id) is not None:
-                continue
-
-            options.append(
-                discord.SelectOption(
-                    label=candidate["name"][:100],
-                    description=(
-                        f"{candidate['wins']}勝 {candidate['losses']}敗 "
-                        f"{candidate['draws']}分"
-                    )[:100],
-                    value=str(candidate_id),
-                )
-            )
-
-        if not options:
+        if not opponent_options(guild_id):
             await game_shared.respond(interaction, "現在申し込めるギルドがありません。")
             return
 
-        await game_shared.respond(
-            interaction,
-            "対戦を申し込むギルドを選んでください。",
-            view=OpponentSelectView(guild_row, options),
+        async def open_opponent_select(
+            modal_interaction: discord.Interaction, bet_coin: int
+        ) -> None:
+            await modal_interaction.response.defer(ephemeral=True)
+
+            options = opponent_options(guild_id)
+            if not options:
+                await game_shared.respond(
+                    modal_interaction, "現在申し込めるギルドがありません。"
+                )
+                return
+
+            await game_shared.respond(
+                modal_interaction,
+                (
+                    "対戦を申し込むギルドを選んでください。\n"
+                    f"{bet_confirmation(guild_id, bet_coin)}"
+                ),
+                view=OpponentSelectView(guild_row, options, bet_coin=bet_coin),
+            )
+
+        await interaction.response.send_modal(
+            BetAmountModal(
+                title="バトル申請：ベット額",
+                guild_row=guild_row,
+                on_submit_bet=open_opponent_select,
+            )
         )
 
     # ==================================================
@@ -2090,9 +2199,8 @@ class GuildBattlePanelView(discord.ui.View):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
-
         # 募集する前に、開始条件を満たしているかを具体的に確認する（12.2節）
+        # Modalは応答前でないと出せないため、ここではdeferしない。
         issues = service.entry_blockers(interaction.client, guild_id)
         if issues:
             await game_shared.respond(
@@ -2100,23 +2208,41 @@ class GuildBattlePanelView(discord.ui.View):
             )
             return
 
-        result = create_battle_recruitment(guild_id)
-        if not result["ok"]:
-            await game_shared.respond(
-                interaction, game_shared.error_message(result["error"])
+        async def post_recruitment(
+            modal_interaction: discord.Interaction, bet_coin: int
+        ) -> None:
+            await modal_interaction.response.defer(ephemeral=True)
+
+            result = create_battle_recruitment(guild_id, bet_coin=bet_coin)
+            if not result["ok"]:
+                await game_shared.respond(
+                    modal_interaction, game_shared.error_message(result["error"])
+                )
+                return
+
+            recruitment_id = int(result["recruitment_id"])
+            message = await channel.send(
+                embed=recruitment_embed(
+                    guild_row, state_text="対戦相手募集中", bet_coin=bet_coin
+                ),
+                view=BattleRecruitmentView(),
             )
-            return
+            set_battle_recruitment_message(recruitment_id, channel.id, message.id)
 
-        recruitment_id = int(result["recruitment_id"])
-        message = await channel.send(
-            embed=recruitment_embed(guild_row, state_text="対戦相手募集中"),
-            view=BattleRecruitmentView(),
-        )
-        set_battle_recruitment_message(recruitment_id, channel.id, message.id)
+            await game_shared.respond(
+                modal_interaction,
+                (
+                    f"{channel.mention} へバトル募集を投稿しました。\n"
+                    f"{bet_confirmation(guild_id, bet_coin)}"
+                ),
+            )
 
-        await game_shared.respond(
-            interaction,
-            f"{channel.mention} へバトル募集を投稿しました。",
+        await interaction.response.send_modal(
+            BetAmountModal(
+                title="バトル募集：ベット額",
+                guild_row=guild_row,
+                on_submit_bet=post_recruitment,
+            )
         )
 
     # ==================================================
@@ -2330,15 +2456,25 @@ class BattleRequestView(discord.ui.View):
             )
             return
 
+        bet_coin = request_row.get("bet_coin")
+
         await _delete_request_message(interaction.client, result)
         await game_shared.respond(
-            interaction, "申請を承認しました。開始前チェックを行います。"
+            interaction,
+            (
+                "申請を承認しました。開始前チェックを行います。\n"
+                + bet_confirmation(
+                    int(request_row["to_guild_id"]),
+                    service.default_bet_coin() if bet_coin is None else int(bet_coin),
+                )
+            ),
         )
 
         await service.try_start_battle(
             interaction.client,
             int(request_row["from_guild_id"]),
             int(request_row["to_guild_id"]),
+            bet_coin=bet_coin,
         )
 
     @discord.ui.button(
@@ -2448,13 +2584,27 @@ class BattleRecruitmentView(discord.ui.View):
             )
             return
 
+        bet_coin = result.get("bet_coin")
+        if bet_coin is None:
+            bet_coin = recruitment.get("bet_coin")
+
         await close_recruitment_message(interaction.client, result, state_text="募集終了")
         await game_shared.respond(
-            interaction, "対戦が成立しました。開始前チェックを行います。"
+            interaction,
+            (
+                "対戦が成立しました。開始前チェックを行います。\n"
+                + bet_confirmation(
+                    challenger_id,
+                    service.default_bet_coin() if bet_coin is None else int(bet_coin),
+                )
+            ),
         )
 
         await service.try_start_battle(
-            interaction.client, int(result["guild_id"]), challenger_id
+            interaction.client,
+            int(result["guild_id"]),
+            challenger_id,
+            bet_coin=bet_coin,
         )
 
 

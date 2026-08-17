@@ -457,6 +457,8 @@ created_at TEXT NOT NULL
 -- RAGNA Online：バトル申請
 -- ==================================================
 CREATE TABLE IF NOT EXISTS guild_battle_requests (
+-- ギルドごとのベット額（申請したギルドマスターが決める）
+bet_coin INTEGER,
 request_id INTEGER PRIMARY KEY AUTOINCREMENT,
 from_guild_id INTEGER NOT NULL REFERENCES guilds(guild_id),
 to_guild_id INTEGER NOT NULL REFERENCES guilds(guild_id),
@@ -475,6 +477,8 @@ ON guild_battle_requests(message_id);
 -- RAGNA Online：バトル募集
 -- ==================================================
 CREATE TABLE IF NOT EXISTS guild_battle_recruitments (
+-- ギルドごとのベット額（募集したギルドマスターが決める）
+bet_coin INTEGER,
 recruitment_id INTEGER PRIMARY KEY AUTOINCREMENT,
 guild_id INTEGER NOT NULL REFERENCES guilds(guild_id),
 status TEXT NOT NULL DEFAULT 'open'
@@ -493,6 +497,8 @@ ON guild_battle_recruitments(message_id);
 -- ==================================================
 CREATE TABLE IF NOT EXISTS guild_battles (
 battle_id INTEGER PRIMARY KEY AUTOINCREMENT,
+-- ギルドごとのベット額（出場者で均等に分担する）
+bet_coin INTEGER,
 guild_a_id INTEGER NOT NULL REFERENCES guilds(guild_id),
 guild_b_id INTEGER NOT NULL REFERENCES guilds(guild_id),
 status TEXT NOT NULL

@@ -1012,6 +1012,65 @@ class BattleTests(GameDatabaseTestCase):
         # coinは移動するだけで総量は変わらない
         self.assertEqual(self.balance(winner) + self.balance(loser), 100_000)
 
+    def test_the_bet_is_split_evenly_with_rounding_up_first(self) -> None:
+        # 26.2節：端数はメンバー選択順に切り上げ → 切り下げ
+        self.assertEqual(self.battle_db.split_bet_evenly(20_000, 1), [20_000])
+        self.assertEqual(self.battle_db.split_bet_evenly(20_000, 2), [10_000, 10_000])
+        self.assertEqual(
+            self.battle_db.split_bet_evenly(20_000, 3), [6_667, 6_667, 6_666]
+        )
+
+        for count in range(1, 6):
+            self.assertEqual(
+                sum(self.battle_db.split_bet_evenly(20_000, count)), 20_000, count
+            )
+
+    def test_the_guild_bet_is_shared_by_its_members(self) -> None:
+        # ベット額はギルド単位。出場者が増えても1ギルドの負担は変わらない
+        battle_id = self.start_battle()
+        self.battle_db.finish_battle(battle_id, result="guild_a", end_reason="wipe")
+
+        winner = self.members_a[0]
+        losers = self.members_b[:3]
+
+        self.add_coin(winner, 100_000)
+        for user_id in losers:
+            self.add_coin(user_id, 100_000)
+
+        outcome = self.battle_db.settle_battle_bet(
+            battle_id,
+            winners=[{"user_id": winner, "guild_id": self.guild_a}],
+            losers=[{"user_id": u, "guild_id": self.guild_b} for u in losers],
+            drawers=[],
+            bet_coin=20_000,
+            win_xp=40,
+            lose_xp=20,
+            draw_xp=20,
+            reward_date="2026-08-18",
+            daily_limit=3,
+        )
+
+        self.assertEqual(outcome["pot"], 20_000)
+        self.assertEqual(self.balance(winner), 120_000)
+        # 先頭2人が切り上げ、最後が切り下げ
+        self.assertEqual(
+            [self.balance(u) for u in losers], [93_333, 93_333, 93_334]
+        )
+
+    def test_the_bet_amount_is_stored_on_the_battle(self) -> None:
+        request = self.battle_db.create_battle_request(
+            self.guild_a, self.guild_b, bet_coin=55_000
+        )
+        self.assertTrue(request["ok"], request)
+
+        row = self.battle_db.get_battle_request(int(request["request_id"]))
+        self.assertEqual(int(row["bet_coin"]), 55_000)
+
+        resolved = self.battle_db.resolve_battle_request(
+            int(request["request_id"]), "approved"
+        )
+        self.assertEqual(int(resolved["bet_coin"]), 55_000)
+
     def test_the_bet_is_settled_only_once_per_battle(self) -> None:
         battle_id = self.start_battle()
         self.battle_db.finish_battle(battle_id, result="guild_a", end_reason="wipe")
