@@ -408,6 +408,35 @@ class GachaConfirmView(discord.ui.View):
             )
             await game_shared.respond(interaction, embed=embed)
 
+            # 最高ランクを引いたら、別Embedでお祝いを出す（10.2節）
+            try:
+                celebrations = service.build_celebration_embeds(
+                    outcome["instances"]
+                )
+            except Exception:
+                logger.exception(
+                    "お祝い表示の作成に失敗しました: user_id=%s", interaction.user.id
+                )
+                celebrations = []
+
+            # 抽選と保存は済んでいるため、お祝い表示の失敗は結果へ影響させない
+            for celebration, icon in celebrations:
+                try:
+                    if icon is not None:
+                        await interaction.followup.send(
+                            embed=celebration, file=icon, ephemeral=True
+                        )
+                    else:
+                        await interaction.followup.send(
+                            embed=celebration, ephemeral=True
+                        )
+                except discord.HTTPException:
+                    logger.warning(
+                        "お祝い表示の送信に失敗しました: user_id=%s", interaction.user.id
+                    )
+                    if icon is not None:
+                        icon.close()
+
             # すべての使い魔を集めたらコンプリート報酬を解放する
             try:
                 granted = service.check_complete_rewards(interaction.user.id)

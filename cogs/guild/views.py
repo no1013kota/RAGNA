@@ -1080,6 +1080,18 @@ class GuildRenameModal(discord.ui.Modal, title="ギルド名変更"):
 
         await service.refresh_recruitment_embed(interaction.client, self.guild_id)
 
+        # メンバー用パネルの表題はギルド名なので、その場で書き換える（8.3節）
+        updated_row = get_guild(self.guild_id)
+        if updated_row is not None and interaction.guild is not None:
+            try:
+                await service.ensure_member_panel(
+                    interaction.client, interaction.guild, updated_row
+                )
+            except Exception:
+                logger.exception(
+                    "メンバー用パネルの表題更新に失敗しました: guild_id=%s", self.guild_id
+                )
+
         await service.respond_no_mention(
             interaction,
             f"ギルド名を「{result['old_name']}」から「{new_name}」へ変更しました。\n"
@@ -1215,7 +1227,7 @@ class RecruitControlView(discord.ui.View):
 # ギルドメンバー用パネル（ギルドTC・8.3節）
 # ==================================================
 class GuildMemberPanelView(discord.ui.View):
-    """ギルドTCへ常設する、所属メンバー向けのパネル。"""
+    """使い魔セットチャンネルへ常設する、所属メンバー向けのパネル（8.3節）。"""
 
     def __init__(self):
         super().__init__(timeout=None)

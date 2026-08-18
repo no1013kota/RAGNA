@@ -18,41 +18,60 @@ os.environ.setdefault("DISCORD_BOT_TOKEN", "test-token")
 os.environ.setdefault("DISCORD_GUILD_ID", "1")
 
 
-def reload_with_database(database_path: Path) -> dict:
+def _reloaded_module_names() -> list[str]:
+    """一時DB用に読み込み直す対象のモジュール名を返す。"""
+
+    return [
+        name
+        for name in list(sys.modules)
+        if name == "database"
+        or name.startswith("database.")
+        or name.startswith("cogs.guild")
+        or name == "cogs.game_shared"
+    ]
+
+
+def reload_with_database(database_path: Path) -> tuple[dict, dict]:
     """一時DBを参照した状態で、DB層とギルドCogを読み込み直す。
 
     ``database.core`` はimport時に保存先を決めるため、他のテストの影響を受けない
-    よう関連モジュールをすべて読み込み直します。
+    よう関連モジュールをすべて読み込み直します。差し替え前のモジュールも返すので、
+    テストの後で元へ戻せます（他のテストが持っている参照が古くならないように）。
     """
 
     os.environ["DATABASE_PATH"] = str(database_path)
 
-    for module_name in list(sys.modules):
-        if (
-            module_name == "database"
-            or module_name.startswith("database.")
-            or module_name.startswith("cogs.guild")
-            or module_name == "cogs.game_shared"
-        ):
-            sys.modules.pop(module_name)
+    saved = {name: sys.modules.pop(name) for name in _reloaded_module_names()}
 
     connection = importlib.import_module("database.connection")
     connection.init_database()
 
-    return {
+    modules = {
         "connection": connection,
         "guild_db": importlib.import_module("database.guild"),
         "battle_db": importlib.import_module("database.battle"),
         "service": importlib.import_module("cogs.guild.service"),
     }
 
+    return modules, saved
+
+
+def restore_modules(saved: dict) -> None:
+    """``reload_with_database`` で差し替えたモジュールを元へ戻す。"""
+
+    for name in _reloaded_module_names():
+        sys.modules.pop(name, None)
+
+    sys.modules.update(saved)
+
 
 class LeaveAndDisbandRuleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
-        modules = reload_with_database(
+        modules, saved = reload_with_database(
             Path(self.temporary_directory.name) / "test.db"
         )
+        self.addCleanup(restore_modules, saved)
 
         self.connection_module = modules["connection"]
         self.guild_db = modules["guild_db"]

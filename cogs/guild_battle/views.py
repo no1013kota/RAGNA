@@ -60,7 +60,7 @@ from game.models import (
     BattleAction,
     BattleRuleError,
 )
-from utils import ensure_panel_message, remove_legacy_panels
+from utils import PANEL_CREATED, ensure_panel_message, remove_legacy_panels
 
 from . import service
 
@@ -854,8 +854,10 @@ class RosterFamiliarSwapTargetView(PagedSelectView):
 
         options = build_settable_familiar_options(self.guild_id, interaction.user.id)
         if not options:
+            issues = settable_blockers(self.guild_id, interaction.user.id)
             await game_shared.respond(
-                interaction, "入れ替えられる使い魔がありません。"
+                interaction,
+                "**入れ替えられる使い魔がありません。**\n" + "\n".join(issues),
             )
             return
 
@@ -908,8 +910,11 @@ class RosterFamiliarActionView(discord.ui.View):
         options = build_settable_familiar_options(self.guild_id, interaction.user.id)
 
         if not options:
+            # 理由を具体的に伝える（ランク不足・全部セット済みなど）
+            issues = settable_blockers(self.guild_id, interaction.user.id)
             await game_shared.respond(
-                interaction, "セットできる使い魔がありません。"
+                interaction,
+                "**セットできる使い魔がありません。**\n" + "\n".join(issues),
             )
             return
 
@@ -972,12 +977,18 @@ def familiar_sort_key(familiar_id: str, level: int) -> tuple[int, int, str]:
 
 
 def familiar_option(
-    instance_id: int, familiar_id: str, level: int, *, prefix: str = ""
+    instance_id: int,
+    familiar_id: str,
+    level: int,
+    *,
+    prefix: str = "",
+    count: int = 1,
 ) -> discord.SelectOption | None:
-    """所有使い魔1体をセレクトの選択肢へ変換する。
+    """所有使い魔をセレクトの選択肢へ変換する。
 
     ランクは絵文字（アイコン）と先頭文字の両方で示します。先頭文字があると、
-    セレクトの見出しに「S〜Aランク」のような範囲を出せます。
+    セレクトの見出しに「S〜Aランク」のような範囲を出せます。``count`` が2以上の
+    ときは「×3」を付け、同じ使い魔を何度も並べません。
     """
 
     master = load_master_data()
@@ -993,18 +1004,69 @@ def familiar_option(
         else familiar.description
     )
 
+    label = f"{prefix}{familiar.rank} {familiar.name} Lv.{level}"
+    if count > 1:
+        label = f"{label} ×{count}"
+
     return discord.SelectOption(
-        label=f"{prefix}{familiar.rank} {familiar.name} Lv.{level}"[:100],
+        label=label[:100],
         description=description[:100],
         value=str(instance_id),
         emoji=game_shared.RANK_EMOJIS.get(familiar.rank),
     )
 
 
-def build_settable_familiar_options(
-    guild_id: int, user_id: int
+def grouped_familiar_options(
+    rows: list[dict], *, prefix: str = ""
 ) -> list[discord.SelectOption]:
-    """まだセットしていない、使役可能な所有使い魔の選択肢を作る。"""
+    """所有使い魔を「同じ種類・同じレベル」でまとめ、ランク順 → レベル順で返す。
+
+    同じ使い魔が複数あっても選択肢は1つにまとめ、体数を「×3」で示します。
+    どの個体を選んでも結果は同じなので、代表として最小の個体IDを使います。
+    """
+
+    groups: dict[tuple[str, int], dict] = {}
+
+    for row in rows:
+        familiar_id = str(row["familiar_id"])
+        level = int(row["level"])
+        instance_id = int(row["instance_id"])
+        key = (familiar_id, level)
+
+        group = groups.get(key)
+        if group is None:
+            groups[key] = {
+                "familiar_id": familiar_id,
+                "level": level,
+                "instance_id": instance_id,
+                "count": 1,
+            }
+            continue
+
+        group["count"] += 1
+        group["instance_id"] = min(group["instance_id"], instance_id)
+
+    found: list[tuple[tuple[int, int, str], discord.SelectOption]] = []
+
+    for group in groups.values():
+        option = familiar_option(
+            group["instance_id"],
+            group["familiar_id"],
+            group["level"],
+            prefix=prefix,
+            count=group["count"],
+        )
+        if option is not None:
+            found.append(
+                (familiar_sort_key(group["familiar_id"], group["level"]), option)
+            )
+
+    found.sort(key=lambda item: item[0])
+    return [option for _, option in found]
+
+
+def settable_familiars(guild_id: int, user_id: int) -> list[dict]:
+    """まだセットしていない、使役できる所有使い魔を返す。"""
 
     master = load_master_data()
 
@@ -1013,11 +1075,10 @@ def build_settable_familiar_options(
         return []
 
     already_set = {
-        int(entry["instance_id"])
-        for entry in get_battle_entries(guild_id)
+        int(entry["instance_id"]) for entry in get_battle_entries(guild_id)
     }
 
-    options: list[discord.SelectOption] = []
+    found: list[dict] = []
 
     for owned in get_owned_familiars(user_id):
         if int(owned["instance_id"]) in already_set:
@@ -1034,22 +1095,76 @@ def build_settable_familiar_options(
         ):
             continue
 
-        option = familiar_option(
-            int(owned["instance_id"]), str(owned["familiar_id"]), int(owned["level"])
-        )
-        if option is not None:
-            options.append(
-                (
-                    familiar_sort_key(
-                        str(owned["familiar_id"]), int(owned["level"])
-                    ),
-                    option,
-                )
-            )
+        found.append(dict(owned))
 
-    # ランク順 → レベル順に並べる
-    options.sort(key=lambda item: item[0])
-    return [option for _, option in options]
+    return found
+
+
+def settable_blockers(guild_id: int, user_id: int) -> list[str]:
+    """セットできる使い魔が無い理由を、具体的に並べて返す（10.3節）。
+
+    「セットできる使い魔がありません」だけでは、ランクが足りないのか、
+    すでに全部セットしたのか、そもそも持っていないのかが分かりません。
+    """
+
+    master = load_master_data()
+
+    rank_info = game_shared.get_player_rank_info(user_id)
+    if rank_info is None:
+        return [
+            "プレイヤーランクを確認できませんでした。運営へ連絡してください。"
+        ]
+
+    usable = master.usable_ranks(
+        rank_info["player_rank"], is_sub_manager=rank_info["is_sub_manager"]
+    )
+    if not usable:
+        return [
+            "クラスロール（S・A・B・C）が付いていないため、使い魔を使役できません。",
+            "-# 運営へ連絡してクラスロールを付けてもらってください。",
+        ]
+
+    owned = get_owned_familiars(user_id)
+    if not owned:
+        return ["使い魔を所有していません。ガチャで入手してください。"]
+
+    already_set = {
+        int(entry["instance_id"]) for entry in get_battle_entries(guild_id)
+    }
+    remaining = [
+        row for row in owned if int(row["instance_id"]) not in already_set
+    ]
+
+    if not remaining:
+        return [
+            "所有している使い魔はすべてセット済みです。",
+            "-# 入れ替えるには「入れ替え」から、外すには「セットを解除」から操作してください。",
+        ]
+
+    # 残っているのに候補が無い＝使役できるランクが足りない
+    ranks = sorted(
+        {
+            familiar.rank
+            for row in remaining
+            if (familiar := master.get_familiar(row["familiar_id"])) is not None
+        }
+    )
+    return [
+        f"あなたのランク（{rank_info['player_rank']}）では、"
+        f"残っている使い魔（{'・'.join(ranks)}）を使役できません。",
+        f"-# 使役できるのは {'・'.join(usable)} までです（自分のランクより1段階上まで）。",
+    ]
+
+
+def build_settable_familiar_options(
+    guild_id: int, user_id: int
+) -> list[discord.SelectOption]:
+    """まだセットしていない、使役可能な所有使い魔の選択肢を作る。
+
+    同じ使い魔が複数ある場合は1つにまとめ、体数を「×3」で示します。
+    """
+
+    return grouped_familiar_options(settable_familiars(guild_id, user_id))
 
 
 def build_entry_overview(
@@ -2893,8 +3008,11 @@ async def ensure_roster_panel(
 ) -> None:
     """使い魔セットチャンネルへパネルを（無ければ）設置する。
 
-    改名前に作られたギルドのチャンネルは、ここで新しい名前へ寄せます。
+    「ギルドメンバー用パネル → 使い魔セットパネル」の順に並べます（8.3節）。改名前に
+    作られたギルドのチャンネルは、ここで新しい名前へ寄せます。
     """
+
+    from cogs.guild import service as guild_service
 
     channel_id = guild_row.get("battle_member_channel_id")
     if not channel_id:
@@ -2910,6 +3028,14 @@ async def ensure_roster_panel(
         bot, guild, int(channel_id), titles=LEGACY_ROSTER_PANEL_TITLES
     )
 
+    # メンバー用パネルを先に置く。既に使い魔セットパネルだけがある場合は、
+    # 並び順が逆になってしまうため、いったん剥がして下へ貼り直す。
+    member_panel = await guild_service.ensure_member_panel(bot, guild, guild_row)
+    if member_panel == PANEL_CREATED:
+        await remove_legacy_panels(
+            bot, guild, int(channel_id), titles=(ROSTER_PANEL_TITLE,)
+        )
+
     await ensure_panel_message(
         bot,
         guild,
@@ -2917,7 +3043,7 @@ async def ensure_roster_panel(
         panel_title=ROSTER_PANEL_TITLE,
         embed=roster_panel_embed(),
         view=BattleMemberPanelView(),
-        panel_name="バトル出場者パネル",
+        panel_name="使い魔セットパネル",
     )
 
 
@@ -2988,27 +3114,22 @@ def build_register_status(user_id: int) -> str:
 
 
 def build_registerable_options(user_id: int) -> list[discord.SelectOption]:
-    """事前登録に追加できる使い魔の選択肢を、ランク順 → レベル順で作る。"""
+    """事前登録に追加できる使い魔の選択肢を作る。
+
+    同じ使い魔が複数ある場合は1つにまとめ、体数を「×3」で示します。
+    """
 
     registered = {
         int(row["instance_id"]) for row in get_player_battle_familiars(user_id)
     }
-    found: list[tuple[tuple[int, int, str], discord.SelectOption]] = []
 
-    for owned in get_owned_familiars(user_id):
-        instance_id = int(owned["instance_id"])
-        if instance_id in registered:
-            continue
-
-        familiar_id = str(owned["familiar_id"])
-        level = int(owned["level"])
-
-        option = familiar_option(instance_id, familiar_id, level)
-        if option is not None:
-            found.append((familiar_sort_key(familiar_id, level), option))
-
-    found.sort(key=lambda item: item[0])
-    return [option for _, option in found]
+    return grouped_familiar_options(
+        [
+            dict(owned)
+            for owned in get_owned_familiars(user_id)
+            if int(owned["instance_id"]) not in registered
+        ]
+    )
 
 
 def build_registered_options(user_id: int) -> list[discord.SelectOption]:

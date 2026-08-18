@@ -22,7 +22,7 @@ import discord
 import config
 
 from cogs import game_shared
-from utils import ensure_panel_message
+from utils import PANEL_MISSING, ensure_panel_message, remove_legacy_panels
 from database.battle import (
     get_active_battle_for_guild,
     get_battle_lock,
@@ -62,9 +62,18 @@ PANEL_TITLE = "RAGNA Online"
 # 改名前の表題。見つけたら片づけて、新しいパネルへ置き換える。
 LEGACY_PANEL_TITLES = ("RAGNA Online ギルド",)
 
-# マスター専用TC・ギルドTCへ設置する常設パネルのタイトル
+# マスター専用TCへ設置する常設パネルのタイトル
 MANAGE_PANEL_TITLE = "ギルド管理"
-MEMBER_PANEL_TITLE = "ギルドメンバー"
+
+# メンバー用パネルは表題がギルド名になるため、ボタンの custom_id で見分ける。
+# ギルド名を変えてもパネルが増えず、表題だけが書き換わります（8.3節）。
+MEMBER_PANEL_CUSTOM_IDS = ("guild:info", "guild:leave")
+
+# 改名前のメンバー用パネルの表題。旧ギルドTCに残っていたら片づける。
+LEGACY_MEMBER_PANEL_TITLES = ("ギルドメンバー",)
+
+# 旧パネルの片づけを済ませたギルド。起動ごとにリセットされる（29節）。
+_legacy_member_panels_checked: set[int] = set()
 
 # 募集Embed・参加申請Embedのタイトル（6.1節・6.2節）
 RECRUITMENT_TITLE = "【ギルドメンバー募集】"
@@ -233,11 +242,20 @@ def build_manage_panel_embed() -> discord.Embed:
     )
 
 
-def build_member_panel_embed() -> discord.Embed:
-    """ギルドTCへ置くメンバー用パネルのEmbedを作る（8.3節）。"""
+def member_panel_title(guild_row: dict) -> str:
+    """メンバー用パネルの表題（ギルド名）を返す（8.3節）。"""
+
+    name = str(guild_row.get("name") or "").strip()
+
+    # Embedのタイトル上限は256文字。ギルド名が未登録なら旧表題へ寄せる。
+    return name[:256] if name else LEGACY_MEMBER_PANEL_TITLES[0]
+
+
+def build_member_panel_embed(guild_row: dict) -> discord.Embed:
+    """使い魔セットチャンネルへ置くメンバー用パネルのEmbedを作る（8.3節）。"""
 
     return discord.Embed(
-        title=MEMBER_PANEL_TITLE,
+        title=member_panel_title(guild_row),
         description=(
             "​\n"
             "**ギルド情報**\n"
@@ -632,49 +650,76 @@ async def found_guild(interaction: discord.Interaction, name: str) -> None:
     )
 
 
+async def ensure_member_panel(
+    bot: discord.Client, discord_guild: discord.Guild, guild_row: dict
+) -> str:
+    """使い魔セットチャンネルへメンバー用パネルを（無ければ）設置する（8.3節）。
+
+    表題はギルド名です。ギルド名を変えても増えないよう、ボタンの ``custom_id`` で
+    既存パネルを見分けて、表題だけを書き換えます。旧置き場のギルドTCに残っている
+    「ギルドメンバー」パネルは、ここで片づけます。
+
+    戻り値は ``utils`` のパネル状態（``PANEL_CREATED`` など）です。
+    """
+
+    from . import views
+
+    # 旧置き場（ギルドTC）に残っているパネルを片づける。定期タスクから何度も呼ばれる
+    # ため、履歴の読み直しはギルドごとに起動後1回だけにする（失敗しても再起動で再試行）。
+    old_channel_id = guild_row.get("guild_text_channel_id")
+    guild_id = int(guild_row.get("guild_id") or 0)
+
+    if old_channel_id and guild_id not in _legacy_member_panels_checked:
+        _legacy_member_panels_checked.add(guild_id)
+        await remove_legacy_panels(
+            bot,
+            discord_guild,
+            int(old_channel_id),
+            titles=LEGACY_MEMBER_PANEL_TITLES,
+            history_limit=100,
+        )
+
+    channel_id = guild_row.get("battle_member_channel_id")
+    if not channel_id:
+        return PANEL_MISSING
+
+    return await ensure_panel_message(
+        bot,
+        discord_guild,
+        int(channel_id),
+        panel_title=member_panel_title(guild_row),
+        embed=build_member_panel_embed(guild_row),
+        view=views.GuildMemberPanelView(),
+        panel_name="ギルドメンバー用パネル",
+        match_custom_ids=MEMBER_PANEL_CUSTOM_IDS,
+    )
+
+
 async def post_guild_panels(
     bot: discord.Client, discord_guild: discord.Guild, guild_row: dict
 ) -> None:
     """設立直後のギルドへ常設パネルを設置する。
 
-    ギルドマスター専用TCへ「ギルド管理」パネル（8.1節）、ギルドTCへメンバー用パネル
-    （8.3節）を投稿します。バトル用パネル（8.2節）はギルドバトルCogの担当のため、
-    そのCogが公開している ``ensure_battle_panel`` があれば呼び出すだけにします。
+    ギルドマスター専用TCへ「ギルド管理」パネル（8.1節）を投稿します。使い魔セット
+    チャンネルのメンバー用パネル（8.3節）とバトル用パネル（8.2節）は、並び順を
+    「メンバー用パネル → 使い魔セットパネル」に揃える必要があるため、ギルドバトル
+    Cogが公開している ``ensure_battle_panel`` へまとめて任せます。
     """
 
     from . import views
 
     # ensure_panel_message を使い、既に設置済みなら送信しない。
     # 設立時に失敗した場合も、定期タスクから同じ関数を呼んで復旧できる（29節）。
-    panels = (
-        (
-            guild_row.get("master_text_channel_id"),
-            MANAGE_PANEL_TITLE,
-            build_manage_panel_embed(),
-            views.GuildManageView(),
-            "ギルド管理パネル",
-        ),
-        (
-            guild_row.get("guild_text_channel_id"),
-            MEMBER_PANEL_TITLE,
-            build_member_panel_embed(),
-            views.GuildMemberPanelView(),
-            "ギルドメンバー用パネル",
-        ),
-    )
-
-    for channel_id, panel_title, embed, view, panel_name in panels:
-        if not channel_id:
-            continue
-
+    master_channel_id = guild_row.get("master_text_channel_id")
+    if master_channel_id:
         await ensure_panel_message(
             bot,
             discord_guild,
-            int(channel_id),
-            panel_title=panel_title,
-            embed=embed,
-            view=view,
-            panel_name=panel_name,
+            int(master_channel_id),
+            panel_title=MANAGE_PANEL_TITLE,
+            embed=build_manage_panel_embed(),
+            view=views.GuildManageView(),
+            panel_name="ギルド管理パネル",
         )
 
     # バトル用パネル（8.2節）はギルドバトルCogの責務。実装があれば設置を任せる。
@@ -686,7 +731,10 @@ async def post_guild_panels(
             await handler(guild_row)
         except Exception:
             logger.exception("バトル用パネルの設置に失敗しました: %s", guild_row["guild_id"])
-        break
+        return
+
+    # ギルドバトルCogが読み込まれていない場合も、メンバー用パネルだけは設置する
+    await ensure_member_panel(bot, discord_guild, guild_row)
 
 
 # ==================================================

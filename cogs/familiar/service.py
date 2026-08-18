@@ -939,6 +939,81 @@ def build_complete_reward_embed(granted: list[dict[str, Any]]) -> discord.Embed:
     )
 
 
+def top_rank(pool: GachaPool | None = None) -> str:
+    """お祝い表示の対象にする最上位ランクを返す。"""
+
+    master = load_master_data()
+    order = list(master.familiar.rank_order)
+
+    return order[-1] if order else "S"
+
+
+def celebrated_instances(instances: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """お祝い表示の対象になった使い魔（最上位ランク）を返す。"""
+
+    target = top_rank()
+
+    return [
+        instance
+        for instance in instances
+        if str(instance.get("rank")) == target
+    ]
+
+
+def build_celebration_embeds(
+    instances: list[dict[str, Any]],
+) -> list[tuple[discord.Embed, discord.File | None]]:
+    """最上位ランクを引いたときのお祝いEmbedを作る（10.2節）。
+
+    使い魔の画像をアイコンとして添え、能力値とスキルも見せます。同じ使い魔が
+    複数出た場合はまとめて1枚にします。
+    """
+
+    master = load_master_data()
+
+    found: list[tuple[discord.Embed, discord.File | None]] = []
+    counts = Counter(
+        (str(instance["familiar_id"]), int(instance.get("level", master.familiar.min_level)))
+        for instance in celebrated_instances(instances)
+    )
+
+    for (familiar_id, level), count in counts.items():
+        rank = familiar_rank(familiar_id)
+
+        lines = [
+            f"**{familiar_name(familiar_id)}** を手に入れました！",
+            "",
+            item_line("ランク", game_shared.rank_label(rank)),
+            item_line("レベル", f"Lv.{level}"),
+        ]
+
+        if count > 1:
+            lines.append(item_line("体数", f"{count}体"))
+
+        lines.extend(stat_lines(familiar_id, level))
+        lines.append("")
+        lines.extend(skill_lines(familiar_id))
+
+        embed = discord.Embed(
+            title="🎉 おめでとうございます！",
+            description="\n".join(lines),
+            color=rank_color(rank),
+        )
+
+        icon = thumbnail_file(familiar_id)
+        title = f"{game_shared.rank_label(rank)} {familiar_name(familiar_id)} Lv.{level}"
+
+        if icon is not None:
+            embed.set_author(name=title, icon_url=f"attachment://{icon.filename}")
+        else:
+            embed.set_author(name=title)
+
+        embed.set_footer(text=f"最高ランク（{rank}）の使い魔です")
+        found.append((embed, icon))
+
+    return found
+
+
 def build_owned_list_embed(rows: list[dict[str, Any]]) -> discord.Embed:
     """所有使い魔の一覧を、同じ使い魔をまとめた形で表示する。"""
 
@@ -1195,7 +1270,9 @@ __all__ = [
     "PERMILLE_TOTAL",
     "SLOT_GUARANTEED",
     "SLOT_NORMAL",
+    "build_celebration_embeds",
     "build_codex_embed",
+    "celebrated_instances",
     "build_complete_reward_embed",
     "check_complete_rewards",
     "codex_pages",
