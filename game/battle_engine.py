@@ -46,6 +46,8 @@ from .models import (
     round_half_up,
 )
 
+from texts import battle_display as display_texts
+
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +91,14 @@ def build_unit_payloads(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         familiar = master.get_familiar(entry["familiar_id"])
         if familiar is None:
             raise BattleRuleError(
-                f"使い魔マスターが見つかりません: {entry['familiar_id']}"
+                display_texts.ERROR_FAMILIAR_NOT_FOUND.format(
+                    familiar_id=entry["familiar_id"]
+                )
             )
 
         stats = master.level_stats(familiar.familiar_id, int(entry["level"]))
         if stats is None:
-            raise BattleRuleError("使い魔の能力値を計算できませんでした。")
+            raise BattleRuleError(display_texts.ERROR_STATS_FAILED)
 
         payloads.append(
             {
@@ -124,7 +128,7 @@ def start_battle(state: BattleState) -> None:
     """バトルを開始し、最初の行動者が決まるところまで進める。"""
 
     if state.status != BATTLE_STATUS_PREPARING:
-        raise BattleRuleError("このバトルは既に開始しています。")
+        raise BattleRuleError(display_texts.ERROR_BATTLE_ALREADY_STARTED)
 
     state.status = BATTLE_STATUS_IN_PROGRESS
     # バトル開始時パッシブは第1ラウンドの効果として扱う（19.3節・20節）。
@@ -785,14 +789,14 @@ def submit_action(
     """プレイヤーの行動を1回処理する。"""
 
     if state.status != BATTLE_STATUS_IN_PROGRESS:
-        raise BattleRuleError("このバトルは進行中ではありません。")
+        raise BattleRuleError(display_texts.ERROR_BATTLE_NOT_RUNNING)
 
     unit = state.current_unit()
     if unit is None:
-        raise BattleRuleError("現在は行動を受け付けていません。")
+        raise BattleRuleError(display_texts.ERROR_NOT_ACCEPTING)
 
     if unit.battle_unit_id != action.actor_unit_id:
-        raise BattleRuleError("現在の行動順ではありません。")
+        raise BattleRuleError(display_texts.ERROR_NOT_YOUR_TURN)
 
     _consume_time(state, unit.guild_id, elapsed_seconds)
 
@@ -803,14 +807,14 @@ def submit_action(
         }
 
         if action.skill_id not in owned_skill_ids:
-            raise BattleRuleError("この使い魔は指定のスキルを持っていません。")
+            raise BattleRuleError(display_texts.ERROR_SKILL_NOT_OWNED)
 
         skill = master.get_skill(action.skill_id)
         if skill is None:
-            raise BattleRuleError("スキル定義が見つかりません。")
+            raise BattleRuleError(display_texts.ERROR_SKILL_NOT_FOUND)
 
         if unit.state_flags.get("skill_used_this_turn"):
-            raise BattleRuleError("このターンは既にスキルを使用しています。")
+            raise BattleRuleError(display_texts.ERROR_SKILL_ALREADY_USED)
 
         skill_engine.use_active_skill(state, unit, skill, dict(action.selections))
         unit.state_flags["skill_used_this_turn"] = True
@@ -845,7 +849,7 @@ def submit_action(
             )
 
         if target is None:
-            raise BattleRuleError("その対象は現在攻撃できません。")
+            raise BattleRuleError(display_texts.ERROR_TARGET_NOT_ATTACKABLE)
 
         perform_attack(state, unit, target)
         _check_wipe(state)
@@ -857,7 +861,7 @@ def submit_action(
         _finish_turn(state, unit)
         return
 
-    raise BattleRuleError("未対応の行動です。")
+    raise BattleRuleError(display_texts.ERROR_UNKNOWN_ACTION)
 
 
 def auto_target(state: BattleState, unit: BattleUnit) -> BattleUnit | None:
@@ -969,7 +973,7 @@ def surrender(state: BattleState, guild_id: int) -> None:
     """ギルドマスターによる降参（26.1節）。"""
 
     if state.status != BATTLE_STATUS_IN_PROGRESS:
-        raise BattleRuleError("このバトルは進行中ではありません。")
+        raise BattleRuleError(display_texts.ERROR_BATTLE_NOT_RUNNING)
 
     loser_is_a = guild_id == state.guild_a_id
     state.add_log(BattleEvent.BATTLE_END, guild_id=guild_id, text="降参")

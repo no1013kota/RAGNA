@@ -45,6 +45,9 @@ from database.guild import (
 )
 from game.master_data import load_master_data
 
+from texts import common as common_texts
+from texts import guild as guild_texts
+
 from . import service
 
 
@@ -54,9 +57,10 @@ logger = logging.getLogger(__name__)
 # ==================================================
 # 共通メッセージと再確認ヘルパー（29節）
 # ==================================================
+# 文面は texts/guild.py と texts/common.py にまとめています。
 CHANNEL_ERROR_MESSAGE = game_shared.CHANNEL_ERROR_MESSAGE
-NOT_GUILD_CHANNEL_MESSAGE = "このチャンネルはギルド専用チャンネルとして登録されていません。"
-ARCHIVED_MESSAGE = "このギルドは既に解散しています。"
+NOT_GUILD_CHANNEL_MESSAGE = guild_texts.NOT_GUILD_CHANNEL
+ARCHIVED_MESSAGE = guild_texts.ARCHIVED
 
 
 def _game_block_reason(
@@ -142,7 +146,7 @@ async def _resolve_member_guild(
         return None
 
     if get_guild_member(int(guild_row["guild_id"]), interaction.user.id) is None:
-        await game_shared.respond(interaction, "このギルドに所属していません。")
+        await game_shared.respond(interaction, guild_texts.NOT_A_MEMBER)
         return None
 
     return guild_row
@@ -181,7 +185,7 @@ class ConfirmView(discord.ui.View):
         user_id: int,
         handler: Callable[[discord.Interaction], Awaitable[None]],
         *,
-        confirm_label: str = "実行する",
+        confirm_label: str = guild_texts.CONFIRM_BUTTON_DEFAULT,
         confirm_style: discord.ButtonStyle = discord.ButtonStyle.danger,
     ):
         super().__init__(timeout=180)
@@ -194,7 +198,9 @@ class ConfirmView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.user_id
 
-    @discord.ui.button(label="実行する", style=discord.ButtonStyle.danger)
+    @discord.ui.button(
+        label=guild_texts.CONFIRM_BUTTON_DEFAULT, style=discord.ButtonStyle.danger
+    )
     async def confirm(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -210,14 +216,16 @@ class ConfirmView(discord.ui.View):
             await self.handler(interaction)
         except Exception:
             logger.exception("確認後の処理に失敗しました")
-            await game_shared.respond(interaction, "処理に失敗しました。")
+            await game_shared.respond(interaction, common_texts.FAILED)
 
-    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label=guild_texts.CONFIRM_BUTTON_CANCEL, style=discord.ButtonStyle.secondary
+    )
     async def cancel(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         self.stop()
-        await game_shared.respond(interaction, "操作をキャンセルしました。")
+        await game_shared.respond(interaction, guild_texts.CONFIRM_CANCELLED)
 
 
 class SingleItemView(discord.ui.View):
@@ -241,7 +249,7 @@ class GuildPanelView(discord.ui.View):
     # ギルド設立
     # ==================================================
     @discord.ui.button(
-        label="ギルド設立",
+        label=guild_texts.INTRO_BUTTON_CREATE,
         style=discord.ButtonStyle.primary,
         custom_id="guild:create",
     )
@@ -254,21 +262,21 @@ class GuildPanelView(discord.ui.View):
             return
 
         if not isinstance(interaction.user, discord.Member):
-            await game_shared.respond(interaction, "サーバー内で操作してください。")
+            await game_shared.respond(interaction, guild_texts.NOT_IN_SERVER)
             return
 
         # Modalを出す前に、明らかに設立できない場合を先に案内する
         if not game_shared.can_found_guild_member(interaction.user):
-            await game_shared.respond(
-                interaction,
-                "ギルドを設立できるのは騎士・七星・運営のロールを持つプレイヤーだけです。",
-            )
+            await game_shared.respond(interaction, guild_texts.CREATE_ROLE_REQUIRED)
             return
 
         existing = get_player_guild(interaction.user.id)
         if existing is not None:
             await service.respond_no_mention(
-                interaction, f"既に「{existing['name']}」へ所属しているため設立できません。"
+                interaction,
+                guild_texts.CREATE_ALREADY_IN_GUILD.format(
+                    guild_name=existing["name"]
+                ),
             )
             return
 
@@ -278,7 +286,7 @@ class GuildPanelView(discord.ui.View):
     # 自分の参加申請の確認・取消
     # ==================================================
     @discord.ui.button(
-        label="申請確認・取消",
+        label=guild_texts.INTRO_BUTTON_MY_REQUESTS,
         style=discord.ButtonStyle.secondary,
         custom_id="guild:my_requests",
     )
@@ -292,17 +300,17 @@ class GuildPanelView(discord.ui.View):
 
         requests = get_pending_join_requests_by_user(interaction.user.id)
         if not requests:
-            await game_shared.respond(interaction, "未処理の参加申請はありません。")
+            await game_shared.respond(interaction, guild_texts.MY_REQUESTS_EMPTY)
             return
 
         await service.respond_no_mention(
             interaction,
-            "取り消す参加申請を選択してください。",
+            guild_texts.MY_REQUESTS_PROMPT,
             view=SingleItemView(JoinRequestCancelSelect(requests)),
         )
 
 
-class GuildCreateModal(discord.ui.Modal, title="ギルド設立"):
+class GuildCreateModal(discord.ui.Modal, title=guild_texts.CREATE_MODAL_TITLE):
     """ギルド名を入力する設立Modal（5.2節）。"""
 
     def __init__(self):
@@ -311,8 +319,11 @@ class GuildCreateModal(discord.ui.Modal, title="ギルド設立"):
         balance = load_master_data().guild
 
         self.guild_name = discord.ui.TextInput(
-            label="ギルド名",
-            placeholder=f"{balance.name_min_length}〜{balance.name_max_length}文字",
+            label=guild_texts.CREATE_NAME_LABEL,
+            placeholder=guild_texts.NAME_PLACEHOLDER.format(
+                min_length=balance.name_min_length,
+                max_length=balance.name_max_length,
+            ),
             min_length=balance.name_min_length,
             max_length=balance.name_max_length,
             required=True,
@@ -338,7 +349,7 @@ class JoinRequestCancelSelect(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="取り消す参加申請を選択してください",
+            placeholder=guild_texts.MY_REQUESTS_PLACEHOLDER,
             min_values=1,
             max_values=1,
             options=options,
@@ -365,7 +376,7 @@ class JoinRequestCancelSelect(discord.ui.Select):
         name = str(guild_row["name"]) if guild_row else f"ID:{result['guild_id']}"
 
         await service.respond_no_mention(
-            interaction, f"「{name}」への参加申請を取り消しました。"
+            interaction, guild_texts.MY_REQUESTS_CANCELLED.format(guild_name=name)
         )
 
 
@@ -380,7 +391,7 @@ class GuildRecruitmentView(discord.ui.View):
         self.join_request.disabled = disabled
 
     @discord.ui.button(
-        label="参加申請",
+        label=guild_texts.RECRUITMENT_BUTTON_JOIN,
         style=discord.ButtonStyle.primary,
         custom_id="guild:join_request",
     )
@@ -396,12 +407,12 @@ class GuildRecruitmentView(discord.ui.View):
 
         message = interaction.message
         if message is None:
-            await game_shared.respond(interaction, "募集情報を取得できませんでした。")
+            await game_shared.respond(interaction, guild_texts.JOIN_MESSAGE_ERROR)
             return
 
         guild_row = get_guild_by_recruitment_message(message.id)
         if guild_row is None:
-            await game_shared.respond(interaction, "この募集は既に終了しています。")
+            await game_shared.respond(interaction, guild_texts.JOIN_RECRUITMENT_ENDED)
             return
 
         if str(guild_row.get("status")) != "active":
@@ -444,15 +455,12 @@ class GuildRecruitmentView(discord.ui.View):
         if not posted:
             # 申請Embedを出せない場合は申請を残さない
             cancel_join_request(request_id, user_id=interaction.user.id)
-            await game_shared.respond(
-                interaction,
-                "参加申請の送信に失敗しました。時間をおいて再度お試しください。",
-            )
+            await game_shared.respond(interaction, guild_texts.JOIN_POST_FAILED)
             return
 
         await service.respond_no_mention(
             interaction,
-            f"「{guild_row['name']}」へ参加申請しました。\n結果はDMでお知らせします。",
+            guild_texts.JOIN_SENT.format(guild_name=guild_row["name"]),
         )
 
 
@@ -469,7 +477,7 @@ class JoinRequestView(discord.ui.View):
     # 承認
     # ==================================================
     @discord.ui.button(
-        label="承認",
+        label=guild_texts.JOIN_REQUEST_BUTTON_APPROVE,
         style=discord.ButtonStyle.success,
         custom_id="guild:request_approve",
     )
@@ -490,10 +498,8 @@ class JoinRequestView(discord.ui.View):
         if blocked is not None:
             await game_shared.respond(
                 interaction,
-                (
-                    f"<@{applicant_id}> は現在ラグナオンラインを利用できないため、"
-                    "参加を承認できません。\n"
-                    f"-# {blocked.splitlines()[0]}"
+                guild_texts.JOIN_REQUEST_APPLICANT_BLOCKED.format(
+                    user_id=applicant_id, reason=blocked.splitlines()[0]
                 ),
                 allowed_mentions=game_shared.NO_MENTIONS,
             )
@@ -525,21 +531,21 @@ class JoinRequestView(discord.ui.View):
         await game_shared.send_dm(
             applicant,
             embed=discord.Embed(
-                title="ギルド参加申請",
-                description=f"「{guild_name}」への参加が承認されました。",
+                title=guild_texts.JOIN_RESULT_DM_TITLE,
+                description=guild_texts.JOIN_APPROVED_DM.format(guild_name=guild_name),
                 color=config.COLOR_GREEN,
             ),
         )
 
         await service.respond_no_mention(
-            interaction, f"<@{applicant_id}> の参加を承認しました。"
+            interaction, guild_texts.JOIN_REQUEST_APPROVED.format(user_id=applicant_id)
         )
 
     # ==================================================
     # 拒否
     # ==================================================
     @discord.ui.button(
-        label="拒否",
+        label=guild_texts.JOIN_REQUEST_BUTTON_REJECT,
         style=discord.ButtonStyle.danger,
         custom_id="guild:request_reject",
     )
@@ -572,14 +578,14 @@ class JoinRequestView(discord.ui.View):
         await game_shared.send_dm(
             applicant,
             embed=discord.Embed(
-                title="ギルド参加申請",
-                description=f"「{guild_name}」への参加は見送られました。",
+                title=guild_texts.JOIN_RESULT_DM_TITLE,
+                description=guild_texts.JOIN_REJECTED_DM.format(guild_name=guild_name),
                 color=config.COLOR_RED,
             ),
         )
 
         await service.respond_no_mention(
-            interaction, f"<@{applicant_id}> の参加を拒否しました。"
+            interaction, guild_texts.JOIN_REQUEST_REJECTED.format(user_id=applicant_id)
         )
 
     # ==================================================
@@ -599,12 +605,14 @@ class JoinRequestView(discord.ui.View):
 
         message = interaction.message
         if message is None:
-            await game_shared.respond(interaction, "申請情報を取得できませんでした。")
+            await game_shared.respond(
+                interaction, guild_texts.JOIN_REQUEST_MESSAGE_ERROR
+            )
             return None
 
         request_row = get_join_request_by_message(message.id)
         if request_row is None:
-            await game_shared.respond(interaction, "この参加申請は見つかりません。")
+            await game_shared.respond(interaction, guild_texts.JOIN_REQUEST_NOT_FOUND)
             return None
 
         guild_row = get_guild(int(request_row["guild_id"]))
@@ -641,7 +649,7 @@ class GuildManageView(discord.ui.View):
     # メンバー追放（7.2節）
     # ==================================================
     @discord.ui.button(
-        label="メンバー追放",
+        label=guild_texts.MANAGE_BUTTON_KICK,
         style=discord.ButtonStyle.danger,
         custom_id="guild:kick",
         row=0,
@@ -661,12 +669,12 @@ class GuildManageView(discord.ui.View):
         ]
 
         if not members:
-            await game_shared.respond(interaction, "追放できる一般メンバーがいません。")
+            await game_shared.respond(interaction, guild_texts.KICK_NO_MEMBERS)
             return
 
         await game_shared.respond(
             interaction,
-            "追放するメンバーを選択してください。",
+            guild_texts.KICK_PROMPT,
             view=SingleItemView(
                 KickMemberSelect(interaction.guild, members, guild_id=guild_id)
             ),
@@ -676,7 +684,7 @@ class GuildManageView(discord.ui.View):
     # マスター譲渡（7.3節）
     # ==================================================
     @discord.ui.button(
-        label="マスター譲渡",
+        label=guild_texts.MANAGE_BUTTON_TRANSFER,
         style=discord.ButtonStyle.secondary,
         custom_id="guild:transfer",
         row=0,
@@ -697,12 +705,12 @@ class GuildManageView(discord.ui.View):
         ]
 
         if not members:
-            await game_shared.respond(interaction, "譲渡できるメンバーがいません。")
+            await game_shared.respond(interaction, guild_texts.TRANSFER_NO_MEMBERS)
             return
 
         await game_shared.respond(
             interaction,
-            "マスターを譲渡するメンバーを選択してください。",
+            guild_texts.TRANSFER_PROMPT,
             view=SingleItemView(
                 TransferMemberSelect(interaction.guild, members, guild_id=guild_id)
             ),
@@ -712,7 +720,7 @@ class GuildManageView(discord.ui.View):
     # メンバー枠拡張（7.4節）
     # ==================================================
     @discord.ui.button(
-        label="メンバー枠拡張",
+        label=guild_texts.MANAGE_BUTTON_EXPAND,
         style=discord.ButtonStyle.secondary,
         custom_id="guild:expand",
         row=0,
@@ -755,20 +763,23 @@ class GuildManageView(discord.ui.View):
 
             await game_shared.respond(
                 confirm_interaction,
-                f"メンバー枠を拡張しました。\n"
-                f"定員：{result['capacity']}人\n"
-                f"支払い：{game_shared.format_coin(balance.member_slot_cost)}",
+                guild_texts.EXPAND_DONE.format(
+                    capacity=result["capacity"],
+                    cost=game_shared.format_coin(balance.member_slot_cost),
+                ),
             )
 
         await game_shared.respond(
             interaction,
-            f"メンバー枠を1つ拡張します（{capacity}人 → {capacity + 1}人）。\n"
-            f"費用：{game_shared.format_coin(balance.member_slot_cost)}\n"
-            "よろしいですか？",
+            guild_texts.EXPAND_CONFIRM.format(
+                capacity=capacity,
+                next_capacity=capacity + 1,
+                cost=game_shared.format_coin(balance.member_slot_cost),
+            ),
             view=ConfirmView(
                 interaction.user.id,
                 _run,
-                confirm_label="拡張する",
+                confirm_label=guild_texts.EXPAND_BUTTON_CONFIRM,
                 confirm_style=discord.ButtonStyle.success,
             ),
         )
@@ -777,7 +788,7 @@ class GuildManageView(discord.ui.View):
     # ギルド名変更（5.2節）
     # ==================================================
     @discord.ui.button(
-        label="ギルド名変更",
+        label=guild_texts.MANAGE_BUTTON_RENAME,
         style=discord.ButtonStyle.secondary,
         custom_id="guild:rename",
         row=1,
@@ -797,7 +808,7 @@ class GuildManageView(discord.ui.View):
     # ギルド説明変更（6.1節）
     # ==================================================
     @discord.ui.button(
-        label="ギルド説明変更",
+        label=guild_texts.MANAGE_BUTTON_DESCRIPTION,
         style=discord.ButtonStyle.secondary,
         custom_id="guild:description",
         row=1,
@@ -819,7 +830,7 @@ class GuildManageView(discord.ui.View):
     # メンバー募集（6.1節）
     # ==================================================
     @discord.ui.button(
-        label="メンバー募集",
+        label=guild_texts.MANAGE_BUTTON_RECRUIT,
         style=discord.ButtonStyle.primary,
         custom_id="guild:recruit",
         row=1,
@@ -838,8 +849,7 @@ class GuildManageView(discord.ui.View):
 
         await service.respond_no_mention(
             interaction,
-            f"現在の募集状態：{state}\n"
-            "募集を開始するにはギルド説明の登録が必要です。",
+            guild_texts.RECRUIT_CONTROL_PROMPT.format(status=state),
             view=RecruitControlView(interaction.user.id, int(guild_row["guild_id"])),
         )
 
@@ -847,7 +857,7 @@ class GuildManageView(discord.ui.View):
     # ギルド解散（7.5節）
     # ==================================================
     @discord.ui.button(
-        label="ギルド解散",
+        label=guild_texts.MANAGE_BUTTON_DISBAND,
         style=discord.ButtonStyle.danger,
         custom_id="guild:disband",
         row=1,
@@ -887,20 +897,24 @@ class GuildManageView(discord.ui.View):
             # 2段階目の確認
             await service.respond_no_mention(
                 first_interaction,
-                f"最終確認：ギルド「{row['name']}」を解散します。\n"
-                "この操作は取り消せません。本当によろしいですか？",
+                guild_texts.DISBAND_FINAL_CONFIRM.format(guild_name=row["name"]),
                 view=ConfirmView(
-                    first_interaction.user.id, _final, confirm_label="解散する"
+                    first_interaction.user.id,
+                    _final,
+                    confirm_label=guild_texts.DISBAND_BUTTON_CONFIRM,
                 ),
             )
 
         await service.respond_no_mention(
             interaction,
-            f"ギルド「{guild_row['name']}」を解散します。\n"
-            "・所属メンバー全員がギルドから外れます。\n"
-            "・支払い済みの費用は返金されません。\n"
-            f"・専用カテゴリーは{balance.archive_days}日間保存後に削除されます。",
-            view=ConfirmView(interaction.user.id, _first, confirm_label="確認へ進む"),
+            guild_texts.DISBAND_CONFIRM.format(
+                guild_name=guild_row["name"], archive_days=balance.archive_days
+            ),
+            view=ConfirmView(
+                interaction.user.id,
+                _first,
+                confirm_label=guild_texts.DISBAND_BUTTON_NEXT,
+            ),
         )
 
 
@@ -928,7 +942,7 @@ class KickMemberSelect(discord.ui.Select):
         ]
 
         super().__init__(
-            placeholder="追放するメンバーを選択してください",
+            placeholder=guild_texts.KICK_PLACEHOLDER,
             min_values=1,
             max_values=1,
             options=options,
@@ -943,7 +957,7 @@ class KickMemberSelect(discord.ui.Select):
 
         target_id = int(self.values[0])
         if target_id == int(guild_row["master_id"]):
-            await game_shared.respond(interaction, "ギルドマスターは追放できません。")
+            await game_shared.respond(interaction, guild_texts.KICK_MASTER_DENIED)
             return
 
         # 追放も出場者セットを変更するため、編成ロック中・バトル中は実行しない
@@ -971,14 +985,14 @@ class KickMemberSelect(discord.ui.Select):
         await game_shared.send_dm(
             target,
             embed=discord.Embed(
-                title="ギルド追放",
-                description=f"ギルド「{guild_name}」から追放されました。",
+                title=guild_texts.KICK_DM_TITLE,
+                description=guild_texts.KICK_DM_BODY.format(guild_name=guild_name),
                 color=config.COLOR_RED,
             ),
         )
 
         await service.respond_no_mention(
-            interaction, f"<@{target_id}> をギルドから追放しました。"
+            interaction, guild_texts.KICK_DONE.format(user_id=target_id)
         )
 
 
@@ -1003,7 +1017,7 @@ class TransferMemberSelect(discord.ui.Select):
         ]
 
         super().__init__(
-            placeholder="譲渡するメンバーを選択してください",
+            placeholder=guild_texts.TRANSFER_PLACEHOLDER,
             min_values=1,
             max_values=1,
             options=options,
@@ -1049,25 +1063,31 @@ class TransferMemberSelect(discord.ui.Select):
             await game_shared.send_dm(
                 new_master,
                 embed=discord.Embed(
-                    title="ギルドマスター譲渡",
-                    description=f"ギルド「{guild_name}」のギルドマスターになりました。",
+                    title=guild_texts.TRANSFER_DM_TITLE,
+                    description=guild_texts.TRANSFER_DM_BODY.format(
+                        guild_name=guild_name
+                    ),
                     color=config.COLOR_GOLD,
                 ),
             )
 
             await service.respond_no_mention(
-                confirm_interaction, f"<@{target_id}> へギルドマスターを譲渡しました。"
+                confirm_interaction,
+                guild_texts.TRANSFER_DONE.format(user_id=target_id),
             )
 
         await service.respond_no_mention(
             interaction,
-            f"<@{target_id}> へギルドマスターを譲渡します。\n"
-            "譲渡後、あなたは一般メンバーになります。よろしいですか？",
-            view=ConfirmView(interaction.user.id, _run, confirm_label="譲渡する"),
+            guild_texts.TRANSFER_CONFIRM.format(user_id=target_id),
+            view=ConfirmView(
+                interaction.user.id,
+                _run,
+                confirm_label=guild_texts.TRANSFER_BUTTON_CONFIRM,
+            ),
         )
 
 
-class GuildRenameModal(discord.ui.Modal, title="ギルド名変更"):
+class GuildRenameModal(discord.ui.Modal, title=guild_texts.RENAME_MODAL_TITLE):
     """ギルド名を変更するModal（5.2節）。"""
 
     def __init__(self, guild_id: int, current_name: str):
@@ -1077,8 +1097,11 @@ class GuildRenameModal(discord.ui.Modal, title="ギルド名変更"):
         balance = load_master_data().guild
 
         self.new_name = discord.ui.TextInput(
-            label="新しいギルド名",
-            placeholder=f"{balance.name_min_length}〜{balance.name_max_length}文字",
+            label=guild_texts.RENAME_NAME_LABEL,
+            placeholder=guild_texts.NAME_PLACEHOLDER.format(
+                min_length=balance.name_min_length,
+                max_length=balance.name_max_length,
+            ),
             default=current_name[: balance.name_max_length],
             min_length=balance.name_min_length,
             max_length=balance.name_max_length,
@@ -1099,8 +1122,10 @@ class GuildRenameModal(discord.ui.Modal, title="ギルド名変更"):
         if not (balance.name_min_length <= len(new_name) <= balance.name_max_length):
             await game_shared.respond(
                 interaction,
-                f"ギルド名は{balance.name_min_length}文字以上"
-                f"{balance.name_max_length}文字以下で入力してください。",
+                guild_texts.NAME_LENGTH_ERROR.format(
+                    min_length=balance.name_min_length,
+                    max_length=balance.name_max_length,
+                ),
             )
             return
 
@@ -1144,12 +1169,17 @@ class GuildRenameModal(discord.ui.Modal, title="ギルド名変更"):
 
         await service.respond_no_mention(
             interaction,
-            f"ギルド名を「{result['old_name']}」から「{new_name}」へ変更しました。\n"
-            f"支払い：{game_shared.format_coin(balance.rename_cost)}",
+            guild_texts.RENAME_DONE.format(
+                old_name=result["old_name"],
+                new_name=new_name,
+                cost=game_shared.format_coin(balance.rename_cost),
+            ),
         )
 
 
-class GuildDescriptionModal(discord.ui.Modal, title="ギルド説明変更"):
+class GuildDescriptionModal(
+    discord.ui.Modal, title=guild_texts.DESCRIPTION_MODAL_TITLE
+):
     """ギルド説明文を変更するModal（6.1節）。"""
 
     def __init__(self, guild_id: int, current_description: str | None):
@@ -1159,11 +1189,11 @@ class GuildDescriptionModal(discord.ui.Modal, title="ギルド説明変更"):
         balance = load_master_data().guild
 
         self.description = discord.ui.TextInput(
-            label="ギルド説明",
+            label=guild_texts.DESCRIPTION_LABEL,
             style=discord.TextStyle.paragraph,
-            placeholder=(
-                f"{balance.description_min_length}〜"
-                f"{balance.description_max_length}文字"
+            placeholder=guild_texts.DESCRIPTION_PLACEHOLDER.format(
+                min_length=balance.description_min_length,
+                max_length=balance.description_max_length,
             ),
             default=(current_description or "")[: balance.description_max_length],
             min_length=balance.description_min_length,
@@ -1189,8 +1219,10 @@ class GuildDescriptionModal(discord.ui.Modal, title="ギルド説明変更"):
         ):
             await game_shared.respond(
                 interaction,
-                f"ギルド説明は{balance.description_min_length}文字以上"
-                f"{balance.description_max_length}文字以下で入力してください。",
+                guild_texts.DESCRIPTION_LENGTH_ERROR.format(
+                    min_length=balance.description_min_length,
+                    max_length=balance.description_max_length,
+                ),
             )
             return
 
@@ -1202,7 +1234,7 @@ class GuildDescriptionModal(discord.ui.Modal, title="ギルド説明変更"):
 
         await service.refresh_recruitment_embed(interaction.client, self.guild_id)
 
-        await game_shared.respond(interaction, "ギルド説明を更新しました。")
+        await game_shared.respond(interaction, guild_texts.DESCRIPTION_DONE)
 
 
 class RecruitControlView(discord.ui.View):
@@ -1217,7 +1249,9 @@ class RecruitControlView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.user_id
 
-    @discord.ui.button(label="募集開始", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label=guild_texts.RECRUIT_BUTTON_START, style=discord.ButtonStyle.success
+    )
     async def start(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -1232,19 +1266,19 @@ class RecruitControlView(discord.ui.View):
 
         if len(description) < balance.description_min_length:
             await game_shared.respond(
-                interaction,
-                "募集を開始するにはギルド説明の登録が必要です。\n"
-                "「ギルド説明変更」から登録してください。",
+                interaction, guild_texts.RECRUIT_DESCRIPTION_REQUIRED
             )
             return
 
         if not await service.open_recruitment(interaction.client, self.guild_id):
-            await game_shared.respond(interaction, "募集を開始できませんでした。")
+            await game_shared.respond(interaction, guild_texts.RECRUIT_START_FAILED)
             return
 
-        await game_shared.respond(interaction, "メンバー募集を開始しました。")
+        await game_shared.respond(interaction, guild_texts.RECRUIT_STARTED)
 
-    @discord.ui.button(label="募集停止", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label=guild_texts.RECRUIT_BUTTON_STOP, style=discord.ButtonStyle.secondary
+    )
     async def stop_recruitment(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -1255,12 +1289,15 @@ class RecruitControlView(discord.ui.View):
             return
 
         if not await service.close_recruitment(interaction.client, self.guild_id):
-            await game_shared.respond(interaction, "募集を停止できませんでした。")
+            await game_shared.respond(interaction, guild_texts.RECRUIT_STOP_FAILED)
             return
 
-        await game_shared.respond(interaction, "メンバー募集を停止しました。")
+        await game_shared.respond(interaction, guild_texts.RECRUIT_STOPPED)
 
-    @discord.ui.button(label="説明変更", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label=guild_texts.RECRUIT_BUTTON_DESCRIPTION,
+        style=discord.ButtonStyle.secondary,
+    )
     async def edit_description(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -1286,7 +1323,7 @@ class GuildMemberPanelView(discord.ui.View):
     # ギルド情報
     # ==================================================
     @discord.ui.button(
-        label="ギルド情報",
+        label=guild_texts.MEMBER_BUTTON_INFO,
         style=discord.ButtonStyle.primary,
         custom_id="guild:info",
     )
@@ -1306,7 +1343,7 @@ class GuildMemberPanelView(discord.ui.View):
     # ギルド脱退（7.1節）
     # ==================================================
     @discord.ui.button(
-        label="ギルド脱退",
+        label=guild_texts.MEMBER_BUTTON_LEAVE,
         style=discord.ButtonStyle.danger,
         custom_id="guild:leave",
     )
@@ -1364,11 +1401,16 @@ class GuildMemberPanelView(discord.ui.View):
             await service.refresh_recruitment_embed(confirm_interaction.client, guild_id)
 
             await service.respond_no_mention(
-                confirm_interaction, f"ギルド「{row['name']}」から脱退しました。"
+                confirm_interaction,
+                guild_texts.LEAVE_DONE.format(guild_name=row["name"]),
             )
 
         await service.respond_no_mention(
             interaction,
-            f"ギルド「{guild_row['name']}」から脱退します。よろしいですか？",
-            view=ConfirmView(interaction.user.id, _run, confirm_label="脱退する"),
+            guild_texts.LEAVE_CONFIRM.format(guild_name=guild_row["name"]),
+            view=ConfirmView(
+                interaction.user.id,
+                _run,
+                confirm_label=guild_texts.LEAVE_BUTTON_CONFIRM,
+            ),
         )

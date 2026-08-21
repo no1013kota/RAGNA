@@ -47,6 +47,8 @@ from database.guild import (
     set_recruitment_status,
 )
 from game.master_data import load_master_data
+from texts import common as common_texts
+from texts import guild as guild_texts
 from texts import panels as panel_texts
 
 
@@ -82,12 +84,9 @@ _legacy_member_panels_checked: set[int] = set()
 RECRUITMENT_TITLE = panel_texts.GUILD_RECRUITMENT
 JOIN_REQUEST_TITLE = panel_texts.GUILD_JOIN_REQUEST
 
-# 募集状態の表示名
-RECRUITMENT_LABELS = {
-    "open": "募集中",
-    "closed": "募集停止",
-}
-ARCHIVED_LABEL = "解散済み"
+# 募集状態の表示名（文面は texts/guild.py にまとめています）
+RECRUITMENT_LABELS = guild_texts.RECRUITMENT_LABELS
+ARCHIVED_LABEL = guild_texts.RECRUITMENT_ARCHIVED
 
 
 # ==================================================
@@ -201,15 +200,10 @@ def build_intro_panel_embed() -> discord.Embed:
 
     return discord.Embed(
         title=PANEL_TITLE,
-        description=(
-            "​\n"
-            "**ギルド設立**\n"
-            f"-# 設立費用：{game_shared.format_coin(balance.create_cost)}\n"
-            f"-# 初期定員：{balance.initial_capacity}人（最大{balance.max_capacity}人）\n"
-            "-# 騎士・七星だけが設立できます。\n"
-            "-# ※既にギルドへ所属している場合は設立できません。\n\n"
-            "**申請確認・取消**\n"
-            "-# 自分の参加申請を確認・取消可能。"
+        description=guild_texts.INTRO_PANEL_BODY.format(
+            create_cost=game_shared.format_coin(balance.create_cost),
+            initial_capacity=balance.initial_capacity,
+            max_capacity=balance.max_capacity,
         ),
         color=config.COLOR_WHITE,
     )
@@ -222,24 +216,12 @@ def build_manage_panel_embed() -> discord.Embed:
 
     return discord.Embed(
         title=MANAGE_PANEL_TITLE,
-        description=(
-            "​\n"
-            "**メンバー追放**\n"
-            "-# 一般メンバーをギルドから外します。\n\n"
-            "**マスター譲渡**\n"
-            "-# 所属メンバー1人へマスターを譲ります。\n\n"
-            "**メンバー枠拡張**\n"
-            f"-# 1枠 {game_shared.format_coin(balance.member_slot_cost)} 自動引き落としで"
-            f"拡張可能。（最大{balance.max_capacity}人）\n\n"
-            "**ギルド名変更**\n"
-            f"-# {game_shared.format_coin(balance.rename_cost)} 自動引き落としで変更可能。\n\n"
-            "**ギルド説明変更**\n"
-            f"-# {balance.description_min_length}〜{balance.description_max_length}文字で"
-            "変更可能。\n\n"
-            "**メンバー募集**\n"
-            "-# 募集の開始・停止を切り替えます。\n\n"
-            "**ギルド解散**\n"
-            "-# 再確認のうえギルドを解散します。"
+        description=guild_texts.MANAGE_PANEL_BODY.format(
+            member_slot_cost=game_shared.format_coin(balance.member_slot_cost),
+            max_capacity=balance.max_capacity,
+            rename_cost=game_shared.format_coin(balance.rename_cost),
+            description_min_length=balance.description_min_length,
+            description_max_length=balance.description_max_length,
         ),
         color=config.COLOR_WHITE,
     )
@@ -259,14 +241,7 @@ def build_member_panel_embed(guild_row: dict) -> discord.Embed:
 
     return discord.Embed(
         title=member_panel_title(guild_row),
-        description=(
-            "​\n"
-            "**ギルド情報**\n"
-            "-# ギルド名・説明・メンバー・戦績を確認できます。\n\n"
-            "**ギルド脱退**\n"
-            "-# 確認のうえギルドを脱退します。\n"
-            "-# ギルドマスターは脱退できません。"
-        ),
+        description=guild_texts.MEMBER_PANEL_BODY,
         color=config.COLOR_WHITE,
     )
 
@@ -288,16 +263,25 @@ def build_recruitment_embed(guild_row: dict, member_count: int) -> discord.Embed
             config.COLOR_GREEN if state == RECRUITMENT_LABELS["open"] else config.COLOR_GREY
         )
 
-    description = str(guild_row.get("description") or "未登録")
+    description = str(guild_row.get("description") or common_texts.UNSET)
 
     embed = discord.Embed(
         title=RECRUITMENT_TITLE,
         description="\n".join(
             [
-                game_shared.item_line("ギルド名", str(guild_row["name"])[:200]),
-                game_shared.item_line("ギルド説明", description[:1000]),
-                game_shared.item_line("メンバー", f"{member_count} / {capacity}"),
-                game_shared.item_line("状態", state),
+                game_shared.item_line(
+                    guild_texts.RECRUITMENT_LABEL_NAME, str(guild_row["name"])[:200]
+                ),
+                game_shared.item_line(
+                    guild_texts.RECRUITMENT_LABEL_DESCRIPTION, description[:1000]
+                ),
+                game_shared.item_line(
+                    guild_texts.RECRUITMENT_LABEL_MEMBERS,
+                    guild_texts.RECRUITMENT_MEMBER_COUNT.format(
+                        count=member_count, capacity=capacity
+                    ),
+                ),
+                game_shared.item_line(guild_texts.RECRUITMENT_LABEL_STATUS, state),
             ]
         ),
         color=color,
@@ -316,10 +300,16 @@ def build_join_request_embed(
 
     embed = discord.Embed(
         title=JOIN_REQUEST_TITLE,
-        description=game_shared.item_line("申請者", f"<@{applicant_id}>"),
+        description=game_shared.item_line(
+            guild_texts.JOIN_REQUEST_LABEL_APPLICANT, f"<@{applicant_id}>"
+        ),
         color=config.COLOR_BLUE,
     )
-    embed.set_footer(text=f"ギルド：{str(guild_row['name'])[:80]}")
+    embed.set_footer(
+        text=guild_texts.JOIN_REQUEST_FOOTER.format(
+            guild_name=str(guild_row["name"])[:80]
+        )
+    )
 
     return embed
 
@@ -339,8 +329,12 @@ def build_guild_info_embed(
         user_id = int(row["user_id"])
         member = discord_guild.get_member(user_id) if discord_guild else None
         display = member.display_name if member is not None else f"ID:{user_id}"
-        badge = "👑" if str(row["member_role"]) == "master" else "・"
-        lines.append(f"{badge} {display}")
+        badge = (
+            guild_texts.INFO_MASTER_BADGE
+            if str(row["member_role"]) == "master"
+            else guild_texts.INFO_MEMBER_BADGE
+        )
+        lines.append(guild_texts.INFO_MEMBER_LINE.format(badge=badge, name=display))
 
     master_id = int(guild_row["master_id"])
     master_member = discord_guild.get_member(master_id) if discord_guild else None
@@ -350,23 +344,34 @@ def build_guild_info_embed(
 
     body = [
         game_shared.item_line(
-            "ギルド説明", str(guild_row.get("description") or "未登録")[:1000]
+            guild_texts.INFO_LABEL_DESCRIPTION,
+            str(guild_row.get("description") or common_texts.UNSET)[:1000],
         ),
-        game_shared.item_line("ギルドマスター", master_name),
-        game_shared.item_line("メンバー", f"{len(members)} / {capacity}"),
+        game_shared.item_line(guild_texts.INFO_LABEL_MASTER, master_name),
         game_shared.item_line(
-            "戦績",
-            f"{int(guild_row.get('wins') or 0)}勝 "
-            f"{int(guild_row.get('losses') or 0)}敗 "
-            f"{int(guild_row.get('draws') or 0)}分",
+            guild_texts.INFO_LABEL_MEMBERS,
+            guild_texts.INFO_MEMBER_COUNT.format(
+                count=len(members), capacity=capacity
+            ),
         ),
         game_shared.item_line(
-            "募集状態",
+            guild_texts.INFO_LABEL_RECORD,
+            guild_texts.INFO_RECORD.format(
+                wins=int(guild_row.get("wins") or 0),
+                losses=int(guild_row.get("losses") or 0),
+                draws=int(guild_row.get("draws") or 0),
+            ),
+        ),
+        game_shared.item_line(
+            guild_texts.INFO_LABEL_RECRUITMENT,
             RECRUITMENT_LABELS.get(
                 str(guild_row.get("recruitment_status")), RECRUITMENT_LABELS["closed"]
             ),
         ),
-        game_shared.item_line("メンバー一覧", "\n" + ("\n".join(lines)[:1500] or "—")),
+        game_shared.item_line(
+            guild_texts.INFO_LABEL_MEMBER_LIST,
+            "\n" + ("\n".join(lines)[:1500] or guild_texts.INFO_MEMBER_LIST_EMPTY),
+        ),
     ]
 
     embed = discord.Embed(
@@ -520,7 +525,7 @@ async def found_guild(interaction: discord.Interaction, name: str) -> None:
     member = interaction.user
 
     if discord_guild is None or not isinstance(member, discord.Member):
-        await game_shared.respond(interaction, "サーバー内で操作してください。")
+        await game_shared.respond(interaction, guild_texts.NOT_IN_SERVER)
         return
 
     balance = load_master_data().guild
@@ -530,8 +535,10 @@ async def found_guild(interaction: discord.Interaction, name: str) -> None:
     if not (balance.name_min_length <= len(guild_name) <= balance.name_max_length):
         await game_shared.respond(
             interaction,
-            f"ギルド名は{balance.name_min_length}文字以上"
-            f"{balance.name_max_length}文字以下で入力してください。",
+            guild_texts.NAME_LENGTH_ERROR.format(
+                min_length=balance.name_min_length,
+                max_length=balance.name_max_length,
+            ),
         )
         return
 
@@ -539,23 +546,19 @@ async def found_guild(interaction: discord.Interaction, name: str) -> None:
     game_shared.sync_member_rank(member)
     if game_shared.get_player_rank_info(member.id) is None:
         logger.warning("ロール同期を確認できないため設立を中止します: %s", member.id)
-        await game_shared.respond(
-            interaction, "ロール情報を確認できませんでした。時間をおいて再度お試しください。"
-        )
+        await game_shared.respond(interaction, guild_texts.CREATE_RANK_SYNC_ERROR)
         return
 
     if not game_shared.can_found_guild_member(member):
-        await game_shared.respond(
-            interaction,
-            "ギルドを設立できるのは騎士・七星・運営のロールを持つプレイヤーだけです。",
-        )
+        await game_shared.respond(interaction, guild_texts.CREATE_ROLE_REQUIRED)
         return
 
     # 3. 既に所属していないか
     existing = get_player_guild(member.id)
     if existing is not None:
         await respond_no_mention(
-            interaction, f"既に「{existing['name']}」へ所属しているため設立できません。"
+            interaction,
+            guild_texts.CREATE_ALREADY_IN_GUILD.format(guild_name=existing["name"]),
         )
         return
 
@@ -616,18 +619,19 @@ async def found_guild(interaction: discord.Interaction, name: str) -> None:
 
         await game_shared.respond(
             interaction,
-            "ギルド専用チャンネルの作成に失敗しました。\n"
-            + (
-                f"設立費用 {game_shared.format_coin(balance.create_cost)} は返金しました。"
+            (
+                guild_texts.CREATE_CHANNEL_FAILED_REFUNDED.format(
+                    create_cost=game_shared.format_coin(balance.create_cost)
+                )
                 if refunded
-                else "返金処理を確認できませんでした。運営へお問い合わせください。"
+                else guild_texts.CREATE_CHANNEL_FAILED_NOT_REFUNDED
             ),
         )
         return
 
     guild_row = get_guild(guild_id)
     if guild_row is None:
-        await game_shared.respond(interaction, "ギルド情報の保存を確認できませんでした。")
+        await game_shared.respond(interaction, guild_texts.CREATE_SAVE_ERROR)
         return
 
     # 6. 常設パネルの設置
@@ -643,13 +647,19 @@ async def found_guild(interaction: discord.Interaction, name: str) -> None:
     )
 
     guild_text = discord_guild.get_channel(int(channels["guild_text_channel_id"]))
-    mention = guild_text.mention if guild_text is not None else "ギルドTC"
+    mention = (
+        guild_text.mention
+        if guild_text is not None
+        else guild_texts.CREATE_CHANNEL_FALLBACK
+    )
 
     await respond_no_mention(
         interaction,
-        f"ギルド「{guild_name}」を設立しました。\n"
-        f"設立費用：{game_shared.format_coin(balance.create_cost)}\n"
-        f"専用チャンネルを作成しました：{mention}",
+        guild_texts.CREATE_SUCCESS.format(
+            guild_name=guild_name,
+            create_cost=game_shared.format_coin(balance.create_cost),
+            channel=mention,
+        ),
     )
 
 
@@ -864,10 +874,10 @@ def can_disband_or_leave(guild_id: int, guild_row: dict) -> str | None:
     """
 
     if get_active_battle_for_guild(guild_id) is not None:
-        return "ギルドバトルが進行中のため実行できません。"
+        return guild_texts.BATTLE_IN_PROGRESS
 
     if int(guild_row.get("roster_locked") or 0):
-        return "バトルの編成がロックされているため実行できません。"
+        return guild_texts.ROSTER_LOCKED
 
     return None
 
@@ -901,11 +911,11 @@ def can_leave_guild(guild_id: int, guild_row: dict) -> str | None:
 
     lock_type = str(lock.get("lock_type") or "")
     if lock_type == "request":
-        return "バトル申請中のため脱退できません。申請の取消後に実行してください。"
+        return guild_texts.LEAVE_BLOCKED_REQUEST
     if lock_type == "recruitment":
-        return "バトル募集中のため脱退できません。募集の取消後に実行してください。"
+        return guild_texts.LEAVE_BLOCKED_RECRUITMENT
 
-    return "ギルドバトルの準備中のため脱退できません。"
+    return guild_texts.LEAVE_BLOCKED_PREPARING
 
 
 async def cancel_battle_offers(bot: discord.Client, guild_id: int) -> None:
@@ -997,8 +1007,8 @@ async def disband_guild(interaction: discord.Interaction, guild_row: dict) -> No
 
     # 元メンバーへDM通知
     dm_embed = discord.Embed(
-        title="ギルド解散",
-        description=f"所属していたギルド「{guild_name}」が解散しました。",
+        title=guild_texts.DISBAND_DM_TITLE,
+        description=guild_texts.DISBAND_DM_BODY.format(guild_name=guild_name),
         color=config.COLOR_GREY,
     )
     for user_id in result["member_ids"]:
@@ -1022,9 +1032,11 @@ async def disband_guild(interaction: discord.Interaction, guild_row: dict) -> No
         ),
     )
 
+    message = (
+        guild_texts.DISBAND_DONE if archived else guild_texts.DISBAND_DONE_ARCHIVE_FAILED
+    )
+
     await respond_no_mention(
         interaction,
-        f"ギルド「{guild_name}」を解散しました。\n"
-        f"専用カテゴリーは{balance.archive_days}日間保存されます。"
-        + ("" if archived else "\n※カテゴリーのアーカイブに失敗しました。運営へご連絡ください。"),
+        message.format(guild_name=guild_name, archive_days=balance.archive_days),
     )

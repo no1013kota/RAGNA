@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from texts import battle_display as display_texts
+
 from .master_data import load_master_data
 from .models import (
     ACTION_BLOCKING_STATUSES,
@@ -682,16 +684,17 @@ def clear_unit_effects(state: BattleState, unit: BattleUnit) -> None:
 
 # ==================================================
 # 表示用のまとめ
+# 効果の呼び名は texts/battle_display.py にまとめてある
 # ==================================================
 def _duration_label(effect: BattleEffectState) -> str:
     if effect.duration_type == DURATION_TURNS:
-        return f"残{effect.remaining}"
+        return display_texts.EFFECT_DURATION_TURNS.format(count=effect.remaining)
     if effect.duration_type == DURATION_ATTACKS:
-        return f"次{effect.remaining}回"
+        return display_texts.EFFECT_DURATION_ATTACKS.format(count=effect.remaining)
     if effect.duration_type == DURATION_ROUND_END:
-        return "ラウンド終了まで"
+        return display_texts.EFFECT_DURATION_ROUND_END
     if effect.duration_type == DURATION_PERMANENT:
-        return "常時"
+        return display_texts.EFFECT_DURATION_PERMANENT
     return ""
 
 
@@ -711,9 +714,11 @@ def buff_summary(state: BattleState, unit: BattleUnit) -> dict[str, list[str]]:
             EFFECT_NEXT_ATTACK_ATK_MODIFIER,
         }:
             amount = int(effect.value or 0)
-            text = f"ATK{amount:+d}"
+            text = display_texts.EFFECT_ATK_MODIFIER.format(amount=amount)
             if label:
-                text = f"{text}（{label}）"
+                text = display_texts.EFFECT_WITH_DURATION.format(
+                    text=text, duration=label
+                )
             (buffs if amount >= 0 else debuffs).append(text)
 
         elif effect.effect_type == EFFECT_CONDITIONAL_ATK_MODIFIER:
@@ -721,38 +726,64 @@ def buff_summary(state: BattleState, unit: BattleUnit) -> dict[str, list[str]]:
             if not evaluate_state_condition(state, unit, condition):
                 continue
             amount = int(effect.value or 0)
-            (buffs if amount >= 0 else debuffs).append(f"ATK{amount:+d}")
+            (buffs if amount >= 0 else debuffs).append(
+                display_texts.EFFECT_ATK_MODIFIER.format(amount=amount)
+            )
 
         elif effect.effect_type == EFFECT_STATUS:
             name = effect.status_name or ""
             text = STATUS_LABELS.get(name, name)
             if label:
-                text = f"{text}（{label}）"
+                text = display_texts.EFFECT_WITH_DURATION.format(
+                    text=text, duration=label
+                )
             statuses.append(text)
 
         elif effect.effect_type == EFFECT_STATUS_IMMUNE:
-            others.append(f"状態異常無効（{label}）")
+            others.append(
+                display_texts.EFFECT_WITH_DURATION.format(
+                    text=display_texts.EFFECT_STATUS_IMMUNE, duration=label
+                )
+            )
 
         elif effect.effect_type == EFFECT_ACTIVE_LOCK:
-            others.append(f"ACTIVE使用禁止（{label}）")
+            others.append(
+                display_texts.EFFECT_WITH_DURATION.format(
+                    text=display_texts.EFFECT_ACTIVE_LOCK, duration=label
+                )
+            )
 
         elif effect.effect_type == EFFECT_TAUNT:
-            others.append(f"攻撃対象固定（{label}）")
+            others.append(
+                display_texts.EFFECT_WITH_DURATION.format(
+                    text=display_texts.EFFECT_TAUNT, duration=label
+                )
+            )
 
         elif effect.effect_type == EFFECT_ATTACK_DAMAGE_REDUCTION:
-            others.append(f"被ダメージ-{abs(int(effect.value or 0))}")
+            others.append(
+                display_texts.EFFECT_DAMAGE_REDUCTION.format(
+                    amount=abs(int(effect.value or 0))
+                )
+            )
 
         elif effect.effect_type == EFFECT_HEAL_BLOCK:
-            others.append(f"回復阻害（{label}）" if label else "回復阻害")
+            others.append(
+                display_texts.EFFECT_WITH_DURATION.format(
+                    text=display_texts.EFFECT_HEAL_BLOCK, duration=label
+                )
+                if label
+                else display_texts.EFFECT_HEAL_BLOCK
+            )
 
         elif effect.effect_type == EFFECT_POISON_AMPLIFY:
-            others.append("猛毒増幅")
+            others.append(display_texts.EFFECT_POISON_AMPLIFY)
 
         elif effect.effect_type == EFFECT_SURVIVE_WITH_HP:
-            others.append("戦闘不能耐性")
+            others.append(display_texts.EFFECT_SURVIVE)
 
         elif effect.effect_type == EFFECT_ATK_SWAP:
-            others.append("ATK交換中")
+            others.append(display_texts.EFFECT_ATK_SWAP)
 
     return {
         "buffs": buffs,

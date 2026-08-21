@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from texts import battle_display as display_texts
+
 from . import effects as effects_module
 from .master_data import load_master_data
 from .models import (
@@ -525,11 +527,13 @@ def validate_selections(
 
         if len(chosen) != group.count:
             raise BattleRuleError(
-                f"「{skill.name}」の対象を{group.count}体選択してください。"
+                display_texts.ERROR_SELECT_COUNT.format(
+                    skill=skill.name, count=group.count
+                )
             )
 
         if not group.allow_duplicate and len(set(chosen)) != len(chosen):
-            raise BattleRuleError("同じ対象を重複して選択できません。")
+            raise BattleRuleError(display_texts.ERROR_DUPLICATE_TARGET)
 
         allowed = {
             target.battle_unit_id
@@ -537,7 +541,7 @@ def validate_selections(
         }
         for unit_id in chosen:
             if unit_id not in allowed:
-                raise BattleRuleError("選択した対象は現在指定できません。")
+                raise BattleRuleError(display_texts.ERROR_TARGET_UNAVAILABLE)
 
         validated[group.key] = chosen
 
@@ -573,7 +577,7 @@ def apply_status(
             skill_id=skill_id,
             status=status,
             applied=False,
-            text=f"{label}は無効化された",
+            text=display_texts.LOG_STATUS_NULLIFIED.format(status=label),
         )
         return False
 
@@ -600,7 +604,7 @@ def apply_status(
             skill_id=skill_id,
             status=status,
             applied=False,
-            text=f"{label}は無効化された",
+            text=display_texts.LOG_STATUS_NULLIFIED.format(status=label),
         )
 
         if allow_reflect:
@@ -646,11 +650,15 @@ def apply_status(
     if applied is None:
         return False
 
-    detail = f"{label}（残{duration_turns}ターン）"
+    detail = display_texts.LOG_STATUS_DETAIL.format(
+        status=label, turns=duration_turns
+    )
     if status == STATUS_POISON and damage:
-        detail = f"{label} {damage}ダメージ×{duration_turns}ターン"
+        detail = display_texts.LOG_STATUS_POISON_DETAIL.format(
+            status=label, damage=damage, turns=duration_turns
+        )
     if amplified:
-        detail = f"{detail}／猛毒増幅"
+        detail = display_texts.LOG_STATUS_AMPLIFIED.format(text=detail)
 
     state.add_log(
         BattleEvent.STATUS_APPLY,
@@ -787,7 +795,7 @@ def _apply_single_effect(
                     actor_unit_id=owner.battle_unit_id,
                     target_unit_id=target.battle_unit_id,
                     skill_id=skill.skill_id,
-                    text=f"{names}を解除",
+                    text=display_texts.LOG_CLEANSE_STATUS.format(names=names),
                 )
         return
 
@@ -800,7 +808,7 @@ def _apply_single_effect(
                     actor_unit_id=owner.battle_unit_id,
                     target_unit_id=target.battle_unit_id,
                     skill_id=skill.skill_id,
-                    text=f"デバフ{removed}件を解除",
+                    text=display_texts.LOG_CLEANSE_DEBUFF.format(count=removed),
                 )
         return
 
@@ -863,7 +871,7 @@ def _apply_single_effect(
             actor_unit_id=owner.battle_unit_id,
             target_unit_id=first.battle_unit_id,
             skill_id=skill.skill_id,
-            text=f"現在ATKを交換（{first_atk} ⇄ {second_atk}）",
+            text=display_texts.LOG_ATK_SWAP.format(first=first_atk, second=second_atk),
         )
         return
 
@@ -926,7 +934,10 @@ def _apply_single_effect(
 
 
 def _effect_log_text(effect_type: str, effect: SkillEffect, amount: int) -> str:
-    """効果ログの本文。``amount`` は割合指定を実数へ直したあとの数値。"""
+    """効果ログの本文。``amount`` は割合指定を実数へ直したあとの数値。
+
+    呼び名は ``texts/battle_display.py`` の「効果の呼び名」にまとめてあります。
+    """
 
     value = int(amount)
 
@@ -935,39 +946,45 @@ def _effect_log_text(effect_type: str, effect: SkillEffect, amount: int) -> str:
         EFFECT_NEXT_ATTACK_ATK_MODIFIER,
         EFFECT_CONDITIONAL_ATK_MODIFIER,
     }:
-        text = f"ATK{value:+d}"
+        text = display_texts.EFFECT_ATK_MODIFIER.format(amount=value)
         if effect.duration_turns:
-            text = f"{text}（残{effect.duration_turns}ターン）"
+            text = display_texts.EFFECT_LOG_DURATION_TURNS.format(
+                text=text, count=effect.duration_turns
+            )
         elif effect.duration_type == "attacks":
-            text = f"{text}（次の攻撃のみ）"
+            text = display_texts.EFFECT_LOG_DURATION_NEXT_ATTACK.format(text=text)
         return text
 
     if effect_type == EFFECT_STATUS_IMMUNE:
-        return "状態異常無効"
+        return display_texts.EFFECT_STATUS_IMMUNE
 
     if effect_type == EFFECT_ACTIVE_LOCK:
-        return "ACTIVE使用禁止"
+        return display_texts.EFFECT_ACTIVE_LOCK
 
     if effect_type == EFFECT_TAUNT:
-        return "攻撃対象を固定"
+        return display_texts.EFFECT_TAUNT_LOG
 
     if effect_type == EFFECT_SPEED_MODIFIER:
-        text = f"SPD{value:+d}"
+        text = display_texts.EFFECT_SPEED_MODIFIER.format(amount=value)
         if effect.duration_turns:
-            text = f"{text}（残{effect.duration_turns}ターン）"
+            text = display_texts.EFFECT_LOG_DURATION_TURNS.format(
+                text=text, count=effect.duration_turns
+            )
         return text
 
     if effect_type == EFFECT_ATTACK_DAMAGE_REDUCTION:
-        return f"被ダメージ-{abs(value)}"
+        return display_texts.EFFECT_DAMAGE_REDUCTION.format(amount=abs(value))
 
     if effect_type == EFFECT_HEAL_BLOCK:
-        text = "回復阻害"
+        text = display_texts.EFFECT_HEAL_BLOCK
         if effect.duration_turns:
-            text = f"{text}（残{effect.duration_turns}ターン）"
+            text = display_texts.EFFECT_LOG_DURATION_TURNS.format(
+                text=text, count=effect.duration_turns
+            )
         return text
 
     if effect_type == EFFECT_POISON_AMPLIFY:
-        return "猛毒増幅"
+        return display_texts.EFFECT_POISON_AMPLIFY
 
     return effect_type
 
@@ -1127,7 +1144,7 @@ def register_always_passives(state: BattleState) -> None:
                     actor_unit_id=unit.battle_unit_id,
                     skill_id=skill.skill_id,
                     skill_name=skill.name,
-                    text="常時発動",
+                    text=display_texts.LOG_ALWAYS_ACTIVE,
                 )
 
 
@@ -1143,7 +1160,7 @@ def use_active_skill(
     """アクティブスキルを使用する。使用回数と対象は事前に再確認する。"""
 
     if not is_skill_usable(state, unit, skill):
-        raise BattleRuleError("このスキルは現在使用できません。")
+        raise BattleRuleError(display_texts.ERROR_SKILL_UNAVAILABLE)
 
     validated = validate_selections(state, unit, skill, selections or {})
 
