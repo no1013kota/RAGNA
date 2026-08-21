@@ -17,6 +17,8 @@ from database.trial_member import (
     add_class_change,
     clear_trial_member_evaluations
 )
+from texts import common as common_texts
+from texts import member as member_texts
 
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,7 @@ class ClassChange(commands.Cog):
     async def class_candidates(self,interaction: discord.Interaction,trial_member_class: app_commands.Choice[str]):
 
         if not self.has_permission(interaction.user):
-            await interaction.response.send_message("権限がありません。",ephemeral=True)
+            await interaction.response.send_message(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -67,7 +69,7 @@ class ClassChange(commands.Cog):
         candidates = get_class_change_candidates(target_class)
 
         if not candidates:
-            await interaction.followup.send("2人以上から評価を受けている精霊がいません。",ephemeral=True)
+            await interaction.followup.send(member_texts.CANDIDATE_NOT_ENOUGH,ephemeral=True)
             return
 
         top_candidates = sorted(
@@ -114,10 +116,12 @@ class ClassChange(commands.Cog):
                     continue
 
             top_lines.append(
-                f"**{rank}位**　"
-                f"{average_score:.2f} / 5　"
-                f"評価{evaluator_count}人　"
-                f"{member.mention}"
+                member_texts.CANDIDATE_LINE.format(
+                    rank=rank,
+                    score=f"{average_score:.2f}",
+                    count=evaluator_count,
+                    user=member.mention
+                )
             )
 
         for rank, candidate in enumerate(worst_candidates,start=1):
@@ -143,37 +147,39 @@ class ClassChange(commands.Cog):
                     continue
 
             worst_lines.append(
-                f"**{rank}位**　"
-                f"{average_score:.2f} / 5　"
-                f"評価{evaluator_count}人　"
-                f"{member.mention}"
+                member_texts.CANDIDATE_LINE.format(
+                    rank=rank,
+                    score=f"{average_score:.2f}",
+                    count=evaluator_count,
+                    user=member.mention
+                )
             )
 
         title = (
-            "クラス変更候補｜全体"
+            member_texts.CANDIDATE_TITLE_ALL
             if target_class is None
-            else f"クラス変更候補｜{target_class}クラス"
+            else member_texts.CANDIDATE_TITLE_CLASS.format(
+                class_name=target_class
+            )
         )
 
         top_text = (
             "\n".join(top_lines)
             if top_lines
-            else "対象者が見つかりません。"
+            else member_texts.CANDIDATE_EMPTY
         )
 
         worst_text = (
             "\n".join(worst_lines)
             if worst_lines
-            else "対象者が見つかりません。"
+            else member_texts.CANDIDATE_EMPTY
         )
 
         embed = discord.Embed(
             title=title,
-            description=(
-                f"**■ 総合評価 TOP5**\n"
-                f"{top_text}\n\n"
-                f"**■ 総合評価 ワースト3**\n"
-                f"{worst_text}"
+            description=member_texts.CANDIDATE_BODY.format(
+                top=top_text,
+                worst=worst_text
             ),
             color=config.COLOR_BLUE
         )
@@ -188,7 +194,7 @@ class ClassChange(commands.Cog):
     async def class_distribution(self,interaction: discord.Interaction):
 
         if not self.has_permission(interaction.user):
-            await interaction.response.send_message("権限がありません。",ephemeral=True)
+            await interaction.response.send_message(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -196,7 +202,7 @@ class ClassChange(commands.Cog):
         guild = interaction.guild
 
         if guild is None:
-            await interaction.followup.send("サーバー情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(common_texts.GUILD_NOT_FOUND,ephemeral=True)
             return
 
         role_map = {
@@ -225,7 +231,7 @@ class ClassChange(commands.Cog):
         total = sum(counts.values())
 
         if total == 0:
-            await interaction.followup.send("クラスロールを持っているメンバーが見つかりません。",ephemeral=True)
+            await interaction.followup.send(member_texts.DISTRIBUTION_EMPTY,ephemeral=True)
             return
 
         def percent(count):
@@ -235,17 +241,25 @@ class ClassChange(commands.Cog):
         b_group = counts["B+"] + counts["B"]
 
         embed = discord.Embed(
-            title="クラス分布",
-            description=(
-                f"【全体】{total}人\n\n"
-                f"【S】{counts['S']}人（{percent(counts['S']):.1f}%）\n"
-                f"【A+】{counts['A+']}人（{percent(counts['A+']):.1f}%）\n"
-                f"【A】{counts['A']}人（{percent(counts['A']):.1f}%）\n"
-                f"【B+】{counts['B+']}人（{percent(counts['B+']):.1f}%）\n"
-                f"【B】{counts['B']}人（{percent(counts['B']):.1f}%）\n"
-                f"【C】{counts['C']}人（{percent(counts['C']):.1f}%）\n\n"
-                f"【A層】{a_group}人（{percent(a_group):.1f}%）\n"
-                f"【B層】{b_group}人（{percent(b_group):.1f}%）"
+            title=member_texts.DISTRIBUTION_TITLE,
+            description=member_texts.DISTRIBUTION_BODY.format(
+                total=total,
+                s=counts["S"],
+                s_percent=f"{percent(counts['S']):.1f}",
+                a_plus=counts["A+"],
+                a_plus_percent=f"{percent(counts['A+']):.1f}",
+                a=counts["A"],
+                a_percent=f"{percent(counts['A']):.1f}",
+                b_plus=counts["B+"],
+                b_plus_percent=f"{percent(counts['B+']):.1f}",
+                b=counts["B"],
+                b_percent=f"{percent(counts['B']):.1f}",
+                c=counts["C"],
+                c_percent=f"{percent(counts['C']):.1f}",
+                a_group=a_group,
+                a_group_percent=f"{percent(a_group):.1f}",
+                b_group=b_group,
+                b_group_percent=f"{percent(b_group):.1f}"
             ),
             color=config.COLOR_BLUE
         )
@@ -274,7 +288,7 @@ class ClassChange(commands.Cog):
     ):
 
         if not self.has_permission(interaction.user):
-            await interaction.response.send_message("権限がありません。",ephemeral=True)
+            await interaction.response.send_message(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -282,20 +296,23 @@ class ClassChange(commands.Cog):
         guild = interaction.guild
 
         if guild is None:
-            await interaction.followup.send("サーバー情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(common_texts.GUILD_NOT_FOUND,ephemeral=True)
             return
 
         trial_member = get_trial_member(user.id)
 
         if trial_member is None:
-            await interaction.followup.send("対象者は精霊として登録されていません。",ephemeral=True)
+            await interaction.followup.send(member_texts.NOT_REGISTERED,ephemeral=True)
             return
 
         old_class = trial_member[1]
         target_class = new_class.value
 
         if old_class == target_class:
-            await interaction.followup.send(f"対象者はすでに **{target_class}クラス** です。",ephemeral=True)
+            await interaction.followup.send(
+                member_texts.CLASS_CHANGE_SAME.format(class_name=target_class),
+                ephemeral=True
+            )
             return
 
         class_roles = {
@@ -308,7 +325,10 @@ class ClassChange(commands.Cog):
         new_role = class_roles.get(target_class)
 
         if new_role is None:
-            await interaction.followup.send(f"{target_class}クラスロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(
+                member_texts.CLASS_ROLE_NOT_FOUND.format(class_name=target_class),
+                ephemeral=True
+            )
             return
 
         # ==================================================
@@ -317,7 +337,7 @@ class ClassChange(commands.Cog):
         trial_member_cog = self.bot.get_cog("TrialMember")
 
         if trial_member_cog is None:
-            await interaction.followup.send("管理機能を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(member_texts.CLASS_CHANGE_COG_NOT_FOUND,ephemeral=True)
             return
 
         thread_id = get_trial_member_thread(user.id)
@@ -338,7 +358,7 @@ class ClassChange(commands.Cog):
 
                 except discord.HTTPException as e:
                     logger.warning(f"クラス変更時評価スレッド取得失敗：{thread_id} / {e}")
-                    await interaction.followup.send("評価スレッドの取得に失敗しました。",ephemeral=True)
+                    await interaction.followup.send(member_texts.THREAD_FETCH_FAILED,ephemeral=True)
                     return
 
             if thread is not None:
@@ -354,11 +374,11 @@ class ClassChange(commands.Cog):
 
                 except discord.HTTPException as e:
                     logger.warning(f"クラス変更時新評価スレッド作成失敗：{user.id} / {e}")
-                    await interaction.followup.send("新しい評価スレッドの作成に失敗しました。",ephemeral=True)
+                    await interaction.followup.send(member_texts.CLASS_CHANGE_NEW_THREAD_FAILED,ephemeral=True)
                     return
 
                 if new_thread_id is None:
-                    await interaction.followup.send("新しい評価スレッドの作成に失敗しました。",ephemeral=True)
+                    await interaction.followup.send(member_texts.CLASS_CHANGE_NEW_THREAD_FAILED,ephemeral=True)
                     return
 
                 new_thread = guild.get_thread(new_thread_id)
@@ -375,7 +395,7 @@ class ClassChange(commands.Cog):
                         new_thread = None
 
                 if new_thread is None:
-                    await interaction.followup.send("新しい評価スレッドを取得できませんでした。",ephemeral=True)
+                    await interaction.followup.send(member_texts.CLASS_CHANGE_NEW_THREAD_NOT_FOUND,ephemeral=True)
                     return
 
                 copied = await trial_member_cog.copy_evaluation_thread(
@@ -394,7 +414,7 @@ class ClassChange(commands.Cog):
                     except discord.HTTPException as e:
                         logger.warning(f"不完全な新評価スレッド削除失敗：{new_thread.id} / {e}")
 
-                    await interaction.followup.send("評価スレッドの移動に失敗しました。",ephemeral=True)
+                    await interaction.followup.send(member_texts.CLASS_CHANGE_THREAD_MOVE_FAILED,ephemeral=True)
                     return
 
         # ==================================================
@@ -430,7 +450,7 @@ class ClassChange(commands.Cog):
                 except discord.HTTPException as delete_error:
                     logger.warning(f"クラス変更失敗時新評価スレッド削除失敗：{new_thread.id} / {delete_error}")
 
-            await interaction.followup.send("クラスロールの変更に失敗しました。",ephemeral=True)
+            await interaction.followup.send(member_texts.CLASS_CHANGE_ROLE_FAILED,ephemeral=True)
             return
 
         # ==================================================
@@ -472,7 +492,7 @@ class ClassChange(commands.Cog):
         note_text = (
             note.strip()
             if note.strip()
-            else "定期クラス替え"
+            else member_texts.CLASS_CHANGE_NOTE_DEFAULT
         )
 
         log_channel = guild.get_channel(config.CHANNEL_CLASS_CHANGE_LOG)
@@ -480,12 +500,13 @@ class ClassChange(commands.Cog):
         if log_channel is not None:
 
             embed = discord.Embed(
-                title="クラス変更",
-                description=(
-                    f"実行者：{interaction.user.mention}\n"
-                    f"対象者：{user.mention}\n"
-                    f"変更：**{old_class} → {target_class}**\n"
-                    f"備考：{note_text}"
+                title=member_texts.CLASS_CHANGE_LOG_TITLE,
+                description=member_texts.CLASS_CHANGE_LOG_BODY.format(
+                    actor=interaction.user.mention,
+                    user=user.mention,
+                    old_class=old_class,
+                    new_class=target_class,
+                    note=note_text
                 ),
                 color=config.COLOR_BLUE
             )
@@ -499,7 +520,11 @@ class ClassChange(commands.Cog):
                 logger.warning(f"クラス変更ログ送信失敗：{user.id} / {e}")
 
         await interaction.followup.send(
-            f"{user.mention} のクラスを **{old_class} → {target_class}** へ変更しました。",
+            member_texts.CLASS_CHANGE_DONE.format(
+                user=user.mention,
+                old_class=old_class,
+                new_class=target_class
+            ),
             ephemeral=True
         )
 

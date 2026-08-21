@@ -8,6 +8,8 @@ import asyncio
 
 from discord.ext import commands
 
+from texts import member as member_texts
+
 
 logger = logging.getLogger(__name__)
 
@@ -15,14 +17,7 @@ logger = logging.getLogger(__name__)
 # ==========================================
 # 自己紹介テンプレート
 # ==========================================
-INTRODUCTION_TEMPLATE = """【名前】
-【年齢】
-【性格】
-【声質】
-【好き】
-【嫌い】
-【アピール】
-【紹介者】"""
+INTRODUCTION_TEMPLATE = member_texts.INTRODUCTION_TEMPLATE
 
 
 # ==========================================

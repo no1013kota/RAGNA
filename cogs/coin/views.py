@@ -9,6 +9,7 @@ from database.coin import (
     get_balance,
 )
 
+from texts import coin as coin_texts
 from texts import panels as panel_texts
 from utils import ensure_panel_message, ensure_top_panel
 
@@ -72,23 +73,23 @@ class ATMView(discord.ui.View):
         super().__init__(timeout=None)
 
     # 送金
-    @discord.ui.button(label="送金",style=discord.ButtonStyle.primary,custom_id="atm:transfer")
+    @discord.ui.button(label=coin_texts.PANEL_BUTTON_TRANSFER,style=discord.ButtonStyle.primary,custom_id="atm:transfer")
     async def transfer(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         await interaction.response.send_message(
-            "送金先を選択してください。",
+            coin_texts.TRANSFER_SELECT_PROMPT,
             view=TransferUserSelectView(),
             ephemeral=True
         )
 
     # 残高照会
-    @discord.ui.button(label="残高照会",style=discord.ButtonStyle.secondary,custom_id="atm:balance")
+    @discord.ui.button(label=coin_texts.PANEL_BUTTON_BALANCE,style=discord.ButtonStyle.secondary,custom_id="atm:balance")
     async def balance(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         balance = get_balance(interaction.user.id)
         embed = discord.Embed(
-            title="残高照会",
-            description=(f"現在の残高は **{balance:,} coin**"),
+            title=coin_texts.BALANCE_TITLE,
+            description=coin_texts.BALANCE_BODY.format(balance=f"{balance:,}"),
             color=config.COLOR_YELLOW
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
@@ -108,7 +109,11 @@ class TransferUserSelectView(discord.ui.View):
 
 class TransferUserSelect(discord.ui.UserSelect):
     def __init__(self):
-        super().__init__(placeholder="送金先を選択してください",min_values=1,max_values=1)
+        super().__init__(
+            placeholder=coin_texts.TRANSFER_SELECT_PLACEHOLDER,
+            min_values=1,
+            max_values=1
+        )
 
     async def callback(self,interaction: discord.Interaction):
 
@@ -118,15 +123,15 @@ class TransferUserSelect(discord.ui.UserSelect):
         target = interaction.guild.get_member(selected_user.id)
 
         if target is None:
-            await interaction.response.send_message("送金先のユーザーを取得できませんでした。",ephemeral=True)
+            await interaction.response.send_message(coin_texts.TRANSFER_TARGET_NOT_FOUND,ephemeral=True)
             return
 
         if target.bot:
-            await interaction.response.send_message("Botには送金できません。",ephemeral=True)
+            await interaction.response.send_message(coin_texts.TRANSFER_TO_BOT,ephemeral=True)
             return
 
         if target.id == interaction.user.id:
-            await interaction.response.send_message("自分には送金できません。",ephemeral=True)
+            await interaction.response.send_message(coin_texts.TRANSFER_TO_SELF,ephemeral=True)
             return
 
         await interaction.response.send_modal(TransferModal(target))
@@ -136,18 +141,22 @@ class TransferUserSelect(discord.ui.UserSelect):
 # ==========================================
 class TransferModal(discord.ui.Modal):
     def __init__(self,target: discord.Member):
-        super().__init__(title=f"{target.display_name} へ送金")
+        super().__init__(
+            title=coin_texts.TRANSFER_MODAL_TITLE.format(
+                name=target.display_name
+            )
+        )
 
         self.target = target
         self.amount = discord.ui.TextInput(
-            label="送金額",
-            placeholder="1000以上の数字を入力",
+            label=coin_texts.TRANSFER_MODAL_AMOUNT_LABEL,
+            placeholder=coin_texts.TRANSFER_MODAL_AMOUNT_PLACEHOLDER,
             required=True,
             max_length=10
         )
         self.note = discord.ui.TextInput(
-            label="コメント",
-            placeholder="任意",
+            label=coin_texts.TRANSFER_MODAL_NOTE_LABEL,
+            placeholder=coin_texts.TRANSFER_MODAL_NOTE_PLACEHOLDER,
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=500
@@ -162,11 +171,11 @@ class TransferModal(discord.ui.Modal):
             amount = int(self.amount.value.strip())
 
         except ValueError:
-            await interaction.response.send_message("送金額は数字で入力してください。",ephemeral=True)
+            await interaction.response.send_message(coin_texts.TRANSFER_AMOUNT_NOT_NUMBER,ephemeral=True)
             return
 
         if amount < 1000:
-            await interaction.response.send_message("1000coin以上から送金できます。",ephemeral=True)
+            await interaction.response.send_message(coin_texts.TRANSFER_MINIMUM,ephemeral=True)
             return
 
         note = (
@@ -177,7 +186,7 @@ class TransferModal(discord.ui.Modal):
         coin_cog = interaction.client.get_cog("Coin")
 
         if coin_cog is None:
-            await interaction.response.send_message("coin管理機能を取得できませんでした。",ephemeral=True)
+            await interaction.response.send_message(coin_texts.TRANSFER_UNAVAILABLE,ephemeral=True)
             return
 
         await coin_cog.execute_transfer(interaction=interaction,user=self.target,amount=amount,note=note)

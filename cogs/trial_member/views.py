@@ -13,6 +13,8 @@ from database.trial_member import (
     get_evaluated_trial_member_ids,
 )
 from database.xp import get_vc_time
+from texts import common as common_texts
+from texts import member as member_texts
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,7 @@ class EvaluationPanelView(discord.ui.View):
 class EvaluateButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
-            label="評価",
+            label=member_texts.PANEL_BUTTON_EVALUATE,
             style=discord.ButtonStyle.primary,
             custom_id="evaluation_panel:evaluate")
 
@@ -42,15 +44,15 @@ class EvaluateButton(discord.ui.Button):
         trial_member_cog = interaction.client.get_cog("TrialMember")
 
         if trial_member_cog is None:
-            await interaction.response.send_message("管理機能を取得失敗。",ephemeral=True)
+            await interaction.response.send_message(member_texts.COG_NOT_FOUND,ephemeral=True)
             return
 
         if not trial_member_cog.is_evaluator(interaction.user):
-            await interaction.response.send_message("評価権限がありません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.EVALUATION_NO_PERMISSION,ephemeral=True)
             return
 
         await interaction.response.send_message(
-            "評価する精霊を選択してください。",
+            member_texts.EVALUATE_SELECT_PROMPT,
             view=EvaluationUserSelectView(),
             ephemeral=True
         )
@@ -59,7 +61,7 @@ class EvaluateButton(discord.ui.Button):
 class CommentButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
-            label="追記",
+            label=member_texts.PANEL_BUTTON_COMMENT,
             style=discord.ButtonStyle.success,
             custom_id="evaluation_panel:comment")
 
@@ -68,15 +70,15 @@ class CommentButton(discord.ui.Button):
         trial_member_cog = interaction.client.get_cog("TrialMember")
 
         if trial_member_cog is None:
-            await interaction.response.send_message("管理機能を取得失敗。",ephemeral=True)
+            await interaction.response.send_message(member_texts.COG_NOT_FOUND,ephemeral=True)
             return
 
         if not trial_member_cog.is_comment_editor(interaction.user):
-            await interaction.response.send_message("追記権限がありません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.COMMENT_NO_PERMISSION,ephemeral=True)
             return
 
         await interaction.response.send_message(
-            "追記する精霊を選択してください。",
+            member_texts.COMMENT_SELECT_PROMPT,
             view=CommentUserSelectView(),
             ephemeral=True
         )
@@ -85,7 +87,7 @@ class CommentButton(discord.ui.Button):
 class EvaluationTargetListButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
-            label="評価チェック",
+            label=member_texts.PANEL_BUTTON_EVALUATION_CHECK,
             style=discord.ButtonStyle.secondary,
             custom_id="evaluation_panel:target_list"
         )
@@ -95,23 +97,23 @@ class EvaluationTargetListButton(discord.ui.Button):
         trial_member_cog = interaction.client.get_cog("TrialMember")
 
         if trial_member_cog is None:
-            await interaction.response.send_message("管理機能を取得失敗。",ephemeral=True)
+            await interaction.response.send_message(member_texts.COG_NOT_FOUND,ephemeral=True)
             return
 
         if not trial_member_cog.is_evaluator(interaction.user):
-            await interaction.response.send_message("評価権限がありません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.EVALUATION_NO_PERMISSION,ephemeral=True)
             return
 
         guild = interaction.guild
 
         if guild is None:
-            await interaction.response.send_message("サーバー情報を取得失敗。",ephemeral=True)
+            await interaction.response.send_message(member_texts.GUILD_NOT_FOUND_SHORT,ephemeral=True)
             return
 
         trial_member_role = guild.get_role(config.ROLE_TRIAL_MEMBER)
 
         if trial_member_role is None:
-            await interaction.response.send_message("精霊ロールが見つかりません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.TRIAL_MEMBER_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         evaluated_trial_member_ids = get_evaluated_trial_member_ids(interaction.user.id)
@@ -145,8 +147,8 @@ class EvaluationTargetListButton(discord.ui.Button):
         if not targets:
 
             embed = discord.Embed(
-                title="評価チェック",
-                description="現在評価できる精霊はいません。",
+                title=member_texts.EVALUATION_CHECK_TITLE,
+                description=member_texts.EVALUATION_CHECK_EMPTY,
                 color=config.COLOR_WHITE
             )
 
@@ -187,20 +189,34 @@ class EvaluationCheckView(discord.ui.View):
 
         for trial_member, trial_member_class, total_xp, evaluated in page_targets:
 
-            status = ("評価済 ✅" if evaluated else "未評価")
+            status = (
+                member_texts.EVALUATION_CHECK_DONE
+                if evaluated
+                else member_texts.EVALUATION_CHECK_NOT_YET
+            )
 
             lines.append(
-                f"{trial_member_class} {trial_member.mention} {total_xp:,}XP {status}"
+                member_texts.EVALUATION_CHECK_LINE.format(
+                    class_name=trial_member_class,
+                    user=trial_member.mention,
+                    xp=f"{total_xp:,}",
+                    status=status
+                )
             )
 
         total_pages = (len(self.targets) + self.PER_PAGE - 1) // self.PER_PAGE
 
         embed = discord.Embed(
-            title="評価チェック",
+            title=member_texts.EVALUATION_CHECK_TITLE,
             description="\n".join(lines),
             color=config.COLOR_WHITE
         )
-        embed.set_footer(text=f"{self.page + 1} / {total_pages}ページ")
+        embed.set_footer(
+            text=member_texts.PAGE_FOOTER.format(
+                page=self.page + 1,
+                total=total_pages
+            )
+        )
 
         return embed
 
@@ -217,7 +233,10 @@ class EvaluationCheckView(discord.ui.View):
 
 class EvaluationCheckPrevButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="◀ 前",style=discord.ButtonStyle.secondary)
+        super().__init__(
+            label=member_texts.PAGE_PREVIOUS,
+            style=discord.ButtonStyle.secondary
+        )
 
     async def callback(self,interaction: discord.Interaction):
 
@@ -232,7 +251,10 @@ class EvaluationCheckPrevButton(discord.ui.Button):
 
 class EvaluationCheckNextButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="次 ▶",style=discord.ButtonStyle.secondary)
+        super().__init__(
+            label=member_texts.PAGE_NEXT,
+            style=discord.ButtonStyle.secondary
+        )
 
     async def callback(self,interaction: discord.Interaction):
 
@@ -251,7 +273,7 @@ class EvaluationCheckNextButton(discord.ui.Button):
 class EvaluationUserSelect(discord.ui.UserSelect):
     def __init__(self):
         super().__init__(
-            placeholder="評価する精霊を選択",
+            placeholder=member_texts.EVALUATE_SELECT_PLACEHOLDER,
             min_values=1,
             max_values=1,
             custom_id="evaluation_user_select"
@@ -263,7 +285,7 @@ class EvaluationUserSelect(discord.ui.UserSelect):
         trial_member_role = interaction.guild.get_role(config.ROLE_TRIAL_MEMBER)
 
         if (trial_member_role is None or trial_member_role not in member.roles):
-            await interaction.response.send_message("精霊を選択してください。",ephemeral=True)
+            await interaction.response.send_message(member_texts.SELECT_TRIAL_MEMBER,ephemeral=True)
             return
 
         await interaction.response.send_modal(EvaluationModal(member))
@@ -281,41 +303,45 @@ class EvaluationUserSelectView(discord.ui.View):
 # ==========================================
 class EvaluationModal(discord.ui.Modal):
     def __init__(self,member: discord.Member):
-        super().__init__(title=f"{member.display_name} の評価")
+        super().__init__(
+            title=member_texts.EVALUATION_MODAL_TITLE.format(
+                name=member.display_name
+            )
+        )
 
         self.member = member
 
         self.voice_score = discord.ui.TextInput(
-            label="声/音質",
-            placeholder="1～10",
+            label=member_texts.INPUT_VOICE,
+            placeholder=member_texts.EVALUATION_PLACEHOLDER_SCORE,
             required=True,
             max_length=2
         )
 
         self.conversation_score = discord.ui.TextInput(
-            label="トーク力",
-            placeholder="1～10",
+            label=member_texts.INPUT_TALK,
+            placeholder=member_texts.EVALUATION_PLACEHOLDER_SCORE,
             required=True,
             max_length=2
         )
 
         self.charm_score = discord.ui.TextInput(
-            label="個性/魅力",
-            placeholder="1～10",
+            label=member_texts.INPUT_CHARM,
+            placeholder=member_texts.EVALUATION_PLACEHOLDER_SCORE,
             required=True,
             max_length=2
         )
 
         self.overall_score = discord.ui.TextInput(
-            label="総合評価",
-            placeholder="1～5",
+            label=member_texts.INPUT_OVERALL,
+            placeholder=member_texts.EVALUATION_PLACEHOLDER_OVERALL,
             required=True,
             max_length=1
         )
 
         self.note = discord.ui.TextInput(
-            label="コメント",
-            placeholder="任意",
+            label=member_texts.INPUT_NOTE,
+            placeholder=member_texts.INPUT_NOTE_PLACEHOLDER,
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=500
@@ -336,13 +362,13 @@ class EvaluationModal(discord.ui.Modal):
             overall_score = int(self.overall_score.value)
 
         except ValueError:
-            await interaction.response.send_message("数字で入力してください。",ephemeral=True)
+            await interaction.response.send_message(member_texts.INPUT_NOT_NUMBER,ephemeral=True)
             return
 
         trial_member_cog = interaction.client.get_cog("TrialMember")
 
         if trial_member_cog is None:
-            await interaction.response.send_message("管理機能を取得失敗。",ephemeral=True)
+            await interaction.response.send_message(member_texts.COG_NOT_FOUND,ephemeral=True)
             return
 
         note = self.note.value.strip() or None
@@ -364,7 +390,7 @@ class EvaluationModal(discord.ui.Modal):
 class CommentUserSelect(discord.ui.UserSelect):
     def __init__(self):
         super().__init__(
-            placeholder="追記する精霊を選択",
+            placeholder=member_texts.COMMENT_SELECT_PLACEHOLDER,
             min_values=1,
             max_values=1,
             custom_id="comment_user_select"
@@ -376,7 +402,7 @@ class CommentUserSelect(discord.ui.UserSelect):
         trial_member_role = interaction.guild.get_role(config.ROLE_TRIAL_MEMBER)
 
         if (trial_member_role is None or trial_member_role not in member.roles):
-            await interaction.response.send_message("精霊を選択してください。",ephemeral=True)
+            await interaction.response.send_message(member_texts.SELECT_TRIAL_MEMBER,ephemeral=True)
             return
 
         await interaction.response.send_modal(CommentModal(member))
@@ -394,41 +420,45 @@ class CommentUserSelectView(discord.ui.View):
 # ==========================================
 class CommentModal(discord.ui.Modal):
     def __init__(self,member: discord.Member):
-        super().__init__(title=f"{member.display_name} への追記")
+        super().__init__(
+            title=member_texts.COMMENT_MODAL_TITLE.format(
+                name=member.display_name
+            )
+        )
 
         self.member = member
 
         self.voice_score = discord.ui.TextInput(
-            label="声/音質",
-            placeholder="変更する場合のみ1～10で入力",
+            label=member_texts.INPUT_VOICE,
+            placeholder=member_texts.COMMENT_PLACEHOLDER_SCORE,
             required=False,
             max_length=2
         )
 
         self.conversation_score = discord.ui.TextInput(
-            label="トーク力",
-            placeholder="変更する場合のみ1～10で入力",
+            label=member_texts.INPUT_TALK,
+            placeholder=member_texts.COMMENT_PLACEHOLDER_SCORE,
             required=False,
             max_length=2
         )
 
         self.charm_score = discord.ui.TextInput(
-            label="個性/魅力",
-            placeholder="変更する場合のみ1～10で入力",
+            label=member_texts.INPUT_CHARM,
+            placeholder=member_texts.COMMENT_PLACEHOLDER_SCORE,
             required=False,
             max_length=2
         )
 
         self.overall_score = discord.ui.TextInput(
-            label="総合評価",
-            placeholder="変更する場合のみ1～5で入力",
+            label=member_texts.INPUT_OVERALL,
+            placeholder=member_texts.COMMENT_PLACEHOLDER_OVERALL,
             required=False,
             max_length=1
         )
 
         self.note = discord.ui.TextInput(
-            label="コメント",
-            placeholder="任意",
+            label=member_texts.INPUT_NOTE,
+            placeholder=member_texts.INPUT_NOTE_PLACEHOLDER,
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=500
@@ -461,7 +491,7 @@ class CommentModal(discord.ui.Modal):
                 overall_score = int(self.overall_score.value.strip())
 
         except ValueError:
-            await interaction.response.send_message("数字で入力してください。",ephemeral=True)
+            await interaction.response.send_message(member_texts.INPUT_NOT_NUMBER,ephemeral=True)
             return
 
         note = self.note.value.strip() or None
@@ -469,7 +499,7 @@ class CommentModal(discord.ui.Modal):
         trial_member_cog = interaction.client.get_cog("TrialMember")
 
         if trial_member_cog is None:
-            await interaction.response.send_message("管理機能を取得失敗。",ephemeral=True)
+            await interaction.response.send_message(member_texts.COG_NOT_FOUND,ephemeral=True)
             return
 
         await trial_member_cog.execute_comment(
@@ -523,7 +553,7 @@ class TrialMemberEndSurveyView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="👍 一番印象の良い天使",
+        label=member_texts.SURVEY_BUTTON_GOOD_EVALUATOR,
         style=discord.ButtonStyle.primary,
         custom_id="trial_member_end_survey:good_evaluator"
     )
@@ -537,13 +567,13 @@ class TrialMemberEndSurveyView(discord.ui.View):
             guild = interaction.client.get_guild(config.GUILD_ID)
 
         if guild is None:
-            await interaction.followup.send("サーバー情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(common_texts.GUILD_NOT_FOUND,ephemeral=True)
             return
 
         evaluator_role = guild.get_role(config.ROLE_EVALUATOR)
 
         if evaluator_role is None:
-            await interaction.followup.send("天使ロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(member_texts.SURVEY_EVALUATOR_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         evaluators = [
@@ -553,17 +583,17 @@ class TrialMemberEndSurveyView(discord.ui.View):
         ]
 
         if not evaluators:
-            await interaction.followup.send("現在天使が登録されていません。",ephemeral=True)
+            await interaction.followup.send(member_texts.SURVEY_NO_EVALUATOR,ephemeral=True)
             return
 
         await interaction.followup.send(
-            "一番印象の良い天使を選択してください。",
+            member_texts.SURVEY_SELECT_PROMPT,
             view=EvaluatorSelectView(evaluators),
             ephemeral=True
         )
 
     @discord.ui.button(
-        label="⏭ スキップ",
+        label=member_texts.SURVEY_BUTTON_SKIP,
         style=discord.ButtonStyle.gray,
         custom_id="trial_member_end_survey:skip"
     )
@@ -572,10 +602,10 @@ class TrialMemberEndSurveyView(discord.ui.View):
         trial_member_end_survey = get_trial_member_end_survey(interaction.user.id)
 
         if trial_member_end_survey is None:
-            await interaction.response.send_message("このアンケートは終了しています。",ephemeral=True)
+            await interaction.response.send_message(member_texts.SURVEY_FINISHED,ephemeral=True)
             return
 
-        await interaction.response.send_message("アンケートをスキップしました。",ephemeral=True)
+        await interaction.response.send_message(member_texts.SURVEY_SKIPPED,ephemeral=True)
 
         await remove_trial_member_end_survey(interaction)
 
@@ -595,7 +625,7 @@ class EvaluatorSelect(discord.ui.Select):
         ]
 
         super().__init__(
-            placeholder="天使を選択",
+            placeholder=member_texts.SURVEY_SELECT_PLACEHOLDER,
             options=options,
             min_values=1,
             max_values=1
@@ -606,7 +636,7 @@ class EvaluatorSelect(discord.ui.Select):
         trial_member_end_survey = get_trial_member_end_survey(interaction.user.id)
 
         if trial_member_end_survey is None:
-            await interaction.response.send_message("このアンケートは終了しています。",ephemeral=True)
+            await interaction.response.send_message(member_texts.SURVEY_FINISHED,ephemeral=True)
             return
 
         evaluator_id = int(self.values[0])
@@ -646,7 +676,10 @@ class EvaluatorSelectView(discord.ui.View):
 # ==========================================
 class EvaluatorPrevButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="◀ 前",style=discord.ButtonStyle.secondary)
+        super().__init__(
+            label=member_texts.PAGE_PREVIOUS,
+            style=discord.ButtonStyle.secondary
+        )
 
     async def callback(self,interaction: discord.Interaction):
 
@@ -658,7 +691,10 @@ class EvaluatorPrevButton(discord.ui.Button):
 
 class EvaluatorNextButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="次 ▶",style=discord.ButtonStyle.secondary)
+        super().__init__(
+            label=member_texts.PAGE_NEXT,
+            style=discord.ButtonStyle.secondary
+        )
 
     async def callback(self,interaction: discord.Interaction):
 
@@ -671,14 +707,14 @@ class EvaluatorNextButton(discord.ui.Button):
 # ==========================================
 # 天使アンケート
 # ==========================================
-class EvaluatorReviewModal(discord.ui.Modal,title="天使アンケート"):
+class EvaluatorReviewModal(discord.ui.Modal,title=member_texts.SURVEY_MODAL_TITLE):
     def __init__(self,evaluator_id: int):
         super().__init__()
 
         self.evaluator_id = evaluator_id
 
     comment = discord.ui.TextInput(
-        label="理由（任意）",
+        label=member_texts.SURVEY_MODAL_LABEL,
         required=False,
         style=discord.TextStyle.paragraph,
         max_length=500
@@ -689,7 +725,7 @@ class EvaluatorReviewModal(discord.ui.Modal,title="天使アンケート"):
         trial_member_end_survey = get_trial_member_end_survey(interaction.user.id)
 
         if trial_member_end_survey is None:
-            await interaction.response.send_message("このアンケートは終了しています。",ephemeral=True)
+            await interaction.response.send_message(member_texts.SURVEY_FINISHED,ephemeral=True)
             return
 
         guild = interaction.client.get_guild(config.GUILD_ID)
@@ -712,17 +748,19 @@ class EvaluatorReviewModal(discord.ui.Modal,title="天使アンケート"):
                 evaluator_text = (
                     evaluator.mention
                     if evaluator
-                    else f"ID: {self.evaluator_id}"
+                    else member_texts.SURVEY_LOG_EVALUATOR_ID.format(
+                        evaluator_id=self.evaluator_id
+                    )
                 )
 
-                comment_text = comment or "なし"
+                comment_text = comment or member_texts.NOTE_EMPTY
 
                 embed = discord.Embed(
-                    title="アンケート回答",
-                    description=(
-                        f"回答者：{interaction.user.mention}\n"
-                        f"対象：{evaluator_text}\n"
-                        f"理由：{comment_text}"
+                    title=member_texts.SURVEY_LOG_TITLE,
+                    description=member_texts.SURVEY_LOG_BODY.format(
+                        user=interaction.user.mention,
+                        evaluator=evaluator_text,
+                        comment=comment_text
                     ),
                     color=config.COLOR_GOLD
                 )
@@ -731,6 +769,6 @@ class EvaluatorReviewModal(discord.ui.Modal,title="天使アンケート"):
 
                 await channel.send(embed=embed)
 
-        await interaction.response.send_message("回答ありがとうございました。",ephemeral=True)
+        await interaction.response.send_message(member_texts.SURVEY_THANKS,ephemeral=True)
 
         await remove_trial_member_end_survey(interaction)

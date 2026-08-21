@@ -15,6 +15,8 @@ from database.ranking import (
     get_invite_ranking,
     get_evaluator_review_ranking
 )
+from texts import common as common_texts
+from texts import member as member_texts
 
 
 logger = logging.getLogger(__name__)
@@ -31,13 +33,15 @@ class Ranking(commands.Cog):
 
         rankings = get_balance_ranking()
 
-        title = (
-            f"{role.name} coinランキング"
-            if role
-            else "coinランキング"
-        )
+        title = self.build_ranking_title(member_texts.RANKING_TITLE_COIN,role)
 
-        return await self.build_ranking_embed(guild,rankings,title,"coin",role)
+        return await self.build_ranking_embed(
+            guild,
+            rankings,
+            title,
+            member_texts.RANKING_UNIT_COIN,
+            role
+        )
 
     # ==================================================
     # 招待ptランキング
@@ -46,13 +50,15 @@ class Ranking(commands.Cog):
 
         rankings = get_invite_ranking()
 
-        title = (
-            f"{role.name} 招待ptランキング"
-            if role
-            else "招待ptランキング"
-        )
+        title = self.build_ranking_title(member_texts.RANKING_TITLE_INVITE,role)
 
-        return await self.build_ranking_embed(guild,rankings,title,"pt",role)
+        return await self.build_ranking_embed(
+            guild,
+            rankings,
+            title,
+            member_texts.RANKING_UNIT_POINT,
+            role
+        )
 
     # ==================================================
     # 通話時間ランキング
@@ -61,17 +67,15 @@ class Ranking(commands.Cog):
 
         rankings = get_vc_ranking(monthly=monthly)
         if monthly:
-            title = (
-                f"{role.name} 通話時間ランキング（今月）"
-                if role
-                else "通話時間ランキング（今月）"
+            title = self.build_ranking_title(
+                member_texts.RANKING_TITLE_VC_MONTHLY,
+                role
             )
 
         else:
-            title = (
-                f"{role.name} 通話時間ランキング（累計）"
-                if role
-                else "通話時間ランキング（累計）"
+            title = self.build_ranking_title(
+                member_texts.RANKING_TITLE_VC_TOTAL,
+                role
             )
 
         return await self.build_ranking_embed(guild,rankings,title,"TIME",role)
@@ -84,20 +88,24 @@ class Ranking(commands.Cog):
         rankings = get_xp_ranking(monthly=monthly)
 
         if monthly:
-            title = (
-                f"{role.name} XPランキング（今月）"
-                if role
-                else "XPランキング（今月）"
+            title = self.build_ranking_title(
+                member_texts.RANKING_TITLE_XP_MONTHLY,
+                role
             )
 
         else:
-            title = (
-                f"{role.name} XPランキング（累計）"
-                if role
-                else "XPランキング（累計）"
+            title = self.build_ranking_title(
+                member_texts.RANKING_TITLE_XP_TOTAL,
+                role
             )
 
-        return await self.build_ranking_embed(guild,rankings,title,"XP",role)
+        return await self.build_ranking_embed(
+            guild,
+            rankings,
+            title,
+            member_texts.RANKING_UNIT_XP,
+            role
+        )
 
     # ==================================================
     # アンケートランキング
@@ -110,8 +118,8 @@ class Ranking(commands.Cog):
         if evaluator_role is None:
 
             embed = discord.Embed(
-                title="アンケートランキング",
-                description="天使が見つかりません。",
+                title=member_texts.RANKING_TITLE_SURVEY,
+                description=member_texts.RANKING_NO_EVALUATOR,
                 color=config.COLOR_GOLD
             )
 
@@ -145,13 +153,29 @@ class Ranking(commands.Cog):
             )
         )
 
-        title = (
-            f"{role.name} アンケートランキング"
-            if role
-            else "アンケートランキング"
+        title = self.build_ranking_title(member_texts.RANKING_TITLE_SURVEY,role)
+
+        return await self.build_ranking_embed(
+            guild,
+            ranking_list,
+            title,
+            member_texts.RANKING_UNIT_VOTE,
+            role
         )
 
-        return await self.build_ranking_embed(guild,ranking_list,title,"票",role)
+    # ==================================================
+    # ランキング表題作成
+    # ==================================================
+    def build_ranking_title(self,title,role=None):
+        """ロールを指定したときだけ、表題の前にロール名を付ける。"""
+
+        if role is None:
+            return title
+
+        return member_texts.RANKING_TITLE_WITH_ROLE.format(
+            role=role.name,
+            title=title
+        )
 
     # ==================================================
     # ランキングEmbed作成
@@ -162,12 +186,12 @@ class Ranking(commands.Cog):
         lines = []
         rank = 1
 
-        formatters = {"TIME": lambda v: format_time(v),"XP": lambda v: f"{v:,} XP"}
+        formatters = {"TIME": lambda v: format_time(v)}
 
         for user_id, value in rankings:
 
             # アンケート以外は0を表示しない
-            if suffix != "票" and value == 0:
+            if suffix != member_texts.RANKING_UNIT_VOTE and value == 0:
                 continue
 
             member = guild.get_member(int(user_id))
@@ -185,9 +209,21 @@ class Ranking(commands.Cog):
             if role and role not in member.roles:
                 continue
 
-            value_text = formatters.get(suffix,lambda v: f"{v:,} {suffix}")(value)
+            value_text = formatters.get(
+                suffix,
+                lambda v: member_texts.RANKING_VALUE.format(
+                    value=f"{v:,}",
+                    unit=suffix
+                )
+            )(value)
 
-            lines.append(f"{rank}位 {value_text} {member.mention}")
+            lines.append(
+                member_texts.RANKING_LINE.format(
+                    rank=rank,
+                    value=value_text,
+                    user=member.mention
+                )
+            )
 
             rank += 1
 
@@ -200,7 +236,7 @@ class Ranking(commands.Cog):
             pages.append(lines)
 
         if not pages:
-            pages.append(["対象者が見つかりません。"])
+            pages.append([member_texts.RANKING_EMPTY])
 
         embeds = []
 
@@ -210,7 +246,7 @@ class Ranking(commands.Cog):
                 title=(
                     title
                     if i == 0
-                    else f"{title}（続き）"
+                    else member_texts.RANKING_TITLE_CONTINUED.format(title=title)
                 ),
                 description="\n".join(page),
                 color=config.COLOR_GOLD
@@ -249,7 +285,7 @@ class Ranking(commands.Cog):
         allowed_roles = config.ROLE_GROUP_MANAGEMENT
 
         if not any(user_role.id in allowed_roles for user_role in interaction.user.roles):
-            await interaction.response.send_message("権限がありません。",ephemeral=True)
+            await interaction.response.send_message(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)

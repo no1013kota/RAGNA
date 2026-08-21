@@ -8,7 +8,9 @@ import os
 
 from dotenv import load_dotenv
 
+from texts import hotel as hotel_texts
 from texts import panels as panel_texts
+from texts import ticket as ticket_texts
 
 
 load_dotenv()
@@ -104,25 +106,26 @@ PERMISSION_CLASS_MANAGEMENT = [ROLE_MANAGER, ROLE_EVALUATION_MANAGER]
 PERMISSION_INVITE_REWARD = [ROLE_MANAGER, ROLE_EVALUATION_MANAGER]
 
 # お問い合わせ設定
+# 窓口の名前と説明は texts/ticket.py が正。ここでは対応するロールだけを決めます。
 TICKET_TYPES = {
     "manager": {
-        "name": "運営宛",
-        "description": "運営への相談・対応が必要な場合",
+        "name": ticket_texts.TYPE_MANAGER_NAME,
+        "description": ticket_texts.TYPE_MANAGER_DESCRIPTION,
         "roles": [ROLE_MANAGER],
     },
     "general": {
-        "name": "総合窓口",
-        "description": "問い合わせ先に迷った場合はこちら",
+        "name": ticket_texts.TYPE_GENERAL_NAME,
+        "description": ticket_texts.TYPE_GENERAL_DESCRIPTION,
         "roles": [ROLE_MANAGER, ROLE_SUB_MANAGER],
     },
     "report": {
-        "name": "通報",
-        "description": "規約違反・迷惑行為などの報告",
+        "name": ticket_texts.TYPE_REPORT_NAME,
+        "description": ticket_texts.TYPE_REPORT_DESCRIPTION,
         "roles": [ROLE_MANAGER],
     },
     "evaluation": {
-        "name": "精霊・世界樹",
-        "description": "精霊・評価・世界樹に関する相談",
+        "name": ticket_texts.TYPE_EVALUATION_NAME,
+        "description": ticket_texts.TYPE_EVALUATION_DESCRIPTION,
         "roles": [ROLE_MANAGER, ROLE_EVALUATION_MANAGER],
     },
 }
@@ -247,10 +250,24 @@ HOTEL_DENY_ROLES = [
 
 HOTEL_FREE_ROLES = ROLE_GROUP_MEMBER  # 本メンバー以上
 
+# プラン名は texts/hotel.py が正。ここで文字列を書くと二重管理になり、
+# プラン名を変えたときに料金が引けなくなるため、必ず定数で参照します。
 HOTEL_PLANS = {
-    "ツーショ": {"price": HOTEL_STANDARD_PRICE, "limit": 2, "default_private": False},
-    "シークレット": {"price": HOTEL_SECRET_PRICE, "limit": 2, "default_private": True},
-    "プレミアム": {"price": HOTEL_PREMIUM_PRICE, "limit": 0, "default_private": True},
+    hotel_texts.PLAN_STANDARD: {
+        "price": HOTEL_STANDARD_PRICE,
+        "limit": 2,
+        "default_private": False,
+    },
+    hotel_texts.PLAN_SECRET: {
+        "price": HOTEL_SECRET_PRICE,
+        "limit": 2,
+        "default_private": True,
+    },
+    hotel_texts.PLAN_PREMIUM: {
+        "price": HOTEL_PREMIUM_PRICE,
+        "limit": 0,
+        "default_private": True,
+    },
 }
 
 # ==================================================

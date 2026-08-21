@@ -35,10 +35,56 @@ from database.trial_member import (
     clear_trial_member_evaluations,
 )
 from utils import ensure_panel_message
+from texts import common as common_texts
+from texts import member as member_texts
 from texts import panels as panel_texts
 
 
 logger = logging.getLogger(__name__)
+
+
+# ==================================================
+# 評価・追記・評価シートで共通の表示
+# ==================================================
+def build_evaluation_lines(
+    voice_score: int | None,
+    conversation_score: int | None,
+    charm_score: int | None,
+    overall_score: int | None,
+    note: str | None,
+    *,
+    show_empty_note: bool = False,
+) -> list[str]:
+    """「【項目】結果」の行を作る。入力されていない項目は並べない。
+
+    ``show_empty_note`` が真のときは、コメントが空でも「なし」と書きます。
+    """
+
+    lines = []
+
+    if voice_score is not None:
+        lines.append(member_texts.EVALUATION_LINE_VOICE.format(score=voice_score))
+
+    if conversation_score is not None:
+        lines.append(
+            member_texts.EVALUATION_LINE_TALK.format(score=conversation_score)
+        )
+
+    if charm_score is not None:
+        lines.append(member_texts.EVALUATION_LINE_CHARM.format(score=charm_score))
+
+    if overall_score is not None:
+        lines.append(member_texts.EVALUATION_LINE_OVERALL.format(score=overall_score))
+
+    if note:
+        lines.append(member_texts.EVALUATION_LINE_NOTE.format(note=note))
+
+    elif show_empty_note:
+        lines.append(
+            member_texts.EVALUATION_LINE_NOTE.format(note=member_texts.NOTE_EMPTY)
+        )
+
+    return lines
 
 
 class TrialMember(commands.Cog):
@@ -107,12 +153,12 @@ class TrialMember(commands.Cog):
 
         guild = interaction.guild
         if guild is None:
-            await interaction.followup.send("サーバー情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(common_texts.GUILD_NOT_FOUND,ephemeral=True)
             return
 
         # Botは対象外
         if user.bot:
-            await interaction.followup.send("Botは選択できません。",ephemeral=True)
+            await interaction.followup.send(member_texts.SUMMON_BOT,ephemeral=True)
             return
 
         # ロール取得
@@ -134,12 +180,12 @@ class TrialMember(commands.Cog):
 
         # 評価落ちは召喚不可
         if (demoted_role is not None and demoted_role in user.roles):
-            await interaction.followup.send("魔物は返済するまで精霊になれません。",ephemeral=True)
+            await interaction.followup.send(member_texts.SUMMON_DEMOTED,ephemeral=True)
             return
 
         # すでに仮メンバーとしてDB登録されている場合
         if get_trial_member(user.id) is not None:
-            await interaction.followup.send("対象者はすでに精霊として登録されています。",ephemeral=True)
+            await interaction.followup.send(member_texts.SUMMON_ALREADY,ephemeral=True)
             return
 
         # クラス確認
@@ -147,7 +193,7 @@ class TrialMember(commands.Cog):
 
         if class_name not in ["A", "B", "C"]:
             await interaction.followup.send(
-                "クラスは A・B・C のいずれかで入力してください。",
+                member_texts.SUMMON_CLASS_INVALID,
                 ephemeral=True
             )
             return
@@ -162,11 +208,14 @@ class TrialMember(commands.Cog):
         selected_class_role = class_roles[class_name]
 
         if trial_member_role is None:
-            await interaction.followup.send("精霊ロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(member_texts.TRIAL_MEMBER_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         if selected_class_role is None:
-            await interaction.followup.send(f"{class_name}クラスロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(
+                member_texts.CLASS_ROLE_NOT_FOUND.format(class_name=class_name),
+                ephemeral=True
+            )
             return
 
         # 召喚日・転生日
@@ -188,11 +237,11 @@ class TrialMember(commands.Cog):
 
         except discord.HTTPException as e:
             logger.warning(f"召喚時の評価スレッド作成失敗：{user.id} / {e}")
-            await interaction.followup.send("評価スレッドの作成に失敗しました。",ephemeral=True)
+            await interaction.followup.send(member_texts.SUMMON_THREAD_FAILED,ephemeral=True)
             return
 
         if thread_id is None:
-            await interaction.followup.send("評価フォーラムが見つかりません。",ephemeral=True)
+            await interaction.followup.send(member_texts.SUMMON_FORUM_NOT_FOUND,ephemeral=True)
             return
 
         # 召喚前に削除するロール
@@ -250,7 +299,7 @@ class TrialMember(commands.Cog):
                 except discord.HTTPException:
                     pass
 
-            await interaction.followup.send("ロールの変更に失敗しました。",ephemeral=True)
+            await interaction.followup.send(member_texts.SUMMON_ROLE_FAILED,ephemeral=True)
             return
 
         # DB登録
@@ -271,21 +320,22 @@ class TrialMember(commands.Cog):
         if is_interviewing:
             add_balance(user.id,config.START_COIN)
 
-            start_type = "召喚"
-            coin_text = f"\n初期所持金：{config.START_COIN:,} coin"
+            start_type = member_texts.SUMMON_TYPE_FIRST
+            coin_text = member_texts.SUMMON_COIN_GRANTED.format(
+                coin=f"{config.START_COIN:,}"
+            )
 
         else:
-            start_type = "再召喚"
-            coin_text = "\n初期所持金の再付与はありません。"
+            start_type = member_texts.SUMMON_TYPE_AGAIN
+            coin_text = member_texts.SUMMON_COIN_SKIPPED
 
         await interaction.followup.send(
-            (
-                f"{user.mention} を"
-                f" **{class_name}クラス**へ"
-                f"{start_type}させました。\n"
-                f"転生予定："
-                f"{end_date.strftime('%Y/%m/%d')}"
-                f"{coin_text}"
+            member_texts.SUMMON_DONE.format(
+                user=user.mention,
+                class_name=class_name,
+                start_type=start_type,
+                end_date=end_date.strftime('%Y/%m/%d'),
+                coin_text=coin_text
             ),
             ephemeral=True
         )
@@ -363,15 +413,17 @@ class TrialMember(commands.Cog):
         intro_text = (
             intro_url
             if intro_url
-            else "未登録"
+            else common_texts.UNSET
         )
 
         embed = discord.Embed(
-            description=(
-                f"{member.mention}\n\n"
-                f"【召喚日】{start_date.strftime('%Y/%m/%d')}\n"
-                f"【転生予定】{end_date.strftime('%Y/%m/%d')}\n"
-                f"{intro_text}"
+            description=member_texts.THREAD_BODY.format(
+                user=member.mention,
+                start_date=start_date.strftime('%Y/%m/%d'),
+                end_date_line=member_texts.THREAD_END_DATE_LINE.format(
+                    end_date=end_date.strftime('%Y/%m/%d')
+                ),
+                intro=intro_text
             ),
             color=config.COLOR_WHITE
         )
@@ -408,13 +460,13 @@ class TrialMember(commands.Cog):
 
                 if message.content or message.attachments:
 
-                    text = (
-                        f"【{message.author.display_name}】\n"
-                        f"{message.content}"
+                    text = member_texts.EVALUATION_COPY_MESSAGE.format(
+                        author=message.author.display_name,
+                        content=message.content
                     )
 
                     if len(text) > 1900:
-                        text = text[:1900] + "\n...(省略)"
+                        text = text[:1900] + member_texts.EVALUATION_COPY_TRUNCATED
 
                     files = []
 
@@ -462,7 +514,9 @@ class TrialMember(commands.Cog):
         }
 
         channel = await evaluator.guild.create_text_channel(
-            name=f"評価シート-{evaluator.display_name}",
+            name=member_texts.EVALUATOR_SHEET_CHANNEL_NAME.format(
+                name=evaluator.display_name
+            ),
             category=category,
             overwrites=overwrites
         )
@@ -493,25 +547,22 @@ class TrialMember(commands.Cog):
             color=config.COLOR_BLUE
         )
         embed.set_footer(
-            text=f"{trial_member.display_name} / @{trial_member.name}"
+            text=member_texts.FOOTER_NAME.format(
+                display_name=trial_member.display_name,
+                name=trial_member.name
+            )
         )
 
         lines = [f"{trial_member.mention}\n"]
-
-        if voice_score is not None:
-            lines.append(f"【声/音質】{voice_score}")
-
-        if communication_score is not None:
-            lines.append(f"【トーク力】{communication_score}")
-
-        if charm_score is not None:
-            lines.append(f"【個性/魅力】{charm_score}")
-
-        if overall_score is not None:
-            lines.append(f"【総合評価】{overall_score}")
-
-        if note:
-            lines.append(f"【コメント】{note}")
+        lines.extend(
+            build_evaluation_lines(
+                voice_score,
+                communication_score,
+                charm_score,
+                overall_score,
+                note
+            )
+        )
 
         embed.description = "\n".join(lines)
         embed.set_thumbnail(url=trial_member.display_avatar.url)
@@ -559,9 +610,13 @@ class TrialMember(commands.Cog):
         embed = starter.embeds[0].copy()
         lines = embed.description.split("\n")
 
+        end_date_prefix = member_texts.THREAD_END_DATE_LINE.format(end_date="")
+
         for i, line in enumerate(lines):
-            if line.startswith("【転生予定】"):
-                lines[i] = f"【転生予定】{end_text}"
+            if line.startswith(end_date_prefix):
+                lines[i] = member_texts.THREAD_END_DATE_LINE.format(
+                    end_date=end_text
+                )
 
         embed.description = "\n".join(lines)
 
@@ -586,7 +641,7 @@ class TrialMember(commands.Cog):
 
         # 評価権限確認
         if not self.is_evaluator(interaction.user):
-            await interaction.followup.send("評価権限がありません。",ephemeral=True)
+            await interaction.followup.send(member_texts.EVALUATION_NO_PERMISSION,ephemeral=True)
             return
 
         # 点数確認
@@ -595,31 +650,31 @@ class TrialMember(commands.Cog):
             or not 1 <= conversation_score <= 10
             or not 1 <= charm_score <= 10
         ):
-            await interaction.followup.send("条件に沿って入力してください。",ephemeral=True)
+            await interaction.followup.send(member_texts.SCORE_OUT_OF_RANGE,ephemeral=True)
             return
 
         if not 1 <= overall_score <= 5:
-            await interaction.followup.send("総合評価は1～5で入力してください。",ephemeral=True)
+            await interaction.followup.send(member_texts.OVERALL_OUT_OF_RANGE,ephemeral=True)
             return
 
         # 評価対象確認
         trial_member = get_trial_member(member.id)
 
         if trial_member is None:
-            await interaction.followup.send("対象者は精霊として登録されていません。",ephemeral=True)
+            await interaction.followup.send(member_texts.NOT_REGISTERED,ephemeral=True)
             return
 
         trial_member_class = trial_member[1]
 
         if not self.can_evaluate_trial_member(interaction.user,trial_member_class):
-            await interaction.followup.send("この精霊は評価できません。",ephemeral=True)
+            await interaction.followup.send(member_texts.EVALUATION_CLASS_NOT_ALLOWED,ephemeral=True)
             return
 
         # スレッド取得
         thread_id = get_trial_member_thread(member.id)
 
         if thread_id is None:
-            await interaction.followup.send("評価スレッドが見つかりません。",ephemeral=True)
+            await interaction.followup.send(member_texts.THREAD_NOT_FOUND,ephemeral=True)
             return
 
         thread = self.bot.get_channel(thread_id)
@@ -629,30 +684,36 @@ class TrialMember(commands.Cog):
                 thread = await self.bot.fetch_channel(thread_id)
 
             except discord.NotFound:
-                await interaction.followup.send("評価スレッドが削除されています。",ephemeral=True)
+                await interaction.followup.send(member_texts.THREAD_DELETED,ephemeral=True)
                 return
 
             except discord.HTTPException:
-                await interaction.followup.send("評価スレッドの取得に失敗しました。",ephemeral=True)
+                await interaction.followup.send(member_texts.THREAD_FETCH_FAILED,ephemeral=True)
                 return
 
         # 評価Embed
         embed = discord.Embed(color=config.COLOR_GREEN)
-        embed.description = (
-            f"{interaction.user.mention}\n\n"
-            f"【声/音質】{voice_score}\n"
-            f"【トーク力】{conversation_score}\n"
-            f"【個性/魅力】{charm_score}\n"
-            f"【総合評価】{overall_score}\n"
-            f"【コメント】{note if note else 'なし'}"
+
+        lines = [f"{interaction.user.mention}\n"]
+        lines.extend(
+            build_evaluation_lines(
+                voice_score,
+                conversation_score,
+                charm_score,
+                overall_score,
+                note,
+                show_empty_note=True
+            )
         )
+
+        embed.description = "\n".join(lines)
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
         try:
             await thread.send(embed=embed)
 
         except discord.HTTPException:
-            await interaction.followup.send("評価スレッドへの送信に失敗しました。",ephemeral=True)
+            await interaction.followup.send(member_texts.THREAD_SEND_FAILED,ephemeral=True)
             return
 
         # DB保存
@@ -682,7 +743,7 @@ class TrialMember(commands.Cog):
         log_channel = await self.send_evaluator_log(
             evaluator=interaction.user,
             trial_member=member,
-            title="評価",
+            title=member_texts.EVALUATION_LOG_TITLE,
             voice_score=voice_score,
             communication_score=conversation_score,
             charm_score=charm_score,
@@ -690,10 +751,12 @@ class TrialMember(commands.Cog):
             note=note
         )
 
-        message = "評価を登録しました。"
+        message = member_texts.EVALUATION_DONE
 
         if log_channel:
-            message += f"\n{log_channel.mention} で内容を確認できます。"
+            message += member_texts.EVALUATION_SHEET_LINK.format(
+                channel=log_channel.mention
+            )
 
         await interaction.followup.send(message,ephemeral=True)
 
@@ -716,7 +779,7 @@ class TrialMember(commands.Cog):
 
         # 追記権限確認
         if not self.is_comment_editor(interaction.user):
-            await interaction.followup.send("追記権限がありません。",ephemeral=True)
+            await interaction.followup.send(member_texts.COMMENT_NO_PERMISSION,ephemeral=True)
             return
 
         # 入力内容確認
@@ -727,7 +790,7 @@ class TrialMember(commands.Cog):
             and overall_score is None
             and not note
         ):
-            await interaction.followup.send("追記内容を1つ以上入力してください。",ephemeral=True)
+            await interaction.followup.send(member_texts.COMMENT_EMPTY,ephemeral=True)
             return
 
         # 点数確認
@@ -736,34 +799,34 @@ class TrialMember(commands.Cog):
             or (conversation_score is not None and not 1 <= conversation_score <= 10)
             or (charm_score is not None and not 1 <= charm_score <= 10)
         ):
-            await interaction.followup.send("条件に沿って入力してください。",ephemeral=True)
+            await interaction.followup.send(member_texts.SCORE_OUT_OF_RANGE,ephemeral=True)
             return
 
         if (
             overall_score is not None
             and not 1 <= overall_score <= 5
         ):
-            await interaction.followup.send("総合評価は1～5で入力してください。",ephemeral=True)
+            await interaction.followup.send(member_texts.OVERALL_OUT_OF_RANGE,ephemeral=True)
             return
 
         # 対象仮メンバー確認
         trial_member = get_trial_member(member.id)
 
         if trial_member is None:
-            await interaction.followup.send("対象者は精霊として登録されていません。",ephemeral=True)
+            await interaction.followup.send(member_texts.NOT_REGISTERED,ephemeral=True)
             return
 
         trial_member_class = trial_member[1]
 
         if not self.can_evaluate_trial_member(interaction.user,trial_member_class):
-            await interaction.followup.send("この精霊には追記できません。",ephemeral=True)
+            await interaction.followup.send(member_texts.COMMENT_CLASS_NOT_ALLOWED,ephemeral=True)
             return
 
         # スレッド取得
         thread_id = get_trial_member_thread(member.id)
 
         if thread_id is None:
-            await interaction.followup.send("評価スレッドが見つかりません。",ephemeral=True)
+            await interaction.followup.send(member_texts.THREAD_NOT_FOUND,ephemeral=True)
             return
 
         thread = self.bot.get_channel(thread_id)
@@ -773,32 +836,26 @@ class TrialMember(commands.Cog):
                 thread = await self.bot.fetch_channel(thread_id)
 
             except discord.NotFound:
-                await interaction.followup.send("評価スレッドが削除されています。",ephemeral=True)
+                await interaction.followup.send(member_texts.THREAD_DELETED,ephemeral=True)
                 return
 
             except discord.HTTPException:
-                await interaction.followup.send("評価スレッドの取得に失敗しました。",ephemeral=True)
+                await interaction.followup.send(member_texts.THREAD_FETCH_FAILED,ephemeral=True)
                 return
 
         # 追記Embed
         embed = discord.Embed(color=config.COLOR_BLUE)
 
         lines = [f"{interaction.user.mention}\n"]
-
-        if voice_score is not None:
-            lines.append(f"【声/音質】{voice_score}")
-
-        if conversation_score is not None:
-            lines.append(f"【トーク力】{conversation_score}")
-
-        if charm_score is not None:
-            lines.append(f"【個性/魅力】{charm_score}")
-
-        if overall_score is not None:
-            lines.append(f"【総合評価】{overall_score}")
-
-        if note:
-            lines.append(f"【コメント】{note}")
+        lines.extend(
+            build_evaluation_lines(
+                voice_score,
+                conversation_score,
+                charm_score,
+                overall_score,
+                note
+            )
+        )
 
         embed.description = "\n".join(lines)
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
@@ -807,7 +864,7 @@ class TrialMember(commands.Cog):
             await thread.send(embed=embed)
 
         except discord.HTTPException:
-            await interaction.followup.send("評価スレッドへの送信に失敗しました。",ephemeral=True)
+            await interaction.followup.send(member_texts.THREAD_SEND_FAILED,ephemeral=True)
             return
 
         # DB保存
@@ -837,7 +894,7 @@ class TrialMember(commands.Cog):
         log_channel = await self.send_evaluator_log(
             evaluator=interaction.user,
             trial_member=member,
-            title="追記",
+            title=member_texts.COMMENT_LOG_TITLE,
             voice_score=voice_score,
             communication_score=conversation_score,
             charm_score=charm_score,
@@ -845,10 +902,12 @@ class TrialMember(commands.Cog):
             note=note
         )
 
-        message = "追記を登録しました。"
+        message = member_texts.COMMENT_DONE
 
         if log_channel:
-            message += f"\n{log_channel.mention} で内容を確認できます。"
+            message += member_texts.EVALUATION_SHEET_LINK.format(
+                channel=log_channel.mention
+            )
 
         await interaction.followup.send(message,ephemeral=True)
 
@@ -907,7 +966,10 @@ class TrialMember(commands.Cog):
         # 保存スレッド作成
         try:
             archive_thread, _ = await archive_forum.create_thread(
-                name=f"{member.display_name}/{member.name}",
+                name=member_texts.TRIAL_ARCHIVE_THREAD_NAME.format(
+                    display_name=member.display_name,
+                    name=member.name
+                ),
                 content="\u200b"
             )
 
@@ -975,10 +1037,10 @@ class TrialMember(commands.Cog):
         trial_member_class = trial_member_data[0]
 
         archive_embed = discord.Embed(
-            title="評価落ち移行",
-            description=(
-                f"対象者：{member.mention}\n"
-                f"クラス：**{trial_member_class}クラス**"
+            title=member_texts.DEMOTED_ARCHIVE_TITLE,
+            description=member_texts.DEMOTED_ARCHIVE_BODY.format(
+                user=member.mention,
+                class_name=trial_member_class
             ),
             color=config.COLOR_RED
         )
@@ -1008,7 +1070,7 @@ class TrialMember(commands.Cog):
         self,
         member: discord.Member,
         executor: discord.Member | None = None,
-        reason: str = "自動転生",
+        reason: str = member_texts.TRIAL_END_REASON_AUTO,
         is_leave: bool = False
     ):
         guild = member.guild
@@ -1088,13 +1150,8 @@ class TrialMember(commands.Cog):
                 expires_at = datetime.now() + timedelta(days=3)
 
                 embed = discord.Embed(
-                    title="アンケート",
-                    description=(
-                        "今後の運営改善のため、\n"
-                        "簡単なアンケートにご協力ください。\n\n"
-                        "※回答期限：3日\n"
-                        "※回答結果は運営が保管しています"
-                    ),
+                    title=member_texts.SURVEY_TITLE,
+                    description=member_texts.SURVEY_BODY,
                     color=config.COLOR_WHITE
                 )
 
@@ -1120,13 +1177,13 @@ class TrialMember(commands.Cog):
             log_channel = guild.get_channel(config.CHANNEL_TRIAL_MEMBER_END_LOG)
 
             if log_channel:
-                description = (
-                    f"対象者：{member.mention}\n"
-                    f"理由：{reason}"
+                description = member_texts.TRIAL_END_LOG_BODY.format(
+                    user=member.mention,
+                    reason=reason
                 )
 
                 embed = discord.Embed(
-                    title="転生",
+                    title=member_texts.TRIAL_END_LOG_TITLE,
                     description=description,
                     color=config.COLOR_BLUE
                 )
@@ -1159,7 +1216,9 @@ class TrialMember(commands.Cog):
         if channel is None:
             return
 
-        new_name = f"評価シート-{after.display_name}"
+        new_name = member_texts.EVALUATOR_SHEET_CHANNEL_NAME.format(
+            name=after.display_name
+        )
 
         if channel.name != new_name:
             try:
@@ -1181,7 +1240,7 @@ class TrialMember(commands.Cog):
 
         await self.execute_trial_member_end(
             member=member,
-            reason="サーバー脱退",
+            reason=member_texts.TRIAL_END_REASON_LEAVE,
             is_leave=True
         )
 
@@ -1221,7 +1280,7 @@ class TrialMember(commands.Cog):
             try:
                 await self.execute_trial_member_end(
                     member=member,
-                    reason="自動転生"
+                    reason=member_texts.TRIAL_END_REASON_AUTO
                 )
             except Exception:
                 # 1人の失敗で他の対象者や次回の定期確認まで停止させない。
@@ -1285,16 +1344,8 @@ class TrialMember(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="評価シート",
-            description=(
-                "\u200b\n"
-                "**評価**\n"
-                "-# 指定した精霊の評価を登録します\n\n"
-                "**追記**\n"
-                "-# 登録済みのスレッドに評価を追記します\n\n"
-                "**評価チェック**\n"
-                "-# 評価可能な精霊をXP順に表示します"
-            ),
+            title=panel_texts.EVALUATION_SHEET,
+            description=member_texts.PANEL_EVALUATION_BODY,
             color=config.COLOR_WHITE
         )
 
@@ -1324,13 +1375,13 @@ class TrialMember(commands.Cog):
         self,
         interaction: discord.Interaction,
         user: discord.Member,
-        reason: str = "転生"
+        reason: str = member_texts.TRIAL_END_REASON_MANUAL
     ):
 
         await interaction.response.defer(ephemeral=True)
 
         if get_trial_member(user.id) is None:
-            await interaction.followup.send("対象者は精霊として登録されていません。",ephemeral=True)
+            await interaction.followup.send(member_texts.NOT_REGISTERED,ephemeral=True)
             return
 
         await self.execute_trial_member_end(
@@ -1339,7 +1390,10 @@ class TrialMember(commands.Cog):
             reason=reason
         )
 
-        await interaction.followup.send(f"{user.mention} をロール変更させました。",ephemeral=True)
+        await interaction.followup.send(
+            member_texts.TRIAL_END_DONE.format(user=user.mention),
+            ephemeral=True
+        )
 
     # ==================================================
     # Cog終了

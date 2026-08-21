@@ -15,6 +15,8 @@ from database.member import (
     set_start_ticket,
 )
 from database.trial_member import extend_trial_member_end_date
+from texts import common as common_texts
+from texts import member as member_texts
 
 
 logger = logging.getLogger(__name__)
@@ -33,13 +35,13 @@ async def send_invite_point_use_log(
         return
 
     embed = discord.Embed(
-        title="招待ポイント使用",
-        description=(
-            f"対象者：{interaction.user.mention}\n"
-            f"特典：**{benefit_name}**\n"
-            f"使用：**{use_points} pt**\n"
-            f"残り：**{remaining_points} pt**\n"
-            f"結果：{result_text}"
+        title=member_texts.INVITE_USE_TITLE,
+        description=member_texts.INVITE_USE_LOG_BODY.format(
+            user=interaction.user.mention,
+            benefit=benefit_name,
+            points=use_points,
+            remaining=remaining_points,
+            result=result_text
         ),
         color=config.COLOR_GREEN
     )
@@ -59,14 +61,14 @@ class InvitePointView(discord.ui.View):
     # ==================================================
     # 招待ポイント確認
     # ==================================================
-    @discord.ui.button(label="pt確認",style=discord.ButtonStyle.primary,custom_id="invite:check")
+    @discord.ui.button(label=member_texts.PANEL_BUTTON_POINT_CHECK,style=discord.ButtonStyle.primary,custom_id="invite:check")
     async def check(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         invite_points = get_invite_points(interaction.user.id)
         embed = discord.Embed(
-            title="招待ポイント確認",
-            description=(
-                f"あなたは **{invite_points:,} pt** です。"
+            title=member_texts.INVITE_CHECK_TITLE,
+            description=member_texts.INVITE_CHECK_BODY.format(
+                points=f"{invite_points:,}"
             ),
             color=config.COLOR_GREEN
         )
@@ -77,12 +79,12 @@ class InvitePointView(discord.ui.View):
     # ==================================================
     # 招待ポイント使用
     # ==================================================
-    @discord.ui.button(label="pt使用",style=discord.ButtonStyle.success,custom_id="invite:use")
+    @discord.ui.button(label=member_texts.PANEL_BUTTON_POINT_USE,style=discord.ButtonStyle.success,custom_id="invite:use")
     async def use(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         invite_points = get_invite_points(interaction.user.id)
         if invite_points <= 0:
-            await interaction.response.send_message("使用できる招待ポイントがありません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.INVITE_NO_POINTS,ephemeral=True)
             return
 
         demoted_role = interaction.guild.get_role(config.ROLE_DEMOTED)
@@ -106,11 +108,11 @@ class InvitePointView(discord.ui.View):
             benefit_type = "associate_member"
 
         if benefit_type is None:
-            await interaction.response.send_message("現在のロールでは招待ポイントを使用できません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.INVITE_ROLE_NOT_ELIGIBLE,ephemeral=True)
             return
 
         await interaction.response.send_message(
-            (f"現在の招待ポイント：**{invite_points:,} pt**"),
+            member_texts.INVITE_USE_PROMPT.format(points=f"{invite_points:,}"),
             view=InviteBenefitView(benefit_type),
             ephemeral=True
         )
@@ -137,13 +139,17 @@ class InviteBenefitSelect(discord.ui.Select):
         if benefit_type == "trial_member":
             options = [
                 discord.SelectOption(
-                    label="精霊期間を延長",
-                    description=(f"1ptにつき精霊期間を{config.INVITE_TRIAL_MEMBER_EXTENSION_DAYS}日延長"),
+                    label=member_texts.BENEFIT_TRIAL_EXTENSION,
+                    description=member_texts.BENEFIT_TRIAL_EXTENSION_DESCRIPTION.format(
+                        days=config.INVITE_TRIAL_MEMBER_EXTENSION_DAYS
+                    ),
                     value="trial_member_extension",
                 ),
                 discord.SelectOption(
-                    label="coinへ交換",
-                    description=(f"1ptにつき{config.INVITE_COIN_REWARD:,} coin"),
+                    label=member_texts.BENEFIT_COIN,
+                    description=member_texts.BENEFIT_COIN_DESCRIPTION.format(
+                        coin=f"{config.INVITE_COIN_REWARD:,}"
+                    ),
                     value="trial_member_coin",
                 )
             ]
@@ -152,13 +158,17 @@ class InviteBenefitSelect(discord.ui.Select):
         elif benefit_type == "member":
             options = [
                 discord.SelectOption(
-                    label="宿屋の無料確率を上げる",
-                    description=(f"1ptにつき無料確率を{config.INVITE_MEMBER_FREE_RATE}% 増加"),
+                    label=member_texts.BENEFIT_HOTEL_RATE,
+                    description=member_texts.BENEFIT_HOTEL_RATE_DESCRIPTION.format(
+                        rate=config.INVITE_MEMBER_FREE_RATE
+                    ),
                     value="member_hotel_rate",
                 ),
                 discord.SelectOption(
-                    label="coinへ交換",
-                    description=(f"1ptにつき{config.INVITE_COIN_REWARD:,} coin"),
+                    label=member_texts.BENEFIT_COIN,
+                    description=member_texts.BENEFIT_COIN_DESCRIPTION.format(
+                        coin=f"{config.INVITE_COIN_REWARD:,}"
+                    ),
                     value="member_coin",
                 )
             ]
@@ -167,13 +177,17 @@ class InviteBenefitSelect(discord.ui.Select):
         elif benefit_type == "associate_member":
             options = [
                 discord.SelectOption(
-                    label="精霊チケット",
-                    description=(f"{config.INVITE_TICKET_COST}ptで確認待ちロールを取得"),
+                    label=member_texts.BENEFIT_TICKET,
+                    description=member_texts.BENEFIT_TICKET_DESCRIPTION.format(
+                        cost=config.INVITE_TICKET_COST
+                    ),
                     value="associate_member_ticket",
                 ),
                 discord.SelectOption(
-                    label="coinへ交換",
-                    description=(f"1ptにつき{config.INVITE_COIN_REWARD:,} coin"),
+                    label=member_texts.BENEFIT_COIN,
+                    description=member_texts.BENEFIT_COIN_DESCRIPTION.format(
+                        coin=f"{config.INVITE_COIN_REWARD:,}"
+                    ),
                     value="associate_member_coin",
                 )
             ]
@@ -182,13 +196,20 @@ class InviteBenefitSelect(discord.ui.Select):
         elif benefit_type == "demoted":
             options = [
                 discord.SelectOption(
-                    label="coinへ交換",
-                    description=(f"1ptにつき{config.INVITE_DEMOTED_COIN_REWARD:,} coin"),
+                    label=member_texts.BENEFIT_COIN,
+                    description=member_texts.BENEFIT_COIN_DESCRIPTION.format(
+                        coin=f"{config.INVITE_DEMOTED_COIN_REWARD:,}"
+                    ),
                     value="demoted_coin",
                 )
             ]
 
-        super().__init__(placeholder="交換する特典を選択してください",min_values=1,max_values=1,options=options)
+        super().__init__(
+            placeholder=member_texts.BENEFIT_SELECT_PLACEHOLDER,
+            min_values=1,
+            max_values=1,
+            options=options
+        )
 
     async def callback(self,interaction: discord.Interaction):
         selected_benefit = self.values[0]
@@ -203,11 +224,11 @@ class InviteBenefitSelect(discord.ui.Select):
                 associate_member_role is None
                 or associate_member_role not in interaction.user.roles
             ):
-                await interaction.response.send_message("小人のみ精霊チケットを交換できます。",ephemeral=True)
+                await interaction.response.send_message(member_texts.TICKET_ROLE_REQUIRED,ephemeral=True)
                 return
 
             if enrollment_waiting_role is None:
-                await interaction.response.send_message("確認待ちロールが見つかりません。",ephemeral=True)
+                await interaction.response.send_message(member_texts.TICKET_WAITING_ROLE_NOT_FOUND,ephemeral=True)
                 return
 
             # すでにチケットを交換済み
@@ -215,14 +236,16 @@ class InviteBenefitSelect(discord.ui.Select):
                 has_start_ticket(interaction.user.id)
                 or enrollment_waiting_role in interaction.user.roles
             ):
-                await interaction.response.send_message("すでに精霊チケットを所持しています。",ephemeral=True)
+                await interaction.response.send_message(member_texts.TICKET_ALREADY_OWNED,ephemeral=True)
                 return
 
             # ポイント減算
             success = spend_invite_points(interaction.user.id,config.INVITE_TICKET_COST)
             if not success:
                 await interaction.response.send_message(
-                    (f"精霊チケットの交換には **{config.INVITE_TICKET_COST}pt** 必要です。"),
+                    member_texts.TICKET_NOT_ENOUGH_POINTS.format(
+                        cost=config.INVITE_TICKET_COST
+                    ),
                     ephemeral=True
                 )
                 return
@@ -237,7 +260,7 @@ class InviteBenefitSelect(discord.ui.Select):
 
                 logger.warning(f"確認待ちロール付与失敗：{interaction.user.id} / {e}")
 
-                await interaction.response.send_message("確認待ちロールの付与に失敗しました。",ephemeral=True)
+                await interaction.response.send_message(member_texts.TICKET_ROLE_FAILED,ephemeral=True)
                 return
 
             set_start_ticket(interaction.user.id)
@@ -246,17 +269,16 @@ class InviteBenefitSelect(discord.ui.Select):
 
             await send_invite_point_use_log(
                 interaction=interaction,
-                benefit_name="精霊チケット",
+                benefit_name=member_texts.BENEFIT_NAME_TICKET,
                 use_points=config.INVITE_TICKET_COST,
                 remaining_points=remaining_points,
-                result_text="確認待ちロールを付与"
+                result_text=member_texts.RESULT_TICKET
             )
 
             embed = discord.Embed(
-                title="精霊チケット交換",
-                description=(
-                    "精霊チケットを交換しました。\n"
-                    f"**{config.INVITE_TICKET_COST}pt** 使用\n"
+                title=member_texts.TICKET_DONE_TITLE,
+                description=member_texts.TICKET_DONE_BODY.format(
+                    cost=config.INVITE_TICKET_COST
                 ),
                 color=config.COLOR_GREEN
             )
@@ -271,10 +293,14 @@ class InviteBenefitSelect(discord.ui.Select):
             current_rate = get_hotel_free_rate(interaction.user.id)
             if current_rate >= config.MAX_HOTEL_FREE_RATE:
                 await interaction.response.send_message(
-                    f"宿屋無料確率はすでに **{config.MAX_HOTEL_FREE_RATE}%** です。",ephemeral=True)
+                    member_texts.HOTEL_RATE_MAX.format(
+                        rate=config.MAX_HOTEL_FREE_RATE
+                    ),
+                    ephemeral=True
+                )
                 return
 
-        await interaction.response.send_message("使用するポイント数を選択してください。",
+        await interaction.response.send_message(member_texts.AMOUNT_SELECT_PROMPT,
             view=InvitePointAmountView(benefit=selected_benefit,user_id=interaction.user.id),
             ephemeral=True
         )
@@ -310,24 +336,35 @@ class InvitePointAmountSelect(discord.ui.Select):
         # 25pt以下なら、所持ポイント分だけ表示
         if current_points <= 25:
             options = [
-                discord.SelectOption(label=f"{point}pt使用",value=str(point))
+                discord.SelectOption(
+                    label=member_texts.AMOUNT_OPTION.format(points=point),
+                    value=str(point)
+                )
                 for point in range(1,current_points + 1)
             ]
 
         # 26pt以上なら、1～24ptと入力選択肢を表示
         else:
-            options = [discord.SelectOption(label=f"{point}pt使用",value=str(point)) for point in range(1, 25)]
+            options = [
+                discord.SelectOption(
+                    label=member_texts.AMOUNT_OPTION.format(points=point),
+                    value=str(point)
+                )
+                for point in range(1, 25)
+            ]
 
             options.append(
                 discord.SelectOption(
-                    label="25pt以上を指定",
-                    description=(f"25～{current_points}ptの範囲で入力"),
+                    label=member_texts.AMOUNT_OPTION_CUSTOM,
+                    description=member_texts.AMOUNT_OPTION_CUSTOM_DESCRIPTION.format(
+                        max_points=current_points
+                    ),
                     value="custom"
                 )
             )
 
         super().__init__(
-            placeholder="使用するポイント数を選択してください",
+            placeholder=member_texts.AMOUNT_SELECT_PLACEHOLDER,
             min_values=1,
             max_values=1,
             options=options
@@ -337,7 +374,7 @@ class InvitePointAmountSelect(discord.ui.Select):
 
         # メニューを開いた本人以外は操作不可
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("このメニューは操作できません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.NOT_YOUR_MENU,ephemeral=True)
             return
 
         selected_value = self.values[0]
@@ -355,11 +392,11 @@ class InvitePointAmountSelect(discord.ui.Select):
 # ==================================================
 # 使用ポイント数入力Modal
 # ==================================================
-class InvitePointAmountModal(discord.ui.Modal,title="使用ポイント数"):
+class InvitePointAmountModal(discord.ui.Modal,title=member_texts.AMOUNT_MODAL_TITLE):
 
     amount = discord.ui.TextInput(
-        label="使用するポイント数",
-        placeholder="25以上の数字を入力してください",
+        label=member_texts.AMOUNT_MODAL_LABEL,
+        placeholder=member_texts.AMOUNT_MODAL_PLACEHOLDER,
         required=True,
         max_length=10
     )
@@ -373,27 +410,24 @@ class InvitePointAmountModal(discord.ui.Modal,title="使用ポイント数"):
     async def on_submit(self,interaction: discord.Interaction):
 
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("この入力画面は操作できません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.NOT_YOUR_MODAL,ephemeral=True)
             return
 
         amount_text = self.amount.value.strip()
         if not amount_text.isdigit():
-            await interaction.response.send_message("ポイント数は数字で入力してください。",ephemeral=True)
+            await interaction.response.send_message(member_texts.AMOUNT_NOT_NUMBER,ephemeral=True)
             return
 
         use_points = int(amount_text)
         current_points = get_invite_points(interaction.user.id)
 
         if use_points < 25:
-            await interaction.response.send_message("25pt以上を入力してください。",ephemeral=True)
+            await interaction.response.send_message(member_texts.AMOUNT_TOO_SMALL,ephemeral=True)
             return
 
         if use_points > current_points:
             await interaction.response.send_message(
-                (
-                    "所持ポイントを超えています。\n"
-                    f"現在：**{current_points}pt**"
-                ),
+                member_texts.AMOUNT_OVER_OWNED.format(points=current_points),
                 ephemeral=True
             )
             return
@@ -411,21 +445,20 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
     member = interaction.user
 
     if guild is None:
-        await interaction.followup.send("サーバー情報を取得できませんでした。",ephemeral=True)
+        await interaction.followup.send(common_texts.GUILD_NOT_FOUND,ephemeral=True)
         return
 
     has_member_rank = any(role.id in config.ROLE_GROUP_MEMBER for role in member.roles)
     current_points = get_invite_points(member.id)
 
     if use_points <= 0:
-        await interaction.followup.send("使用ポイントは1以上で指定してください。",ephemeral=True)
+        await interaction.followup.send(member_texts.AMOUNT_MUST_BE_POSITIVE,ephemeral=True)
         return
 
     if use_points > current_points:
         await interaction.followup.send(
-            (
-                "招待ポイントが不足しています。\n"
-                f"現在：**{current_points}pt**"
+            member_texts.INVITE_NOT_ENOUGH_POINTS_DETAIL.format(
+                points=current_points
             ),
             ephemeral=True
         )
@@ -444,14 +477,14 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
     if benefit == "trial_member_extension":
 
         if (trial_member_role is None or trial_member_role not in member.roles):
-            await interaction.followup.send("現在、精霊ではありません。",ephemeral=True)
+            await interaction.followup.send(member_texts.NOT_TRIAL_MEMBER,ephemeral=True)
             return
 
         extension_days = (use_points * config.INVITE_TRIAL_MEMBER_EXTENSION_DAYS)
         success = spend_invite_points(member.id,use_points)
 
         if not success:
-            await interaction.followup.send("招待ポイントが不足しています。",ephemeral=True)
+            await interaction.followup.send(member_texts.INVITE_NOT_ENOUGH_POINTS,ephemeral=True)
             return
 
         extended = extend_trial_member_end_date(member.id,extension_days)
@@ -459,7 +492,7 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
         if not extended:
             add_invite_points(member.id,use_points)
 
-            await interaction.followup.send("精霊情報が見つからないため延長できませんでした。",ephemeral=True)
+            await interaction.followup.send(member_texts.TRIAL_MEMBER_NOT_FOUND_FOR_EXTENSION,ephemeral=True)
             return
 
         trial_member_cog = interaction.client.get_cog("TrialMember")
@@ -467,8 +500,10 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
         if trial_member_cog is not None:
             await trial_member_cog.update_trial_member_end_embed(member.id)
 
-        benefit_name = "精霊期間延長"
-        result_text = f"精霊期間を{extension_days}日延長"
+        benefit_name = member_texts.BENEFIT_NAME_TRIAL_EXTENSION
+        result_text = member_texts.RESULT_TRIAL_EXTENSION.format(
+            days=extension_days
+        )
 
     # ==================================================
     # 七聖・騎士の宿屋無料確率
@@ -476,13 +511,13 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
     elif benefit == "member_hotel_rate":
 
         if not has_member_rank:
-            await interaction.followup.send("現在、騎士または七聖ではありません。",ephemeral=True)
+            await interaction.followup.send(member_texts.NOT_MEMBER,ephemeral=True)
             return
 
         current_rate = get_hotel_free_rate(member.id)
         if current_rate >= config.MAX_HOTEL_FREE_RATE:
             await interaction.followup.send(
-                (f"宿屋無料確率はすでに **{config.MAX_HOTEL_FREE_RATE}%** です。"),
+                member_texts.HOTEL_RATE_MAX.format(rate=config.MAX_HOTEL_FREE_RATE),
                 ephemeral=True
             )
             return
@@ -495,11 +530,10 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
             max_points = (remaining_rate // config.INVITE_MEMBER_FREE_RATE)
 
             await interaction.followup.send(
-                (
-                    "宿の無料確率が上限を超えます。\n"
-                    f"現在：**{current_rate}%**\n"
-                    f"上限：**{config.MAX_HOTEL_FREE_RATE}%**\n"
-                    f"使用可能：最大 **{max_points}pt**"
+                member_texts.HOTEL_RATE_OVER.format(
+                    rate=current_rate,
+                    max_rate=config.MAX_HOTEL_FREE_RATE,
+                    max_points=max_points
                 ),
                 ephemeral=True
             )
@@ -508,15 +542,18 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
         success = spend_invite_points(member.id,use_points)
 
         if not success:
-            await interaction.followup.send("招待ポイントが不足しています。",ephemeral=True)
+            await interaction.followup.send(member_texts.INVITE_NOT_ENOUGH_POINTS,ephemeral=True)
             return
 
         old_rate = current_rate
         add_hotel_free_rate(member.id,increase_rate)
 
         new_rate = get_hotel_free_rate(member.id)
-        benefit_name = "宿屋無料確率"
-        result_text = f"{old_rate}% → {new_rate}%"
+        benefit_name = member_texts.BENEFIT_NAME_HOTEL_RATE
+        result_text = member_texts.RESULT_HOTEL_RATE.format(
+            old_rate=old_rate,
+            new_rate=new_rate
+        )
 
     # ==================================================
     # Coin交換
@@ -527,28 +564,28 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
         if benefit == "trial_member_coin":
 
             if (trial_member_role is None or trial_member_role not in member.roles):
-                await interaction.followup.send("現在、精霊ではありません。",ephemeral=True)
+                await interaction.followup.send(member_texts.NOT_TRIAL_MEMBER,ephemeral=True)
                 return
 
         # 七聖・騎士
         elif benefit == "member_coin":
 
             if not has_member_rank:
-                await interaction.followup.send("現在、騎士または七聖ではありません。",ephemeral=True)
+                await interaction.followup.send(member_texts.NOT_MEMBER,ephemeral=True)
                 return
 
         # 小人
         elif benefit == "associate_member_coin":
 
             if (associate_member_role is None or associate_member_role not in member.roles):
-                await interaction.followup.send("現在、小人ではありません。",ephemeral=True)
+                await interaction.followup.send(member_texts.NOT_ASSOCIATE_MEMBER,ephemeral=True)
                 return
 
         # 魔物
         elif benefit == "demoted_coin":
 
             if (demoted_role is None or demoted_role not in member.roles):
-                await interaction.followup.send("現在、魔物ではありません。",ephemeral=True)
+                await interaction.followup.send(member_texts.NOT_DEMOTED,ephemeral=True)
                 return
 
         coin_per_point = (
@@ -560,7 +597,7 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
         coin_amount = (use_points * coin_per_point)
         success = spend_invite_points(member.id,use_points)
         if not success:
-            await interaction.followup.send("招待ポイントが不足しています。",ephemeral=True)
+            await interaction.followup.send(member_texts.INVITE_NOT_ENOUGH_POINTS,ephemeral=True)
             return
 
         add_balance(member.id,coin_amount)
@@ -569,11 +606,11 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
         if coin_cog is not None:
             await coin_cog.update_debt_status(guild,member)
 
-        benefit_name = "coin交換"
-        result_text = f"{coin_amount:,} coin付与"
+        benefit_name = member_texts.BENEFIT_NAME_COIN
+        result_text = member_texts.RESULT_COIN.format(coin=f"{coin_amount:,}")
 
     else:
-        await interaction.followup.send("選択した特典を確認できませんでした。",ephemeral=True)
+        await interaction.followup.send(member_texts.BENEFIT_UNKNOWN,ephemeral=True)
         return
 
     remaining_points = get_invite_points(member.id)
@@ -586,12 +623,12 @@ async def execute_invite_benefit(interaction: discord.Interaction,benefit: str,u
     )
 
     embed = discord.Embed(
-        title="招待ポイント使用",
-        description=(
-            f"特典：**{benefit_name}**\n"
-            f"使用：**{use_points}pt**\n"
-            f"結果：{result_text}\n"
-            f"残り：**{remaining_points}pt**"
+        title=member_texts.INVITE_USE_TITLE,
+        description=member_texts.INVITE_USE_BODY.format(
+            benefit=benefit_name,
+            points=use_points,
+            result=result_text,
+            remaining=remaining_points
         ),
         color=config.COLOR_WHITE
     )

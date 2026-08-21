@@ -9,6 +9,7 @@ from discord.ext import commands, tasks
 from utils import ensure_panel_message
 from .views import TicketCloseView, TicketManagerView, TicketPanelView, TicketStaffView
 from texts import panels as panel_texts
+from texts import ticket as ticket_texts
 
 
 logger = logging.getLogger(__name__)
@@ -34,13 +35,8 @@ class Ticket(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="窓口",
-            description=(
-                "\u200b\n"
-                "**お問い合わせ**\n"
-                "-# お問い合わせ先に迷った場合は、\n"
-                "-# 「総合窓口」を選択してください。"
-            ),
+            title=panel_texts.TICKET,
+            description=ticket_texts.PANEL_BODY,
             color=config.COLOR_WHITE
         )
 

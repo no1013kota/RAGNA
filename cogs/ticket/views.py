@@ -13,6 +13,8 @@ from database.ticket import (
     review_ticket,
     delete_ticket
 )
+from texts import common as common_texts
+from texts import ticket as ticket_texts
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +27,7 @@ class TicketPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="お問い合わせ",style=discord.ButtonStyle.primary,custom_id="ticket:open")
+    @discord.ui.button(label=ticket_texts.PANEL_BUTTON_OPEN,style=discord.ButtonStyle.primary,custom_id="ticket:open")
     async def open_ticket(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         existing_ticket = get_ticket_by_owner(interaction.user.id)
@@ -42,10 +44,7 @@ class TicketPanelView(discord.ui.View):
             else:
 
                 await interaction.response.send_message(
-                    (
-                        "すでにお問い合わせを作成しています。\n"
-                        f"{channel.mention}"
-                    ),
+                    ticket_texts.ALREADY_OPEN.format(channel=channel.mention),
                     ephemeral=True
                 )
                 return
@@ -82,7 +81,7 @@ class TicketTypeSelect(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="お問い合わせ先を選択してください",
+            placeholder=ticket_texts.TYPE_SELECT_PLACEHOLDER,
             min_values=1,
             max_values=1,
             options=options
@@ -94,7 +93,7 @@ class TicketTypeSelect(discord.ui.Select):
 
         guild = interaction.guild
         if guild is None:
-            await interaction.followup.send("サーバー情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(common_texts.GUILD_NOT_FOUND,ephemeral=True)
             return
 
         # すでに作成しているチケットがないか再確認
@@ -112,10 +111,7 @@ class TicketTypeSelect(discord.ui.Select):
             else:
 
                 await interaction.followup.send(
-                    (
-                        "すでにお問い合わせを作成しています。\n"
-                        f"{channel.mention}"
-                    ),
+                    ticket_texts.ALREADY_OPEN.format(channel=channel.mention),
                     ephemeral=True
                 )
                 return
@@ -123,17 +119,17 @@ class TicketTypeSelect(discord.ui.Select):
         ticket_type = self.values[0]
         ticket_data = config.TICKET_TYPES.get(ticket_type)
         if ticket_data is None:
-            await interaction.followup.send("お問い合わせ先の設定が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TYPE_NOT_FOUND,ephemeral=True)
             return
 
         category = guild.get_channel(config.CATEGORY_TICKET)
         if not isinstance(category,discord.CategoryChannel):
-            await interaction.followup.send("お問い合わせカテゴリーが見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CATEGORY_NOT_FOUND,ephemeral=True)
             return
 
         manager_role = guild.get_role(config.ROLE_MANAGER)
         if manager_role is None:
-            await interaction.followup.send("運営ロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.MANAGER_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         # ==========================================
@@ -180,7 +176,9 @@ class TicketTypeSelect(discord.ui.Select):
         try:
 
             channel = await guild.create_text_channel(
-                name=f"チケット-{interaction.user.display_name}",
+                name=ticket_texts.CHANNEL_NAME.format(
+                    name=interaction.user.display_name
+                ),
                 category=category,
                 overwrites=overwrites,
                 reason=(f"{interaction.user}による{ticket_data['name']}作成")
@@ -202,7 +200,7 @@ class TicketTypeSelect(discord.ui.Select):
                 except discord.HTTPException:
                     pass
 
-            await interaction.followup.send("お問い合わせの作成に失敗しました。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CREATE_FAILED,ephemeral=True)
             return
 
         # ==========================================
@@ -210,10 +208,8 @@ class TicketTypeSelect(discord.ui.Select):
         # ==========================================
         embed = discord.Embed(
             title=ticket_data["name"],
-            description=(
-                f"{interaction.user.mention}\n\n"
-                "お問い合わせ内容をこのチケットに送信してください。\n\n"
-                "お問い合わせが終了したら「閉じる」を押してください"
+            description=ticket_texts.FIRST_MESSAGE_BODY.format(
+                user=interaction.user.mention
             ),
             color=config.COLOR_WHITE
         )
@@ -234,14 +230,11 @@ class TicketTypeSelect(discord.ui.Select):
             except discord.HTTPException:
                 pass
 
-            await interaction.followup.send("お問い合わせの作成に失敗しました。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CREATE_FAILED,ephemeral=True)
             return
 
         await interaction.followup.send(
-            (
-                "お問い合わせを作成しました。\n"
-                f"{channel.mention}"
-            ),
+            ticket_texts.CREATED.format(channel=channel.mention),
             ephemeral=True
         )
 
@@ -253,7 +246,7 @@ class TicketCloseView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="閉じる",style=discord.ButtonStyle.danger,custom_id="ticket:close")
+    @discord.ui.button(label=ticket_texts.BUTTON_CLOSE,style=discord.ButtonStyle.danger,custom_id="ticket:close")
     async def close(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         await interaction.response.defer(ephemeral=True)
@@ -262,12 +255,12 @@ class TicketCloseView(discord.ui.View):
         channel = interaction.channel
 
         if (guild is None or not isinstance(channel,discord.TextChannel)):
-            await interaction.followup.send("お問い合わせ情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CHANNEL_ERROR,ephemeral=True)
             return
 
         ticket = get_ticket(channel.id)
         if ticket is None:
-            await interaction.followup.send("このチャンネルはお問い合わせとして登録されていません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.NOT_A_TICKET,ephemeral=True)
             return
 
         # tickets
@@ -279,12 +272,12 @@ class TicketCloseView(discord.ui.View):
         owner_id = ticket[1]
         status = ticket[3]
         if status != "open":
-            await interaction.followup.send("このお問い合わせはすでに閉じられています。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.ALREADY_CLOSED,ephemeral=True)
             return
 
         manager_role = guild.get_role(config.ROLE_MANAGER)
         if manager_role is None:
-            await interaction.followup.send("運営ロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.MANAGER_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         # 本人または運営のみ
@@ -292,12 +285,12 @@ class TicketCloseView(discord.ui.View):
         is_manager = interaction.user.guild_permissions.administrator
 
         if not is_owner and not is_manager:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         ticket_data = config.TICKET_TYPES.get(ticket[2])
         if ticket_data is None:
-            await interaction.followup.send("お問い合わせ先の設定が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TYPE_NOT_FOUND,ephemeral=True)
             return
 
         # ==========================================
@@ -342,18 +335,16 @@ class TicketCloseView(discord.ui.View):
 
             logger.warning(f"お問い合わせ終了時の権限変更失敗：{channel.id} / {e}")
 
-            await interaction.followup.send("お問い合わせを閉じることができませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CLOSE_FAILED,ephemeral=True)
             return
 
         # 閉じる
         close_ticket(channel.id)
 
         embed = discord.Embed(
-            title="お問い合わせ終了",
-            description=(
-                f"終了者：{interaction.user.mention}\n"
-                "お問い合わせしたユーザーを再度呼び戻す場合は「再開」を押してください。\n"
-                "対応が終了した場合は「削除」を押してください。"
+            title=ticket_texts.CLOSED_TITLE,
+            description=ticket_texts.CLOSED_BODY.format(
+                user=interaction.user.mention
             ),
             color=config.COLOR_GREY
         )
@@ -365,7 +356,7 @@ class TicketCloseView(discord.ui.View):
 
             logger.warning(f"お問い合わせ終了メッセージ送信失敗：{channel.id} / {e}")
 
-        await interaction.followup.send("お問い合わせを閉じました。",ephemeral=True)
+        await interaction.followup.send(ticket_texts.CLOSE_DONE,ephemeral=True)
 
 
 # ==========================================
@@ -378,7 +369,7 @@ class TicketStaffView(discord.ui.View):
     # ==========================================
     # 再開
     # ==========================================
-    @discord.ui.button(label="再開",style=discord.ButtonStyle.success,custom_id="ticket:staff_reopen")
+    @discord.ui.button(label=ticket_texts.BUTTON_REOPEN,style=discord.ButtonStyle.success,custom_id="ticket:staff_reopen")
     async def reopen(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         await interaction.response.defer(ephemeral=True)
@@ -387,22 +378,22 @@ class TicketStaffView(discord.ui.View):
         channel = interaction.channel
 
         if (guild is None or not isinstance(channel,discord.TextChannel)):
-            await interaction.followup.send("お問い合わせ情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CHANNEL_ERROR,ephemeral=True)
             return
 
         ticket = get_ticket(channel.id)
 
         if ticket is None:
-            await interaction.followup.send("お問い合わせ情報が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TICKET_NOT_FOUND,ephemeral=True)
             return
 
         if ticket[3] != "closed":
-            await interaction.followup.send("このお問い合わせは再開できません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CANNOT_REOPEN,ephemeral=True)
             return
 
         ticket_data = config.TICKET_TYPES.get(ticket[2])
         if ticket_data is None:
-            await interaction.followup.send("お問い合わせ先の設定が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TYPE_NOT_FOUND,ephemeral=True)
             return
 
         # 問い合わせ対象ロールのみ
@@ -418,7 +409,7 @@ class TicketStaffView(discord.ui.View):
             allowed = True
 
         if not allowed:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         owner = guild.get_member(ticket[1])
@@ -427,12 +418,12 @@ class TicketStaffView(discord.ui.View):
                 owner = await guild.fetch_member(ticket[1])
 
             except (discord.NotFound,discord.HTTPException):
-                await interaction.followup.send("お問い合わせしたユーザーが見つかりません。",ephemeral=True)
+                await interaction.followup.send(ticket_texts.OWNER_NOT_FOUND,ephemeral=True)
                 return
 
         manager_role = guild.get_role(config.ROLE_MANAGER)
         if manager_role is None:
-            await interaction.followup.send("運営ロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.MANAGER_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         overwrites = {
@@ -476,19 +467,15 @@ class TicketStaffView(discord.ui.View):
 
             logger.warning(f"お問い合わせ再開時の権限変更失敗：{channel.id} / {e}")
 
-            await interaction.followup.send("お問い合わせを再開できませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.REOPEN_FAILED,ephemeral=True)
             return
 
         # 再開
         reopen_ticket(channel.id)
 
         embed = discord.Embed(
-            title="お問い合わせ再開",
-            description=(
-                f"{owner.mention}\n\n"
-                "お問い合わせが再開されました。\n"
-                "引き続きこのチャンネルをご利用ください。"
-            ),
+            title=ticket_texts.REOPENED_TITLE,
+            description=ticket_texts.REOPENED_BODY.format(owner=owner.mention),
             color=config.COLOR_GREEN
         )
 
@@ -498,12 +485,12 @@ class TicketStaffView(discord.ui.View):
         except discord.HTTPException as e:
             logger.warning(f"お問い合わせ再開メッセージ送信失敗：{channel.id} / {e}")
 
-        await interaction.followup.send("お問い合わせを再開しました。",ephemeral=True)
+        await interaction.followup.send(ticket_texts.REOPEN_DONE,ephemeral=True)
 
     # ==========================================
     # 削除
     # ==========================================
-    @discord.ui.button(label="削除",style=discord.ButtonStyle.danger,custom_id="ticket:staff_delete")
+    @discord.ui.button(label=ticket_texts.BUTTON_DELETE,style=discord.ButtonStyle.danger,custom_id="ticket:staff_delete")
     async def delete(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         await interaction.response.defer(ephemeral=True)
@@ -512,23 +499,23 @@ class TicketStaffView(discord.ui.View):
         channel = interaction.channel
 
         if (guild is None or not isinstance(channel,discord.TextChannel)):
-            await interaction.followup.send("お問い合わせ情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CHANNEL_ERROR,ephemeral=True)
             return
 
         ticket = get_ticket(channel.id)
 
         if ticket is None:
-            await interaction.followup.send("お問い合わせ情報が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TICKET_NOT_FOUND,ephemeral=True)
             return
 
         if ticket[3] != "closed":
-            await interaction.followup.send("このお問い合わせは削除処理に進めません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CANNOT_REVIEW,ephemeral=True)
             return
 
         ticket_data = config.TICKET_TYPES.get(ticket[2])
 
         if ticket_data is None:
-            await interaction.followup.send("お問い合わせ先の設定が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TYPE_NOT_FOUND,ephemeral=True)
             return
 
         # 問い合わせ対象ロールのみ
@@ -544,13 +531,13 @@ class TicketStaffView(discord.ui.View):
             allowed = True
 
         if not allowed:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         manager_role = guild.get_role(config.ROLE_MANAGER)
 
         if manager_role is None:
-            await interaction.followup.send("運営ロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.MANAGER_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         # ==========================================
@@ -583,17 +570,16 @@ class TicketStaffView(discord.ui.View):
 
             logger.warning(f"お問い合わせ削除確認時の権限変更失敗：{channel.id} / {e}")
 
-            await interaction.followup.send("お問い合わせを削除処理に進めることができませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.REVIEW_FAILED,ephemeral=True)
             return
 
         # 削除
         review_ticket(channel.id)
 
         embed = discord.Embed(
-            title="お問い合わせ削除確認",
-            description=(
-                f"処理者：{interaction.user.mention}\n"
-                "このお問い合わせを削除・再開・保存できます。"
+            title=ticket_texts.REVIEW_TITLE,
+            description=ticket_texts.REVIEW_BODY.format(
+                user=interaction.user.mention
             ),
             color=config.COLOR_GREY
         )
@@ -604,7 +590,7 @@ class TicketStaffView(discord.ui.View):
         except discord.HTTPException as e:
             logger.warning(f"お問い合わせ削除確認メッセージ送信失敗：{channel.id} / {e}")
 
-        await interaction.followup.send("運営による最終処理へ移行しました。",ephemeral=True)
+        await interaction.followup.send(ticket_texts.REVIEW_DONE,ephemeral=True)
 
 
 # ==========================================
@@ -617,7 +603,7 @@ class TicketManagerView(discord.ui.View):
     # ==========================================
     # 削除
     # ==========================================
-    @discord.ui.button(label="削除",style=discord.ButtonStyle.danger,custom_id="ticket:manager_delete")
+    @discord.ui.button(label=ticket_texts.BUTTON_DELETE,style=discord.ButtonStyle.danger,custom_id="ticket:manager_delete")
     async def delete(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         await interaction.response.defer(ephemeral=True)
@@ -626,21 +612,21 @@ class TicketManagerView(discord.ui.View):
         channel = interaction.channel
 
         if (guild is None or not isinstance(channel,discord.TextChannel)):
-            await interaction.followup.send("お問い合わせ情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CHANNEL_ERROR,ephemeral=True)
             return
 
         if not interaction.user.guild_permissions.administrator:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         ticket = get_ticket(channel.id)
 
         if ticket is None:
-            await interaction.followup.send("お問い合わせ情報が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TICKET_NOT_FOUND,ephemeral=True)
             return
 
         if ticket[3] != "review":
-            await interaction.followup.send("このお問い合わせは最終処理の状態ではありません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.NOT_IN_REVIEW,ephemeral=True)
             return
 
         channel_id = channel.id
@@ -653,7 +639,7 @@ class TicketManagerView(discord.ui.View):
 
             logger.warning(f"お問い合わせチャンネル削除失敗：{channel_id} / {e}")
 
-            await interaction.followup.send("チャンネルの削除に失敗しました。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.DELETE_FAILED,ephemeral=True)
             return
 
         # Discord側の削除成功後にDB削除
@@ -662,7 +648,7 @@ class TicketManagerView(discord.ui.View):
     # ==========================================
     # 再開
     # ==========================================
-    @discord.ui.button(label="再開",style=discord.ButtonStyle.primary,custom_id="ticket:manager_reopen")
+    @discord.ui.button(label=ticket_texts.BUTTON_REOPEN,style=discord.ButtonStyle.primary,custom_id="ticket:manager_reopen")
     async def reopen(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         await interaction.response.defer(ephemeral=True)
@@ -671,27 +657,27 @@ class TicketManagerView(discord.ui.View):
         channel = interaction.channel
 
         if (guild is None or not isinstance(channel,discord.TextChannel)):
-            await interaction.followup.send("お問い合わせ情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CHANNEL_ERROR,ephemeral=True)
             return
 
         if not interaction.user.guild_permissions.administrator:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         ticket = get_ticket(channel.id)
 
         if ticket is None:
-            await interaction.followup.send("お問い合わせ情報が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TICKET_NOT_FOUND,ephemeral=True)
             return
 
         if ticket[3] != "review":
-            await interaction.followup.send("このお問い合わせは再開できません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CANNOT_REOPEN,ephemeral=True)
             return
 
         ticket_data = config.TICKET_TYPES.get(ticket[2])
 
         if ticket_data is None:
-            await interaction.followup.send("お問い合わせ先の設定が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TYPE_NOT_FOUND,ephemeral=True)
             return
 
         owner = guild.get_member(ticket[1])
@@ -702,13 +688,13 @@ class TicketManagerView(discord.ui.View):
                 owner = await guild.fetch_member(ticket[1])
 
             except (discord.NotFound,discord.HTTPException):
-                await interaction.followup.send("お問い合わせしたユーザーが見つかりません。",ephemeral=True)
+                await interaction.followup.send(ticket_texts.OWNER_NOT_FOUND,ephemeral=True)
                 return
 
         manager_role = guild.get_role(config.ROLE_MANAGER)
 
         if manager_role is None:
-            await interaction.followup.send("運営ロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.MANAGER_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         overwrites = {
@@ -754,17 +740,15 @@ class TicketManagerView(discord.ui.View):
 
             logger.warning(f"お問い合わせ再開時の権限変更失敗：{channel.id} / {e}")
 
-            await interaction.followup.send("お問い合わせを再開できませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.REOPEN_FAILED,ephemeral=True)
             return
 
         reopen_ticket(channel.id)
 
         embed = discord.Embed(
-            title="お問い合わせ再開",
-            description=(
-                f"{owner.mention}\n\n"
-                "運営によりお問い合わせが再開されました。\n"
-                "引き続きこのチャンネルをご利用ください。"
+            title=ticket_texts.REOPENED_TITLE,
+            description=ticket_texts.REOPENED_BY_MANAGER_BODY.format(
+                owner=owner.mention
             ),
             color=config.COLOR_GREEN
         )
@@ -776,12 +760,12 @@ class TicketManagerView(discord.ui.View):
         except discord.HTTPException as e:
             logger.warning(f"お問い合わせ再開メッセージ送信失敗：{channel.id} / {e}")
 
-        await interaction.followup.send("お問い合わせを再開しました。",ephemeral=True)
+        await interaction.followup.send(ticket_texts.REOPEN_DONE,ephemeral=True)
 
     # ==========================================
     # 保存
     # ==========================================
-    @discord.ui.button(label="保存",style=discord.ButtonStyle.success,custom_id="ticket:manager_save")
+    @discord.ui.button(label=ticket_texts.BUTTON_SAVE,style=discord.ButtonStyle.success,custom_id="ticket:manager_save")
     async def save(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         await interaction.response.defer(ephemeral=True)
@@ -790,33 +774,33 @@ class TicketManagerView(discord.ui.View):
         channel = interaction.channel
 
         if (guild is None or not isinstance(channel,discord.TextChannel)):
-            await interaction.followup.send("お問い合わせ情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.CHANNEL_ERROR,ephemeral=True)
             return
 
         if not interaction.user.guild_permissions.administrator:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         ticket = get_ticket(channel.id)
 
         if ticket is None:
-            await interaction.followup.send("お問い合わせ情報が見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.TICKET_NOT_FOUND,ephemeral=True)
             return
 
         if ticket[3] != "review":
-            await interaction.followup.send("このお問い合わせは最終処理の状態ではありません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.NOT_IN_REVIEW,ephemeral=True)
             return
 
         archive_category = guild.get_channel(config.CATEGORY_TICKET_ARCHIVE)
 
         if not isinstance(archive_category,discord.CategoryChannel):
-            await interaction.followup.send("お問い合わせ保存カテゴリーが見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.ARCHIVE_CATEGORY_NOT_FOUND,ephemeral=True)
             return
 
         manager_role = guild.get_role(config.ROLE_MANAGER)
 
         if manager_role is None:
-            await interaction.followup.send("運営ロールが見つかりません。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.MANAGER_ROLE_NOT_FOUND,ephemeral=True)
             return
 
         # ==========================================
@@ -851,17 +835,16 @@ class TicketManagerView(discord.ui.View):
 
             logger.warning(f"お問い合わせ保存失敗：{channel.id} / {e}")
 
-            await interaction.followup.send("お問い合わせの保存に失敗しました。",ephemeral=True)
+            await interaction.followup.send(ticket_texts.SAVE_FAILED,ephemeral=True)
             return
 
         # 保存完了後はBot管理対象から外す
         delete_ticket(channel.id)
 
         embed = discord.Embed(
-            title="保存済み",
-            description=(
-                f"保存者：{interaction.user.mention}\n"
-                "このお問い合わせは保存されました。"
+            title=ticket_texts.SAVED_TITLE,
+            description=ticket_texts.SAVED_BODY.format(
+                user=interaction.user.mention
             ),
             color=config.COLOR_GREEN
         )
@@ -872,4 +855,4 @@ class TicketManagerView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-        await interaction.followup.send("お問い合わせを保存しました。",ephemeral=True)
+        await interaction.followup.send(ticket_texts.SAVE_DONE,ephemeral=True)

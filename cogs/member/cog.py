@@ -20,6 +20,8 @@ from database.trial_member import (
 )
 from database.xp import get_vc_time
 from .views import InvitePointView
+from texts import common as common_texts
+from texts import member as member_texts
 from texts import panels as panel_texts
 
 
@@ -65,10 +67,15 @@ class Member(commands.Cog):
             return
 
         embed = discord.Embed(
-            description=(f"{member.mention} **が参加しました**"),
+            description=member_texts.JOIN_LOG_BODY.format(user=member.mention),
             color=config.COLOR_BLUE
         )
-        embed.set_footer(text=f"{member.display_name} / @{member.name}")
+        embed.set_footer(
+            text=member_texts.FOOTER_NAME.format(
+                display_name=member.display_name,
+                name=member.name
+            )
+        )
         embed.set_thumbnail(url=member.display_avatar.url)
 
         try:
@@ -89,13 +96,18 @@ class Member(commands.Cog):
             return
 
         embed = discord.Embed(
-            description=(
-                f"{member.mention} **が退出しました**\n"
-                f"{member.id}"
+            description=member_texts.LEAVE_LOG_BODY.format(
+                user=member.mention,
+                user_id=member.id
             ),
             color=config.COLOR_RED
         )
-        embed.set_footer(text=f"{member.display_name} / @{member.name}")
+        embed.set_footer(
+            text=member_texts.FOOTER_NAME.format(
+                display_name=member.display_name,
+                name=member.name
+            )
+        )
         embed.set_thumbnail(url=member.display_avatar.url)
 
         try:
@@ -114,7 +126,7 @@ class Member(commands.Cog):
             role.id in allowed_roles
             for role in interaction.user.roles
         ):
-            await interaction.response.send_message("権限がありません。",ephemeral=True)
+            await interaction.response.send_message(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         balance = get_balance(user.id)
@@ -131,14 +143,16 @@ class Member(commands.Cog):
         embed = discord.Embed(
             title=user.mention,
             description=(
-                f"【残高】{balance:,} Coin\n"
-                f"【招待】{invite_points:,} pt\n"
-                "【XP】\n"
-                f"今月：{monthly_xp:,} XP\n"
-                f"累計：{total_xp:,} XP\n\n"
-                "【通話時間】\n"
-                f"今月：{format_time(monthly_minutes)}\n"
-                f"累計：{format_time(total_minutes)}"
+                member_texts.MEMBER_CHECK_HEADER.format(
+                    balance=f"{balance:,}",
+                    invite_points=f"{invite_points:,}"
+                )
+                + member_texts.XP_BODY.format(
+                    monthly_xp=f"{monthly_xp:,}",
+                    total_xp=f"{total_xp:,}",
+                    monthly_time=format_time(monthly_minutes),
+                    total_time=format_time(total_minutes)
+                )
             ),
             color=config.COLOR_BLUE
         )
@@ -166,11 +180,11 @@ class Member(commands.Cog):
             role.id in allowed_roles
             for role in interaction.user.roles
         ):
-            await interaction.response.send_message("権限がありません。",ephemeral=True)
+            await interaction.response.send_message(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         if user.bot:
-            await interaction.response.send_message("Botには招待ポイントを付与できません。",ephemeral=True)
+            await interaction.response.send_message(member_texts.INVITE_REWARD_BOT,ephemeral=True)
             return
 
         add_invite_points(user.id,points)
@@ -180,18 +194,20 @@ class Member(commands.Cog):
         log_channel = interaction.guild.get_channel(config.CHANNEL_INVITE_REWARD_LOG)
 
         if log_channel:
-            description = (
-                f"実行者：{interaction.user.mention}\n"
-                f"対象者：{user.mention}\n"
-                f"付与：**{points}pt**\n"
-                f"累計：**{new_points}pt**"
+            description = member_texts.INVITE_REWARD_LOG_BODY.format(
+                actor=interaction.user.mention,
+                user=user.mention,
+                points=points,
+                total=new_points
             )
 
             if reason:
-                description += f"\n理由：{reason}"
+                description += "\n" + member_texts.INVITE_REWARD_LOG_REASON.format(
+                    reason=reason
+                )
 
             embed = discord.Embed(
-                title="招待報酬付与",
+                title=member_texts.INVITE_REWARD_LOG_TITLE,
                 description=description,
                 color=config.COLOR_WHITE
             )
@@ -204,11 +220,11 @@ class Member(commands.Cog):
                 logger.warning(f"招待報酬ログ送信失敗：{user.id} / {e}")
 
         embed = discord.Embed(
-            title="招待報酬",
-            description=(
-                f"{user.mention} へ "
-                f"**{points}pt** 付与しました。\n"
-                f"現在：**{new_points}pt**"
+            title=member_texts.INVITE_REWARD_TITLE,
+            description=member_texts.INVITE_REWARD_BODY.format(
+                user=user.mention,
+                points=points,
+                total=new_points
             ),
             color=config.COLOR_GREEN
         )
@@ -251,7 +267,10 @@ class Member(commands.Cog):
 
         try:
             archive_thread, _ = await archive_forum.create_thread(
-                name=f"{member.display_name} ({member.name})",
+                name=member_texts.EVALUATOR_ARCHIVE_THREAD_NAME.format(
+                    display_name=member.display_name,
+                    name=member.name
+                ),
                 content="\u200b"
             )
 
@@ -271,10 +290,17 @@ class Member(commands.Cog):
             ):
                 roles.append(role.mention)
 
-        embed = discord.Embed(title="評価シート保存",color=config.COLOR_GREEN)
-        embed.description = (
-            f"対象：{member.mention}\n"
-            f"ロール：{' '.join(roles) if roles else 'なし'}"
+        embed = discord.Embed(
+            title=member_texts.EVALUATOR_ARCHIVE_TITLE,
+            color=config.COLOR_GREEN
+        )
+        embed.description = member_texts.EVALUATOR_ARCHIVE_BODY.format(
+            user=member.mention,
+            roles=(
+                " ".join(roles)
+                if roles
+                else member_texts.EVALUATOR_ARCHIVE_NO_ROLE
+            )
         )
         embed.set_thumbnail(url=member.display_avatar.url)
 
@@ -300,7 +326,10 @@ class Member(commands.Cog):
 
             if content or files:
                 await archive_thread.send(
-                    content = f"【{message.author.display_name}】\n{content}",
+                    content = member_texts.EVALUATION_COPY_MESSAGE.format(
+                        author=message.author.display_name,
+                        content=content
+                    ),
                     files = files
                 )
 
@@ -326,15 +355,20 @@ class Member(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="ユーザーBAN",
-            description=(
-                f"実行者：{executor.mention}\n"
-                f"対象者：{user.mention}\n"
-                f"理由：{reason}"
+            title=member_texts.BAN_LOG_TITLE,
+            description=member_texts.BAN_LOG_BODY.format(
+                actor=executor.mention,
+                user=user.mention,
+                reason=reason
             ),
             color=config.COLOR_RED
         )
-        embed.set_footer(text=f"{user.display_name} / @{user.name}")
+        embed.set_footer(
+            text=member_texts.FOOTER_NAME.format(
+                display_name=user.display_name,
+                name=user.name
+            )
+        )
         embed.set_thumbnail(url=user.display_avatar.url)
 
         try:
@@ -358,40 +392,40 @@ class Member(commands.Cog):
 
         guild = interaction.guild
         if guild is None:
-            await interaction.followup.send("サーバー情報を取得できませんでした。",ephemeral=True)
+            await interaction.followup.send(common_texts.GUILD_NOT_FOUND,ephemeral=True)
             return
 
         user_id = user_id.strip()
         if not user_id.isdigit():
-            await interaction.followup.send("ユーザーIDは数字で入力してください。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_ID_NOT_NUMBER,ephemeral=True)
             return
 
         target_id = int(user_id)
         if target_id == interaction.user.id:
-            await interaction.followup.send("自分自身をBANすることはできません。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_SELF,ephemeral=True)
             return
 
         if self.bot.user and target_id == self.bot.user.id:
-            await interaction.followup.send("Bot自身をBANすることはできません。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_BOT,ephemeral=True)
             return
 
         reason = reason.strip()
 
         if not reason:
-            await interaction.followup.send("BAN理由を入力してください。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_REASON_REQUIRED,ephemeral=True)
             return
 
         try:
             target_user = await self.bot.fetch_user(target_id)
 
         except discord.NotFound:
-            await interaction.followup.send("指定されたユーザーが見つかりません。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_USER_NOT_FOUND,ephemeral=True)
             return
 
         except discord.HTTPException as e:
             logger.warning(f"BAN対象ユーザー取得失敗：{target_id} / {e}")
 
-            await interaction.followup.send("ユーザー情報の取得に失敗しました。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_USER_FETCH_FAILED,ephemeral=True)
             return
 
         # すでにBANされているか確認
@@ -403,11 +437,11 @@ class Member(commands.Cog):
 
         except discord.HTTPException as e:
             logger.warning(f"BAN状態確認失敗：{target_id} / {e}")
-            await interaction.followup.send("BAN状態の確認に失敗しました。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_CHECK_FAILED,ephemeral=True)
             return
 
         else:
-            await interaction.followup.send("指定されたユーザーはすでにBANされています。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_ALREADY,ephemeral=True)
             return
 
         try:
@@ -419,7 +453,7 @@ class Member(commands.Cog):
 
         except discord.HTTPException as e:
             logger.warning(f"ユーザーBAN失敗：{target_id} / {e}")
-            await interaction.followup.send("ユーザーのBANに失敗しました。",ephemeral=True)
+            await interaction.followup.send(member_texts.BAN_FAILED,ephemeral=True)
             return
 
         await self.send_ban_log(
@@ -430,11 +464,11 @@ class Member(commands.Cog):
         )
 
         embed = discord.Embed(
-            title="BAN完了",
-            description=(
-                f"対象者：{target_user.mention}\n"
-                f"ユーザーID：{target_user.id}\n"
-                f"理由：{reason}"
+            title=member_texts.BAN_DONE_TITLE,
+            description=member_texts.BAN_DONE_BODY.format(
+                user=target_user.mention,
+                user_id=target_user.id,
+                reason=reason
             ),
             color=config.COLOR_RED
         )
@@ -476,14 +510,8 @@ class Member(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="招待リスト",
-            description=(
-                "\u200b\n"
-                "**ポイント確認**\n"
-                "-# 自分の招待ptを確認できます\n\n"
-                "**ポイント使用**\n"
-                "-# 招待ptを好きな特典に交換できます"
-            ),
+            title=panel_texts.INVITE_LIST,
+            description=member_texts.PANEL_INVITE_BODY,
             color=config.COLOR_WHITE
         )
 

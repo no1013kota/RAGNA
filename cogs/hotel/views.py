@@ -17,6 +17,8 @@ from database.hotel import (
     get_hotel_by_text_channel,
 )
 from database.member import get_hotel_free_rate
+from texts import common as common_texts
+from texts import hotel as hotel_texts
 
 JST = timezone(timedelta(hours=9))
 logger = logging.getLogger(__name__)
@@ -29,33 +31,33 @@ class HotelView(discord.ui.View):
         super().__init__(timeout=None)
 
     # 入室プラン
-    @discord.ui.button(label="入室プラン",style=discord.ButtonStyle.primary,custom_id="hotel:plan")
+    @discord.ui.button(label=hotel_texts.PANEL_BUTTON_PLAN,style=discord.ButtonStyle.primary,custom_id="hotel:plan")
     async def hotel_plan(self,interaction: discord.Interaction,button: discord.ui.Button):
         await interaction.response.send_message(view=HotelPlanSelect(),ephemeral=True)
 
     # VC名前変更
-    @discord.ui.button(label="VC名変更",style=discord.ButtonStyle.secondary,custom_id="hotel:rename")
+    @discord.ui.button(label=hotel_texts.PANEL_BUTTON_RENAME,style=discord.ButtonStyle.secondary,custom_id="hotel:rename")
     async def rename_vc(self,interaction: discord.Interaction,button: discord.ui.Button):
         await interaction.response.send_modal(RenameVCModal())
 
     # 人数変更
-    @discord.ui.button(label="人数変更",style=discord.ButtonStyle.secondary,custom_id="hotel:limit")
+    @discord.ui.button(label=hotel_texts.PANEL_BUTTON_LIMIT,style=discord.ButtonStyle.secondary,custom_id="hotel:limit")
     async def change_limit(self,interaction: discord.Interaction,button: discord.ui.Button):
         await interaction.response.send_modal(ChangeLimitModal())
 
     # ステータス変更
-    @discord.ui.button(label="ステータス変更",style=discord.ButtonStyle.secondary,custom_id="hotel:status")
+    @discord.ui.button(label=hotel_texts.PANEL_BUTTON_STATUS,style=discord.ButtonStyle.secondary,custom_id="hotel:status")
     async def change_status(self,interaction: discord.Interaction,button: discord.ui.Button):
         await interaction.response.send_modal(StatusModal())
 
 # ==========================================
 # 宿屋Modal
 # ==========================================
-class ChangeLimitModal(discord.ui.Modal, title="人数変更"):
+class ChangeLimitModal(discord.ui.Modal, title=hotel_texts.LIMIT_MODAL_TITLE):
 
     limit = discord.ui.TextInput(
-        label="人数",
-        placeholder="1～3（プレミアムは0で無制限）",
+        label=hotel_texts.LIMIT_MODAL_LABEL,
+        placeholder=hotel_texts.LIMIT_MODAL_PLACEHOLDER,
         required=True,
         max_length=2
     )
@@ -66,7 +68,7 @@ class ChangeLimitModal(discord.ui.Modal, title="人数変更"):
 
         if vc is None:
             await interaction.response.send_message(
-                "VCにいるときだけ使用できます。",
+                hotel_texts.NOT_IN_VOICE,
                 ephemeral=True
             )
             return
@@ -75,14 +77,14 @@ class ChangeLimitModal(discord.ui.Modal, title="人数変更"):
             limit = int(self.limit.value)
         except ValueError:
             await interaction.response.send_message(
-                "数字を入力してください。",
+                hotel_texts.LIMIT_INVALID_NUMBER,
                 ephemeral=True
             )
             return
 
         plan = hotel[3]
 
-        if plan == "プレミアム":
+        if plan == hotel_texts.PLAN_PREMIUM:
             if limit == 0:
                 await vc.edit(user_limit=0)
                 update_hotel_limit(vc.id,0)
@@ -93,7 +95,7 @@ class ChangeLimitModal(discord.ui.Modal, title="人数変更"):
 
             else:
                 await interaction.response.send_message(
-                    "0～99で入力してください。",
+                    hotel_texts.LIMIT_OUT_OF_RANGE_PREMIUM,
                     ephemeral=True
                 )
                 return
@@ -101,7 +103,7 @@ class ChangeLimitModal(discord.ui.Modal, title="人数変更"):
         else:
             if not 1 <= limit <= 3:
                 await interaction.response.send_message(
-                    "1～3人にしてください。",
+                    hotel_texts.LIMIT_OUT_OF_RANGE,
                     ephemeral=True
                 )
                 return
@@ -111,30 +113,32 @@ class ChangeLimitModal(discord.ui.Modal, title="人数変更"):
             update_hotel_limit(vc.id,limit)
 
         await interaction.response.send_message(
-            f"人数を **{limit if limit else '無制限'}** に変更しました。",
+            hotel_texts.LIMIT_CHANGED.format(
+                limit=limit if limit else hotel_texts.LIMIT_UNLIMITED
+            ),
             ephemeral=True
         )
 
-class RenameVCModal(discord.ui.Modal, title="VC名変更"):
+class RenameVCModal(discord.ui.Modal, title=hotel_texts.RENAME_MODAL_TITLE):
 
-    name = discord.ui.TextInput(label="VC名",max_length=30)
+    name = discord.ui.TextInput(label=hotel_texts.RENAME_MODAL_LABEL,max_length=30)
 
     async def on_submit(self, interaction: discord.Interaction):
 
         vc, hotel = await HotelManager.get_hotel(interaction)
 
         if vc is None:
-            await interaction.response.send_message("VCにいるときだけ使用できます。",ephemeral=True)
+            await interaction.response.send_message(hotel_texts.NOT_IN_VOICE,ephemeral=True)
             return
 
         await vc.edit(name=self.name.value)
-        await interaction.response.send_message("VC名を変更しました。",ephemeral=True)
+        await interaction.response.send_message(hotel_texts.RENAME_DONE,ephemeral=True)
 
-class StatusModal(discord.ui.Modal, title="ステータス変更"):
+class StatusModal(discord.ui.Modal, title=hotel_texts.STATUS_MODAL_TITLE):
 
     status = discord.ui.TextInput(
-        label="ステータス",
-        placeholder="雑談中・ゲーム中など",
+        label=hotel_texts.STATUS_MODAL_LABEL,
+        placeholder=hotel_texts.STATUS_MODAL_PLACEHOLDER,
         required=False,
         max_length=100
     )
@@ -145,13 +149,13 @@ class StatusModal(discord.ui.Modal, title="ステータス変更"):
 
         if vc is None:
             await interaction.response.send_message(
-                "VCにいるときだけ使用できます。",
+                hotel_texts.NOT_IN_VOICE,
                 ephemeral=True
             )
             return
 
         await vc.edit(status=self.status.value)
-        await interaction.response.send_message("ステータスを変更しました。",ephemeral=True)
+        await interaction.response.send_message(hotel_texts.STATUS_DONE,ephemeral=True)
 
 # ==========================================
 # 宿屋プラン
@@ -168,20 +172,20 @@ class HotelPlanDropdown(discord.ui.Select):
     def __init__(self):
         options = [
             discord.SelectOption(
-                label="ツーショ",
-                description="2人まで利用可能"
+                label=hotel_texts.PLAN_STANDARD,
+                description=hotel_texts.PLAN_STANDARD_DESCRIPTION
             ),
             discord.SelectOption(
-                label="シークレット",
-                description="通話相手のみ閲覧可能"
+                label=hotel_texts.PLAN_SECRET,
+                description=hotel_texts.PLAN_SECRET_DESCRIPTION
             ),
             discord.SelectOption(
-                label="プレミアム",
-                description="人数・用途フリー"
+                label=hotel_texts.PLAN_PREMIUM,
+                description=hotel_texts.PLAN_PREMIUM_DESCRIPTION
             )
         ]
         super().__init__(
-            placeholder="プランを選択してください",
+            placeholder=hotel_texts.PLAN_SELECT_PLACEHOLDER,
             options=options
         )
     async def callback(self,interaction: discord.Interaction):
@@ -192,7 +196,7 @@ class HotelPlanDropdown(discord.ui.Select):
 
         # 利用禁止ロール
         if any(role.id in config.HOTEL_DENY_ROLES for role in interaction.user.roles):
-            await interaction.followup.send("現在のロールでは宿屋を利用できません。",ephemeral=True)
+            await interaction.followup.send(hotel_texts.DENY_ROLE,ephemeral=True)
 
             return
 
@@ -225,7 +229,7 @@ class HotelPlanDropdown(discord.ui.Select):
             # 権限
             overwrites = {}
 
-            if plan == "ツーショ":
+            if plan == hotel_texts.PLAN_STANDARD:
                 overwrites[
                     interaction.guild.default_role
                 ] = discord.PermissionOverwrite(view_channel=None,connect=None)
@@ -247,15 +251,18 @@ class HotelPlanDropdown(discord.ui.Select):
             overwrites[interaction.user] = discord.PermissionOverwrite(view_channel=True,connect=True)
 
             vc = await category.create_voice_channel(
-                name=f"{plan}-{interaction.user.display_name}",
+                name=hotel_texts.VOICE_CHANNEL_NAME.format(
+                    plan=plan,
+                    name=interaction.user.display_name
+                ),
                 overwrites=overwrites,
                 user_limit=max_users
             )
 
-            if plan != "ツーショ":
+            if plan != hotel_texts.PLAN_STANDARD:
 
                 text_channel = await category.create_text_channel(
-                    name=f"宿設定-{plan}",
+                    name=hotel_texts.TEXT_CHANNEL_NAME.format(plan=plan),
                     overwrites=overwrites
                 )
 
@@ -294,12 +301,13 @@ class HotelPlanDropdown(discord.ui.Select):
                 add_balance(interaction.user.id,paid_amount)
 
             await interaction.followup.send(
-                (
-                    "宿屋の作成に失敗しました。\n"
-                    + (
-                        f"支払った **{paid_amount:,} coin** は返金しました。"
+                hotel_texts.CREATE_FAILED.format(
+                    refund=(
+                        hotel_texts.CREATE_FAILED_REFUNDED.format(
+                            amount=f"{paid_amount:,}"
+                        )
                         if paid_amount > 0
-                        else "coinの支払いは発生していません。"
+                        else hotel_texts.CREATE_FAILED_NO_PAYMENT
                     )
                 ),
                 ephemeral=True
@@ -308,32 +316,22 @@ class HotelPlanDropdown(discord.ui.Select):
             return
 
         #インチャット用ボタン
-        if plan == "プレミアム":
+        if plan == hotel_texts.PLAN_PREMIUM:
 
             embed = discord.Embed(
-                title="権限設定",
-                description=(
-                    f"{vc.mention}\n"
-                    "ここは宿を作成した人しか見えないよ！\n"
-                    "-# ※共有したら見えるようになるよ\n\n"
-                    "🔓 公開\n"
-                    "🔒 非公開\n\n"
-                    "👥 招待\n"
-                    "🚫 出禁\n"
-                    "🤝 共有"
+                title=hotel_texts.PERMISSION_PANEL_TITLE,
+                description=hotel_texts.PREMIUM_PANEL_BODY.format(
+                    voice_channel=vc.mention
                 ),
                 color=config.COLOR_WHITE
             )
             await text_channel.send(embed=embed,view=HotelPremiumView())
 
-        elif plan == "シークレット":
+        elif plan == hotel_texts.PLAN_SECRET:
             embed = discord.Embed(
-                title="権限設定",
-                description=(
-                    f"{vc.mention}\n"
-                    f"※ここは宿を作成した人しか見えないよ！\n\n"
-                    "👥 招待\n"
-                    "🚫 出禁"
+                title=hotel_texts.PERMISSION_PANEL_TITLE,
+                description=hotel_texts.SECRET_PANEL_BODY.format(
+                    voice_channel=vc.mention
                 ),
                 color=config.COLOR_WHITE
             )
@@ -346,13 +344,13 @@ class HotelPlanDropdown(discord.ui.Select):
         await HotelManager.send_create_log(interaction,plan)
 
         if text_channel:
-            msg = (
-                f"{vc.mention} を作成しました。\n"
-                f"{text_channel.mention} で宿の設定ができます。"
+            msg = hotel_texts.CREATED_WITH_TEXT.format(
+                voice_channel=vc.mention,
+                text_channel=text_channel.mention
             )
 
         else:
-            msg = (f"{vc.mention} を作成しました。")
+            msg = hotel_texts.CREATED.format(voice_channel=vc.mention)
 
         if payment_text:
             msg += f"\n\n{payment_text}"
@@ -368,14 +366,14 @@ class HotelManager:
         vc, hotel = await HotelManager.check_owner(interaction)
 
         if vc is None or hotel is None:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         owner = interaction.guild.get_member(hotel[2])
 
         if owner is None:
             await interaction.followup.send(
-                "宿の購入者が見つかりません。",
+                hotel_texts.OWNER_NOT_FOUND,
                 ephemeral=True
             )
             return None
@@ -416,11 +414,21 @@ class HotelManager:
                     continue
 
             if isinstance(target, discord.Role):
-                roles.append(f"（ロール）{target.name}")
+                roles.append(
+                    hotel_texts.PERMISSION_LIST_ROLE.format(name=target.name)
+                )
             else:
-                users.append(f"（ユーザー）{target.display_name}")
+                users.append(
+                    hotel_texts.PERMISSION_LIST_USER.format(
+                        name=target.display_name
+                    )
+                )
 
-        return "\n".join(roles + users) if roles or users else "なし"
+        return (
+            "\n".join(roles + users)
+            if roles or users
+            else hotel_texts.PERMISSION_LIST_EMPTY
+        )
 
     @staticmethod
     async def send_visibility_dm(
@@ -431,8 +439,16 @@ class HotelManager:
     ):
         text = HotelManager.get_permission_list(vc,owner,public)
 
-        mode = "公開" if public else "非公開"
-        title = "閲覧不可" if public else "閲覧可能"
+        mode = (
+            hotel_texts.VISIBILITY_MODE_PUBLIC
+            if public
+            else hotel_texts.VISIBILITY_MODE_PRIVATE
+        )
+        title = (
+            hotel_texts.VISIBILITY_HEADING_HIDDEN
+            if public
+            else hotel_texts.VISIBILITY_HEADING_VISIBLE
+        )
         color = (
             config.COLOR_GREEN
             if public
@@ -440,11 +456,12 @@ class HotelManager:
         )
 
         embed = discord.Embed(
-            title="【宿】設定変更",
-            description=(
-                f"{vc.name} を {mode} にしました。\n"
-                f"### {title}\n"
-                f"{text}"
+            title=hotel_texts.VISIBILITY_DM_TITLE,
+            description=hotel_texts.VISIBILITY_DM_BODY.format(
+                channel=vc.name,
+                mode=mode,
+                heading=title,
+                targets=text
             ),
             color=color
         )
@@ -507,11 +524,11 @@ class HotelManager:
         expire = (utc_now + timedelta(hours=config.HOTEL_DURATION_HOURS)).astimezone(JST)
 
         embed = discord.Embed(
-            title="購入通知",
-            description=(
-                f"購入者：{interaction.user.mention}\n"
-                f"プラン：**{plan}**\n"
-                f"終了時刻：{expire.strftime('%m/%d %H:%M')}"
+            title=hotel_texts.CREATE_LOG_TITLE,
+            description=hotel_texts.CREATE_LOG_BODY.format(
+                user=interaction.user.mention,
+                plan=plan,
+                expires_at=expire.strftime('%m/%d %H:%M')
             ),
             color=config.COLOR_WHITE
         )
@@ -529,18 +546,23 @@ class HotelManager:
         vc: discord.VoiceChannel
     ):
         log = interaction.guild.get_channel(config.HOTEL_PERMISSION_LOG_CHANNEL_ID)
-        kind = "ユーザー" if isinstance(target, discord.Member) else "ロール"
+        kind = (
+            hotel_texts.TARGET_KIND_USER
+            if isinstance(target, discord.Member)
+            else hotel_texts.TARGET_KIND_ROLE
+        )
 
         if log is None:
             return
 
         embed = discord.Embed(
-            title="権限変更",
-            description=(
-                f"実行者：{interaction.user.mention}\n"
-                f"通話：{vc.name}\n"
-                f"設定：**{mode}**\n"
-                f"対象：{kind}（{target.mention}）"
+            title=hotel_texts.PERMISSION_LOG_TITLE,
+            description=hotel_texts.PERMISSION_LOG_BODY.format(
+                actor=interaction.user.mention,
+                channel=vc.name,
+                mode=mode,
+                kind=kind,
+                target=target.mention
             ),
             color=config.COLOR_PURPLE
         )
@@ -555,11 +577,14 @@ class HotelManager:
         has_free_role = any(role.id in config.HOTEL_FREE_ROLES for role in interaction.user.roles)
 
         # 本メンバー以上はツーショ常時無料
-        if (plan == "ツーショ" and has_free_role):
+        if (plan == hotel_texts.PLAN_STANDARD and has_free_role):
             return True,"",0
 
         # 本メンバー以上はシークレット・プレミアムで無料抽選
-        if (plan in ("シークレット","プレミアム") and has_free_role):
+        if (
+            plan in (hotel_texts.PLAN_SECRET,hotel_texts.PLAN_PREMIUM)
+            and has_free_role
+        ):
 
             free_rate = get_hotel_free_rate(interaction.user.id)
             if free_rate > 0:
@@ -567,12 +592,12 @@ class HotelManager:
                 lottery_number = random.randint(1,100)
                 if lottery_number <= free_rate:
 
-                    return (True, "宿屋無料抽選に当選したため、無料になりました。", 0)
+                    return (True, hotel_texts.FREE_LOTTERY_WON, 0)
 
         success = subtract_balance_if_enough(interaction.user.id,price)
 
         if not success:
-            await interaction.followup.send("残高が不足しています。",ephemeral=True)
+            await interaction.followup.send(hotel_texts.NOT_ENOUGH_BALANCE,ephemeral=True)
 
             return False,"",0
 
@@ -656,7 +681,7 @@ class HotelPremiumView(discord.ui.View):
         super().__init__(timeout=None)
 
     # 公開
-    @discord.ui.button(label="🔓 公開",style=discord.ButtonStyle.success,custom_id="hotel_premium:open")
+    @discord.ui.button(label=hotel_texts.BUTTON_OPEN,style=discord.ButtonStyle.success,custom_id="hotel_premium:open")
     async def open_room(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         result = await HotelManager.change_visibility(interaction,True)
@@ -666,10 +691,10 @@ class HotelPremiumView(discord.ui.View):
         vc, owner = result
 
         await HotelManager.send_visibility_dm(interaction,vc,owner,True)
-        await interaction.followup.send("宿を公開しました。",ephemeral=True)
+        await interaction.followup.send(hotel_texts.OPENED,ephemeral=True)
 
     # 非公開
-    @discord.ui.button(label="🔒 非公開",style=discord.ButtonStyle.danger,custom_id="hotel_premium:close")
+    @discord.ui.button(label=hotel_texts.BUTTON_CLOSE,style=discord.ButtonStyle.danger,custom_id="hotel_premium:close")
     async def close_room(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         result = await HotelManager.change_visibility(interaction,False)
@@ -680,20 +705,20 @@ class HotelPremiumView(discord.ui.View):
         vc, owner = result
 
         await HotelManager.send_visibility_dm(interaction,vc,owner,False)
-        await interaction.followup.send("宿を非公開にしました。",ephemeral=True)
+        await interaction.followup.send(hotel_texts.CLOSED,ephemeral=True)
 
     # 招待
-    @discord.ui.button(label="👥 招待",style=discord.ButtonStyle.success,custom_id="hotel_premium:invite")
+    @discord.ui.button(label=hotel_texts.BUTTON_INVITE,style=discord.ButtonStyle.success,custom_id="hotel_premium:invite")
     async def invite(self,interaction: discord.Interaction,button: discord.ui.Button):
         await interaction.response.send_message(view=HotelTargetView("allow"),ephemeral=True)
 
     # 出禁
-    @discord.ui.button(label="🚫 出禁",style=discord.ButtonStyle.danger,custom_id="hotel_premium:deny")
+    @discord.ui.button(label=hotel_texts.BUTTON_DENY,style=discord.ButtonStyle.danger,custom_id="hotel_premium:deny")
     async def deny(self,interaction: discord.Interaction,button: discord.ui.Button):
         await interaction.response.send_message(view=HotelTargetView("deny"),ephemeral=True)
 
     # 共有
-    @discord.ui.button(label="🤝 共有",style=discord.ButtonStyle.primary,custom_id="hotel_premium:share")
+    @discord.ui.button(label=hotel_texts.BUTTON_SHARE,style=discord.ButtonStyle.primary,custom_id="hotel_premium:share")
     async def manager(self,interaction: discord.Interaction,button: discord.ui.Button):
 
         await interaction.response.send_message(
@@ -704,11 +729,11 @@ class HotelSecretView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="👥 招待",style=discord.ButtonStyle.success,custom_id="hotel_secret:invite")
+    @discord.ui.button(label=hotel_texts.BUTTON_INVITE,style=discord.ButtonStyle.success,custom_id="hotel_secret:invite")
     async def invite(self,interaction: discord.Interaction,button: discord.ui.Button):
         await interaction.response.send_message(view=HotelTargetView("allow"),ephemeral=True)
 
-    @discord.ui.button(label="🚫 出禁",style=discord.ButtonStyle.danger,custom_id="hotel_secret:deny")
+    @discord.ui.button(label=hotel_texts.BUTTON_DENY,style=discord.ButtonStyle.danger,custom_id="hotel_secret:deny")
     async def deny(self,interaction: discord.Interaction,button: discord.ui.Button):
         await interaction.response.send_message(view=HotelTargetView("deny"),ephemeral=True)
 
@@ -720,13 +745,13 @@ class HotelTargetView(discord.ui.View):
         super().__init__(timeout=180)
         self.mode = mode
 
-    @discord.ui.button(label="👤 ユーザー", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label=hotel_texts.BUTTON_TARGET_USER, style=discord.ButtonStyle.primary)
     async def user_button(self, interaction, button):
         await interaction.response.send_message(
             view=HotelSelectView(HotelUserSelect(self.mode)),ephemeral=True
         )
 
-    @discord.ui.button(label="🏷 ロール", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label=hotel_texts.BUTTON_TARGET_ROLE, style=discord.ButtonStyle.secondary)
     async def role_button(self, interaction, button):
         await interaction.response.send_message(
             view=HotelSelectView(HotelRoleSelect(self.mode)),ephemeral=True
@@ -744,7 +769,7 @@ class HotelUserSelect(discord.ui.UserSelect):
     def __init__(self, mode):
         self.mode = mode
         super().__init__(
-            placeholder="ユーザーを選択してください",
+            placeholder=hotel_texts.USER_SELECT_PLACEHOLDER,
             min_values=1,
             max_values=1
         )
@@ -755,13 +780,13 @@ class HotelUserSelect(discord.ui.UserSelect):
         vc, hotel = await HotelManager.check_owner(interaction)
 
         if vc is None or hotel is None:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         target = self.values[0]
         if target.bot:
             await interaction.followup.send(
-                "Botは指定できません。",
+                hotel_texts.TARGET_BOT,
                 ephemeral=True
             )
             return
@@ -775,7 +800,7 @@ class HotelUserSelect(discord.ui.UserSelect):
                 for role in target.roles
             )
         ):
-            await interaction.followup.send("宿屋を利用できないユーザーは招待できません。",ephemeral=True)
+            await interaction.followup.send(hotel_texts.INVITE_DENIED_USER,ephemeral=True)
             return
 
         await vc.set_permissions(
@@ -798,16 +823,19 @@ class HotelUserSelect(discord.ui.UserSelect):
             if target.voice and target.voice.channel == vc:
                 await target.move_to(None)
 
-        text = "招待" if allow else "出禁"
+        text = hotel_texts.MODE_INVITE if allow else hotel_texts.MODE_DENY
 
         await HotelManager.send_permission_log(interaction,text,target,vc)
-        await interaction.followup.send(f"{target.mention} を **{text}**",ephemeral=True)
+        await interaction.followup.send(
+            hotel_texts.TARGET_UPDATED.format(target=target.mention,mode=text),
+            ephemeral=True
+        )
 
 class HotelRoleSelect(discord.ui.RoleSelect):
     def __init__(self, mode):
         self.mode = mode
         super().__init__(
-            placeholder="ロールを選択してください",
+            placeholder=hotel_texts.ROLE_SELECT_PLACEHOLDER,
             min_values=1,
             max_values=1
         )
@@ -817,12 +845,12 @@ class HotelRoleSelect(discord.ui.RoleSelect):
 
         vc, hotel = await HotelManager.check_owner(interaction)
         if vc is None or hotel is None:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         role = self.values[0]
         if role.id in config.HOTEL_DENY_ROLES:
-            await interaction.followup.send("このロールは指定できません。",ephemeral=True)
+            await interaction.followup.send(hotel_texts.TARGET_DENIED_ROLE,ephemeral=True)
             return
 
         allow = self.mode == "allow"
@@ -845,15 +873,18 @@ class HotelRoleSelect(discord.ui.RoleSelect):
                 if role in member.roles:
                     await member.move_to(None)
 
-        text = "招待" if allow else "出禁"
+        text = hotel_texts.MODE_INVITE if allow else hotel_texts.MODE_DENY
 
         await HotelManager.send_permission_log(interaction,text,role,vc)
-        await interaction.followup.send(f"{role.mention} を **{text}**",ephemeral=True)
+        await interaction.followup.send(
+            hotel_texts.TARGET_UPDATED.format(target=role.mention,mode=text),
+            ephemeral=True
+        )
 
 class HotelShareSelect(discord.ui.UserSelect):
     def __init__(self):
         super().__init__(
-            placeholder="共有するユーザーを選択",
+            placeholder=hotel_texts.SHARE_SELECT_PLACEHOLDER,
             min_values=1,
             max_values=1
         )
@@ -865,14 +896,14 @@ class HotelShareSelect(discord.ui.UserSelect):
         vc, hotel = await HotelManager.check_owner(interaction)
 
         if vc is None or hotel is None:
-            await interaction.followup.send("権限がありません。",ephemeral=True)
+            await interaction.followup.send(common_texts.NO_PERMISSION,ephemeral=True)
             return
 
         user = self.values[0]
 
         if user.bot:
             await interaction.followup.send(
-                "Botには共有できません。",
+                hotel_texts.SHARE_BOT,
                 ephemeral=True
             )
             return
@@ -881,13 +912,13 @@ class HotelShareSelect(discord.ui.UserSelect):
             role.id in config.HOTEL_DENY_ROLES
             for role in user.roles
         ):
-            await interaction.followup.send("宿屋を利用できないユーザーには共有できません。",ephemeral=True)
+            await interaction.followup.send(hotel_texts.SHARE_DENIED_USER,ephemeral=True)
             return
 
         # 枠主自身
         if user.id == hotel[2]:
             await interaction.followup.send(
-                "自分には付与できません。",
+                hotel_texts.SHARE_SELF,
                 ephemeral=True
             )
             return
@@ -895,13 +926,13 @@ class HotelShareSelect(discord.ui.UserSelect):
         # VC参加者のみ
         if user not in vc.members:
             await interaction.followup.send(
-                "指定したユーザーがVCにいません。",
+                hotel_texts.SHARE_NOT_IN_VOICE,
                 ephemeral=True
             )
             return
 
         if is_hotel_manager(vc.id, user.id):
-            await interaction.followup.send("既に共有しています。",ephemeral=True)
+            await interaction.followup.send(hotel_texts.SHARE_ALREADY,ephemeral=True)
             return
 
         await vc.set_permissions(
@@ -922,4 +953,7 @@ class HotelShareSelect(discord.ui.UserSelect):
 
         add_hotel_manager(vc.id,user.id)
 
-        await interaction.followup.send(f"{user.mention} に権限を付与しました。",ephemeral=True)
+        await interaction.followup.send(
+            hotel_texts.SHARE_DONE.format(user=user.mention),
+            ephemeral=True
+        )

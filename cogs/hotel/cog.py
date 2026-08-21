@@ -13,6 +13,7 @@ from database.hotel import (
 )
 from utils import ensure_panel_message
 from .views import HotelPremiumView, HotelSecretView, HotelView
+from texts import hotel as hotel_texts
 from texts import panels as panel_texts
 
 JST = timezone(timedelta(hours=9))
@@ -40,16 +41,11 @@ class HotelCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="入室プラン",
-            description=(
-                "\u200b\n"
-                f"**ツーショ：{config.HOTEL_STANDARD_PRICE:,} coin**\n"
-                "-# ※七聖・騎士は無料\n\n"
-                f"**シークレット：{config.HOTEL_SECRET_PRICE:,} coin**\n"
-                "ー ツーショ＋指定した人だけが見える\n\n"
-                f"**プレミアム：{config.HOTEL_PREMIUM_PRICE:,} coin**\n"
-                "ー すべて自由にできる＋人数も無制限\n\n"
-                "-# ※宿は15時間後に自動削除します"
+            title=panel_texts.HOTEL,
+            description=hotel_texts.PANEL_BODY.format(
+                standard_price=f"{config.HOTEL_STANDARD_PRICE:,}",
+                secret_price=f"{config.HOTEL_SECRET_PRICE:,}",
+                premium_price=f"{config.HOTEL_PREMIUM_PRICE:,}"
             ),
             color=config.COLOR_WHITE
         )

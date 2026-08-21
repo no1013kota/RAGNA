@@ -18,6 +18,7 @@ from database.coin import (
     grant_monthly_reward,
 )
 from .views import ATMView, ensure_atm_panel
+from texts import coin as coin_texts
 
 JST = timezone(timedelta(hours=9))
 logger = logging.getLogger(__name__)
@@ -98,11 +99,8 @@ class Coin(commands.Cog):
 
                 try:
                     embed = discord.Embed(
-                        title="負債通知",
-                        description=(
-                            "残高（coin）がマイナスになりました。\n"
-                            "『魔物』となり、利用制限がかかります。"
-                        ),
+                        title=coin_texts.DEBT_TITLE,
+                        description=coin_texts.DEBT_DM_BODY,
                         color=config.COLOR_RED
                     )
 
@@ -117,16 +115,16 @@ class Coin(commands.Cog):
                 removed = (
                     ", ".join(removed_role_names)
                     if removed_role_names
-                    else "なし"
+                    else coin_texts.REMOVED_ROLES_EMPTY
                 )
 
                 if debt_log:
                     embed = discord.Embed(
-                        title="負債通知",
-                        description=(
-                            f"対象：{member.mention}\n"
-                            f"残高：**{balance:,} coin**\n"
-                            f"削除ロール：{removed}"
+                        title=coin_texts.DEBT_TITLE,
+                        description=coin_texts.DEBT_LOG_BODY.format(
+                            user=member.mention,
+                            balance=f"{balance:,}",
+                            removed_roles=removed
                         ),
                         color=config.COLOR_RED
                     )
@@ -146,10 +144,8 @@ class Coin(commands.Cog):
 
                 try:
                     embed = discord.Embed(
-                        title="返済通知",
-                        description=(
-                            "返済が完了したため『小人』となります。"
-                        ),
+                        title=coin_texts.DEBT_CLEARED_TITLE,
+                        description=coin_texts.DEBT_CLEARED_DM_BODY,
                         color=config.COLOR_YELLOW
                     )
 
@@ -163,10 +159,10 @@ class Coin(commands.Cog):
 
                 if clear_log:
                     embed = discord.Embed(
-                        title="返済通知",
-                        description=(
-                            f"対象：{member.mention}\n"
-                            f"残高：**{balance:,} coin**"
+                        title=coin_texts.DEBT_CLEARED_TITLE,
+                        description=coin_texts.DEBT_CLEARED_LOG_BODY.format(
+                            user=member.mention,
+                            balance=f"{balance:,}"
                         ),
                         color=config.COLOR_YELLOW
                     )
@@ -191,11 +187,12 @@ class Coin(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="残高変更通知",
-            description=(
-                f"実行者：{executor.mention}\n"
-                f"対象：{target}\n"
-                f"結果：**{amount:,} coin {action}**"
+            title=coin_texts.CHANGE_LOG_TITLE,
+            description=coin_texts.CHANGE_LOG_BODY.format(
+                actor=executor.mention,
+                target=target,
+                amount=f"{amount:,}",
+                action=action
             ),
             color=config.COLOR_YELLOW
         )
@@ -216,17 +213,17 @@ class Coin(commands.Cog):
 
         # 自分への送金禁止
         if user.id == interaction.user.id:
-            await interaction.followup.send("自分には送金できません。",ephemeral=True)
+            await interaction.followup.send(coin_texts.TRANSFER_TO_SELF,ephemeral=True)
             return
 
         # Botへの送金禁止
         if user.bot:
-            await interaction.followup.send("Botには送金できません。",ephemeral=True)
+            await interaction.followup.send(coin_texts.TRANSFER_TO_BOT,ephemeral=True)
             return
 
         # 最低送金額
         if amount < 1000:
-            await interaction.followup.send("1000coin以上から送金できます。",ephemeral=True)
+            await interaction.followup.send(coin_texts.TRANSFER_MINIMUM,ephemeral=True)
             return
 
         # 残高確認から履歴保存までDB内で一括実行し、同時送金による不整合を防ぐ。
@@ -237,7 +234,7 @@ class Coin(commands.Cog):
             note=note,
         )
         if not transfer_succeeded:
-            await interaction.followup.send("残高不足です。",ephemeral=True)
+            await interaction.followup.send(coin_texts.TRANSFER_NOT_ENOUGH,ephemeral=True)
             return
 
         # ロール更新や通知は、DBへの送金が確定してから行う。
@@ -250,17 +247,17 @@ class Coin(commands.Cog):
         )
 
         if log_channel:
-            description = (
-                f"送金：{interaction.user.mention}\n"
-                f"対象：{user.mention}\n"
-                f"金額：{amount:,} coin"
+            description = coin_texts.TRANSFER_LOG_BODY.format(
+                sender=interaction.user.mention,
+                target=user.mention,
+                amount=f"{amount:,}"
             )
 
             if note:
-                description += f"\n備考：{note}"
+                description += "\n" + coin_texts.TRANSFER_LOG_NOTE.format(note=note)
 
             embed = discord.Embed(
-                title="送金ログ",
+                title=coin_texts.TRANSFER_LOG_TITLE,
                 description=description,
                 color=config.COLOR_YELLOW
             )
@@ -271,11 +268,11 @@ class Coin(commands.Cog):
         # 受取人へDM
         try:
             embed = discord.Embed(
-                title="RAGNA Bank",
-                description=(
-                    f"**{interaction.user.display_name}** から "
-                    f"**{amount:,} coin** 送金されました。\n"
-                    f"備考：{note if note else 'なし'}"
+                title=coin_texts.TRANSFER_DM_TITLE,
+                description=coin_texts.TRANSFER_DM_BODY.format(
+                    name=interaction.user.display_name,
+                    amount=f"{amount:,}",
+                    note=note if note else coin_texts.NOTE_EMPTY
                 ),
                 color=config.COLOR_YELLOW
             )
@@ -291,8 +288,11 @@ class Coin(commands.Cog):
 
         # 送金者へ完了通知
         embed = discord.Embed(
-            title="送金通知",
-            description=(f"{user.mention} へ **{amount:,} coin** 送金"),
+            title=coin_texts.TRANSFER_DONE_TITLE,
+            description=coin_texts.TRANSFER_DONE_BODY.format(
+                user=user.mention,
+                amount=f"{amount:,}"
+            ),
             color=config.COLOR_YELLOW
         )
         embed.set_thumbnail(url=user.display_avatar.url)
@@ -379,13 +379,18 @@ class Coin(commands.Cog):
                     )
 
                 balance = get_balance(member.id)
-                action = "支給" if amount >= 0 else "徴収"
+                action = (
+                    coin_texts.MONTHLY_ACTION_GRANT
+                    if amount >= 0
+                    else coin_texts.MONTHLY_ACTION_COLLECT
+                )
                 embed = discord.Embed(
-                    title="RAGNA Bank",
-                    description=(
-                        f"月次報酬（{role.name}）\n\n"
-                        f"{abs(amount):,} coin を{action}しました。\n"
-                        f"現在の残高：**{balance:,} coin**"
+                    title=coin_texts.MONTHLY_DM_TITLE,
+                    description=coin_texts.MONTHLY_DM_BODY.format(
+                        role=role.name,
+                        amount=f"{abs(amount):,}",
+                        action=action,
+                        balance=f"{balance:,}"
                     ),
                     color=config.COLOR_YELLOW
                 )
@@ -439,16 +444,20 @@ class Coin(commands.Cog):
 
         # どちらも未指定
         if user is None and role is None:
-            await interaction.followup.send("ユーザーまたはロールを指定してください。",ephemeral=True)
+            await interaction.followup.send(coin_texts.CHANGE_TARGET_REQUIRED,ephemeral=True)
             return
 
         # 両方指定
         if user is not None and role is not None:
-            await interaction.followup.send("ユーザーとロールは同時に指定できません。",ephemeral=True)
+            await interaction.followup.send(coin_texts.CHANGE_TARGET_DUPLICATED,ephemeral=True)
             return
 
         change = amount if operation.value == "add" else -amount
-        action = "増加" if operation.value == "add" else "減少"
+        action = (
+            coin_texts.ACTION_ADD
+            if operation.value == "add"
+            else coin_texts.ACTION_SUBTRACT
+        )
 
         # ------------------------
         # ユーザー
@@ -475,10 +484,11 @@ class Coin(commands.Cog):
             )
 
             embed = discord.Embed(
-                title="残高変更",
-                description=(
-                    f"{user.mention} の残高を\n"
-                    f"**{amount:,} coin {action}**しました。"
+                title=coin_texts.CHANGE_TITLE,
+                description=coin_texts.CHANGE_DONE.format(
+                    user=user.mention,
+                    amount=f"{amount:,}",
+                    action=action
                 ),
                 color=config.COLOR_YELLOW
             )
@@ -512,7 +522,12 @@ class Coin(commands.Cog):
 
         await self.send_balance_log(interaction.guild,interaction.user,role.mention,amount,action)
         await interaction.followup.send(
-            f"{role.mention}（{count}人）の残高を **{amount:,} coin {action}**しました。",
+            coin_texts.CHANGE_DONE_ROLE.format(
+                role=role.mention,
+                count=count,
+                amount=f"{amount:,}",
+                action=action
+            ),
             ephemeral=True
         )
 
