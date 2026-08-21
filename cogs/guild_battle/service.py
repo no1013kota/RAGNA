@@ -61,6 +61,9 @@ from game.models import (
     BattleRuleError,
     BattleState,
 )
+from texts import battle as battle_texts
+from texts import battle_display as display_texts
+from texts import common as common_texts
 
 
 logger = logging.getLogger(__name__)
@@ -148,7 +151,11 @@ def guild_names(state: BattleState) -> dict[int, str]:
     names: dict[int, str] = {}
     for guild_id in (state.guild_a_id, state.guild_b_id):
         row = get_guild(guild_id)
-        names[guild_id] = row["name"] if row else f"ギルド{guild_id}"
+        names[guild_id] = (
+            row["name"]
+            if row
+            else common_texts.UNKNOWN_GUILD_NAME.format(guild_id=guild_id)
+        )
 
     return names
 
@@ -284,39 +291,38 @@ def check_guild_ready(
 
     guild_row = get_guild(guild_id)
     if guild_row is None or guild_row["status"] != "active":
-        return ["ギルドが見つからない、または活動中ではありません。"], []
+        return [battle_texts.READY_GUILD_INACTIVE], []
 
     discord_guild = bot.get_guild(config.GUILD_ID)
     if discord_guild is None:
-        return ["Discordサーバー情報を取得できませんでした。"], []
+        return [battle_texts.READY_DISCORD_GUILD_MISSING], []
 
     # チャンネルが利用可能か
     channel_labels = (
-        ("category_id", "ギルドカテゴリー"),
-        ("guild_text_channel_id", "ギルドTC"),
-        ("master_text_channel_id", "ギルドマスター専用TC"),
-        ("battle_member_channel_id", "使い魔バトルチャンネル"),
+        ("category_id", battle_texts.READY_CHANNEL_CATEGORY),
+        ("guild_text_channel_id", battle_texts.READY_CHANNEL_GUILD_TEXT),
+        ("master_text_channel_id", battle_texts.READY_CHANNEL_MASTER_TEXT),
+        ("battle_member_channel_id", battle_texts.READY_CHANNEL_BATTLE_MEMBER),
     )
     for column, label in channel_labels:
         channel_id = guild_row.get(column)
         if not channel_id or discord_guild.get_channel(int(channel_id)) is None:
-            issues.append(f"{label}が見つかりません。")
+            issues.append(battle_texts.READY_CHANNEL_MISSING.format(label=label))
 
     # ギルドが他の進行中バトルへ参加していないか
     if get_active_battle_for_guild(guild_id) is not None:
-        issues.append("このギルドには既に進行中のバトルがあります。")
+        issues.append(battle_texts.READY_BATTLE_IN_PROGRESS)
 
     roster = get_battle_roster(guild_id)
     member_ids = {int(member["user_id"]) for member in roster}
 
     if not roster:
-        issues.append(
-            "出場者がセットされていません。"
-            "ギルドマスター専用tcの「メンバーセット」で決めてください。"
-        )
+        issues.append(battle_texts.READY_NO_ROSTER)
     elif len(roster) > master.battle.max_members:
         issues.append(
-            f"出場者は最大{master.battle.max_members}人です（現在{len(roster)}人）。"
+            battle_texts.READY_TOO_MANY_MEMBERS.format(
+                max_members=master.battle.max_members, count=len(roster)
+            )
         )
 
     total_cost = 0
@@ -324,11 +330,12 @@ def check_guild_ready(
     battle_entries = get_battle_entries(guild_id)
 
     if not battle_entries:
-        issues.append("使い魔がセットされていません。")
+        issues.append(battle_texts.READY_NO_ENTRIES)
     elif len(battle_entries) > master.battle.max_units:
         issues.append(
-            f"使い魔は最大{master.battle.max_units}体です"
-            f"（現在{len(battle_entries)}体）。"
+            battle_texts.READY_TOO_MANY_UNITS.format(
+                max_units=master.battle.max_units, count=len(battle_entries)
+            )
         )
 
     if busy_players is None:
@@ -346,32 +353,30 @@ def check_guild_ready(
 
         player_guild = get_player_guild(user_id)
         if player_guild is None or int(player_guild["guild_id"]) != guild_id:
-            issues.append(f"{mention} は現在このギルドへ所属していません。")
+            issues.append(battle_texts.READY_NOT_IN_GUILD.format(mention=mention))
             continue
 
         # 4節：出場できるのは本メンバー以上。出場者に選ばれたあとで
         # 資格を失った場合も、バトルを始める前にここで止める。
         access = game_shared.has_game_access(user_id)
         if access is None:
-            issues.append(f"{mention} のプレイヤー情報を確認できません。")
+            issues.append(battle_texts.READY_PLAYER_UNKNOWN.format(mention=mention))
             continue
         if not access:
-            issues.append(
-                f"{mention} は本メンバーではないため出場できません。"
-                "出場者から外してください。"
-            )
+            issues.append(battle_texts.READY_NOT_MEMBER_RANK.format(mention=mention))
             continue
 
         if user_id in busy_players:
-            issues.append(f"{mention} は他の進行中バトルへ参加しています。")
+            issues.append(battle_texts.READY_PLAYER_BUSY.format(mention=mention))
 
         # 9節：マスターが割り当てた体数まで埋まっていること
         assigned = int(member["familiar_count"] or 0)
         current = set_counts.get(user_id, 0)
         if current < assigned:
             issues.append(
-                f"{mention} の割り当ては{assigned}体ですが、{current}体しか"
-                "セットされていません。"
+                battle_texts.READY_SHORT_ASSIGNMENT.format(
+                    mention=mention, assigned=assigned, current=current
+                )
             )
 
     # セットされた使い魔ごとの確認
@@ -381,7 +386,7 @@ def check_guild_ready(
         mention = f"<@{user_id}>"
 
         if user_id not in member_ids:
-            issues.append(f"{mention} は出場者から外れています。")
+            issues.append(battle_texts.READY_NOT_IN_ROSTER.format(mention=mention))
             continue
 
         owned = get_owned_familiar(instance_id)
@@ -390,18 +395,20 @@ def check_guild_ready(
             or int(owned["user_id"]) != user_id
             or owned["status"] != "owned"
         ):
-            issues.append(f"{mention} がセットした使い魔を現在所有していません。")
+            issues.append(battle_texts.READY_NOT_OWNED.format(mention=mention))
             continue
 
         familiar = master.get_familiar(owned["familiar_id"])
         if familiar is None:
-            issues.append(f"{mention} がセットした使い魔のマスターデータがありません。")
+            issues.append(
+                battle_texts.READY_MASTER_DATA_MISSING.format(mention=mention)
+            )
             continue
 
         rank_info = game_shared.get_player_rank_info(user_id)
         if rank_info is None:
             # 27節: 推測でランクを補わず操作を止める
-            issues.append(f"{mention} のプレイヤーランクを確認できません。")
+            issues.append(battle_texts.READY_RANK_UNKNOWN.format(mention=mention))
             continue
 
         if not master.can_use_rank(
@@ -410,8 +417,11 @@ def check_guild_ready(
             is_sub_manager=rank_info["is_sub_manager"],
         ):
             issues.append(
-                f"{mention} は{familiar.name}"
-                f"（{game_shared.rank_label(familiar.rank)}）を使役できません。"
+                battle_texts.READY_RANK_TOO_LOW.format(
+                    mention=mention,
+                    familiar=familiar.name,
+                    rank=game_shared.rank_label(familiar.rank),
+                )
             )
             continue
 
@@ -432,8 +442,9 @@ def check_guild_ready(
     cost_limit = master.battle.max_total_cost
     if cost_limit > 0 and total_cost > cost_limit:
         issues.append(
-            f"編成の合計COSTが上限を超えています（{total_cost}／{cost_limit}）。"
-            "COSTの低い使い魔へ入れ替えてください。"
+            battle_texts.READY_COST_OVER.format(
+                total=total_cost, limit=cost_limit
+            )
         )
 
     return issues, entries
@@ -451,16 +462,13 @@ def lock_issues(guild_id: int) -> list[str]:
     lock_type = str(lock["lock_type"])
 
     if lock_type == "recruitment":
-        issues.append("このギルドは現在バトルを募集中です。先に募集を取り消してください。")
+        issues.append(battle_texts.LOCK_RECRUITING)
     elif lock_type == "request":
-        issues.append(
-            "このギルドには回答待ちのバトル申請があります。"
-            "先に取り消すか、相手の回答を待ってください。"
-        )
+        issues.append(battle_texts.LOCK_REQUEST_PENDING)
     elif lock_type == "battle":
-        issues.append("このギルドは現在バトル中です。終了までお待ちください。")
+        issues.append(battle_texts.LOCK_IN_BATTLE)
     else:
-        issues.append("このギルドは現在ほかの対戦手続き中です。")
+        issues.append(battle_texts.LOCK_OTHER)
 
     return issues
 
@@ -485,8 +493,8 @@ def entry_blockers(bot: discord.Client, guild_id: int) -> list[str]:
 def blocker_message(issues: list[str], *, action: str) -> str:
     """不足内容を、そのまま利用者へ出せる文面にする。"""
 
-    lines = [f"**{action}できません。** 次の点を直してください。", ""]
-    lines.extend(f"・{issue}" for issue in issues)
+    lines = [battle_texts.BLOCKER_HEADING.format(action=action), ""]
+    lines.extend(battle_texts.ISSUE_LINE.format(issue=issue) for issue in issues)
 
     return "\n".join(lines)[:1900]
 
@@ -501,17 +509,21 @@ def start_failure_message(
     理由は操作した人が直すためのもので、ギルド全員へ残す必要がないからです。
     """
 
-    lines = ["**⚔ ギルドバトルを開始できませんでした**", ""]
-    lines.append("次の条件を満たしてから、改めて申請・募集してください。")
+    lines = [battle_texts.START_FAILURE_TITLE, ""]
+    lines.append(battle_texts.START_FAILURE_NOTE)
 
     for guild_id in guild_ids:
         guild_row = get_guild(guild_id)
-        name = guild_row["name"] if guild_row else f"ギルド{guild_id}"
-        issues = problems.get(guild_id) or ["条件を満たしています。"]
+        name = (
+            guild_row["name"]
+            if guild_row
+            else common_texts.UNKNOWN_GUILD_NAME.format(guild_id=guild_id)
+        )
+        issues = problems.get(guild_id) or [battle_texts.START_FAILURE_OK]
 
         lines.append("")
         lines.append(game_shared.item_line(name, ""))
-        lines.extend(f"・{issue}" for issue in issues)
+        lines.extend(battle_texts.ISSUE_LINE.format(issue=issue) for issue in issues)
 
     return "\n".join(lines)[:1900]
 
@@ -671,7 +683,7 @@ async def try_start_battle(
     started = await start_prepared_battle(bot, battle_id)
 
     if not started:
-        reason = "バトルの開始処理に失敗しました。時間をおいて試してください。"
+        reason = battle_texts.START_FAILED_REASON
         problems = {guild_ids[0]: [reason], guild_ids[1]: [reason]}
         return {
             "ok": False,
@@ -724,29 +736,38 @@ async def start_prepared_battle(bot: discord.Client, battle_id: int) -> bool:
             master.battle.guild_time_seconds
         )
         opening = discord.Embed(
-            title="⚔ GUILD BATTLE 開始",
+            title=battle_texts.OPENING_TITLE,
             description="\n".join(
                 [
-                    f"**{names.get(state.guild_a_id, '—')}** vs "
-                    f"**{names.get(state.guild_b_id, '—')}**",
+                    battle_texts.OPENING_VERSUS.format(
+                        guild_a=names.get(state.guild_a_id, battle_texts.DASH),
+                        guild_b=names.get(state.guild_b_id, battle_texts.DASH),
+                    ),
                     "",
-                    game_shared.item_line("ギルドの持ち時間", guild_time),
+                    game_shared.item_line(battle_texts.LABEL_GUILD_TIME, guild_time),
                     game_shared.item_line(
-                        "1操作の制限時間",
+                        battle_texts.LABEL_TURN_TIME,
                         battle_embed.format_remaining_time(
                             master.battle.turn_time_seconds
                         ),
                     ),
                     game_shared.item_line(
-                        "ベット額",
-                        f"ギルドごと {game_shared.format_coin(bet_coin)}"
-                        "（出場者で均等に分担）",
+                        battle_texts.LABEL_BET,
+                        battle_texts.OPENING_BET.format(
+                            coin=game_shared.format_coin(bet_coin)
+                        ),
                     ),
                     game_shared.item_line(
-                        "XP", f"勝利 {master.battle.bet.win_xp}／敗北 {master.battle.bet.lose_xp}"
+                        battle_texts.LABEL_XP,
+                        battle_texts.OPENING_XP.format(
+                            win_xp=master.battle.bet.win_xp,
+                            lose_xp=master.battle.bet.lose_xp,
+                        ),
                     ),
                     "",
-                    f"-# {bet_notice(bet_coin)}",
+                    battle_texts.OPENING_BET_NOTE.format(
+                        notice=bet_notice(bet_coin)
+                    ),
                 ]
             ),
             color=config.COLOR_PURPLE,
@@ -788,7 +809,7 @@ def _run_engine(state: BattleState, action, elapsed_seconds: int) -> None:
     elif action == AUTO_ACTION:
         battle_engine.auto_action(state, elapsed_seconds=elapsed_seconds)
     else:
-        raise BattleRuleError("未対応の行動です。")
+        raise BattleRuleError(display_texts.ERROR_UNKNOWN_ACTION)
 
     # 持ち時間が0になったギルドを時間切れ敗北にする（22節）
     if not battle_engine.is_finished(state):
@@ -1099,23 +1120,23 @@ def _no_reward_reason(state: BattleState) -> str | None:
     master = load_master_data()
 
     if state.result == RESULT_ABORTED:
-        return "運営による強制中止のため報酬はありません。"
+        return battle_texts.NO_REWARD_ABORTED
 
     if state.end_reason == "surrender" and (
         state.current_round < master.battle.surrender_reward_from_round
     ):
-        return (
-            f"{master.battle.surrender_reward_from_round}巡目より前の降参のため、"
-            "両ギルドとも報酬はありません。"
+        return battle_texts.NO_REWARD_EARLY_SURRENDER.format(
+            round=master.battle.surrender_reward_from_round
         )
 
     if _reward_key(state, state.guild_a_id) is None:
-        return "勝敗が確定しなかったため報酬はありません。"
+        return battle_texts.NO_REWARD_NO_RESULT
 
     return None
 
 
-OUTCOME_LABELS = {"win": "勝利", "lose": "敗北", "draw": "引き分け"}
+# 勝ち・負け・引き分けの見出し（文面は texts/battle.py）
+OUTCOME_LABELS = battle_texts.OUTCOME_LABELS
 
 
 def default_bet_coin() -> int:
@@ -1149,7 +1170,13 @@ def bet_rates() -> tuple:
 
     from game.master_data import BetRate
 
-    return (BetRate(rate_id="default", name="標準レート", coin=bet.coin),)
+    return (
+        BetRate(
+            rate_id="default",
+            name=battle_texts.BET_RATE_DEFAULT_NAME,
+            coin=bet.coin,
+        ),
+    )
 
 
 def bet_rate(rate_id: str):
@@ -1185,11 +1212,10 @@ def bet_notice(bet_coin: int | None = None) -> str:
     bet = load_master_data().battle.bet
     amount = default_bet_coin() if bet_coin is None else bet_coin
 
-    return (
-        f"ギルドごとに {game_shared.format_coin(amount)} をベットします"
-        "（出場者で均等に分担）。"
-        f"負けた側のcoinは勝った側へ移ります"
-        f"（勝利 {bet.win_xp} XP／敗北 {bet.lose_xp} XP）。"
+    return battle_texts.BET_NOTICE.format(
+        coin=game_shared.format_coin(amount),
+        win_xp=bet.win_xp,
+        lose_xp=bet.lose_xp,
     )
 
 
@@ -1197,7 +1223,9 @@ def bet_share_notice(bet_coin: int, member_count: int) -> str:
     """1人あたりの分担額を説明する文を返す。"""
 
     if member_count <= 0:
-        return f"ベット額：{game_shared.format_coin(bet_coin)}"
+        return battle_texts.BET_SHARE_SIMPLE.format(
+            coin=game_shared.format_coin(bet_coin)
+        )
 
     shares = split_bet_evenly(bet_coin, member_count)
     low, high = min(shares), max(shares)
@@ -1205,11 +1233,12 @@ def bet_share_notice(bet_coin: int, member_count: int) -> str:
     if low == high:
         each = game_shared.format_coin(low)
     else:
-        each = f"{low:,}〜{high:,} coin"
+        each = battle_texts.BET_SHARE_RANGE.format(low=f"{low:,}", high=f"{high:,}")
 
-    return (
-        f"ギルド合計 {game_shared.format_coin(bet_coin)}"
-        f"／出場者{member_count}人で分担（1人 {each}）"
+    return battle_texts.BET_SHARE_NOTICE.format(
+        coin=game_shared.format_coin(bet_coin),
+        count=member_count,
+        each=each,
     )
 
 
@@ -1223,15 +1252,17 @@ def build_settlement_embed(
 
     if not results:
         return discord.Embed(
-            title="バトル清算",
-            description=reason or "coinの移動はありません。",
+            title=battle_texts.SETTLEMENT_TITLE,
+            description=reason or battle_texts.SETTLEMENT_NO_MOVE,
             color=config.COLOR_GREY,
         )
 
     moved = sum(item["coin"] for item in results if item["coin"] > 0)
 
     lines = [
-        game_shared.item_line("移動したcoin", game_shared.format_coin(moved)),
+        game_shared.item_line(
+            battle_texts.LABEL_MOVED_COIN, game_shared.format_coin(moved)
+        ),
         "",
     ]
 
@@ -1240,17 +1271,33 @@ def build_settlement_embed(
         if not members:
             continue
 
-        lines.append(f"**{OUTCOME_LABELS[outcome]}**")
+        lines.append(
+            battle_texts.SETTLEMENT_GROUP_HEADING.format(
+                outcome=OUTCOME_LABELS[outcome]
+            )
+        )
         for item in members:
             coin = int(item["coin"])
-            sign = f"{coin:+,} coin" if coin else "±0 coin"
-            xp = f"{item['xp']} XP" if item["xp"] else "XP上限"
-            lines.append(f"<@{item['user_id']}>　{sign}／{xp}")
+            sign = (
+                battle_texts.SETTLEMENT_COIN.format(coin=f"{coin:+,}")
+                if coin
+                else battle_texts.SETTLEMENT_COIN_ZERO
+            )
+            xp = (
+                battle_texts.SETTLEMENT_XP.format(xp=item["xp"])
+                if item["xp"]
+                else battle_texts.SETTLEMENT_XP_CAPPED
+            )
+            lines.append(
+                battle_texts.SETTLEMENT_MEMBER_LINE.format(
+                    user_id=item["user_id"], coin=sign, xp=xp
+                )
+            )
 
         lines.append("")
 
     return discord.Embed(
-        title="バトル清算",
+        title=battle_texts.SETTLEMENT_TITLE,
         description="\n".join(lines)[:4000],
         color=config.COLOR_GOLD,
     )
@@ -1312,7 +1359,7 @@ def grant_rewards(state: BattleState) -> tuple[list[dict], str | None]:
 
     results = outcome["results"]
     if not results:
-        return [], "このバトルはすでに清算済みです。"
+        return [], battle_texts.SETTLEMENT_ALREADY_DONE
 
     return results, None
 
@@ -1413,24 +1460,30 @@ def recovery_problems(bot: discord.Client, state: BattleState) -> list[str]:
     discord_guild = bot.get_guild(config.GUILD_ID)
 
     if discord_guild is None:
-        return ["Discordサーバー情報を取得できませんでした。"]
+        return [battle_texts.READY_DISCORD_GUILD_MISSING]
 
     battle_row = get_battle(state.battle_id) or {}
 
     for guild_id in (state.guild_a_id, state.guild_b_id):
         guild_row = get_guild(guild_id)
         if guild_row is None or guild_row["status"] != "active":
-            problems.append(f"ギルド{guild_id}が活動中ではありません。")
+            problems.append(
+                battle_texts.RECOVERY_GUILD_INACTIVE.format(guild_id=guild_id)
+            )
             continue
 
         channel_id = battle_row.get(_side_key(state, guild_id, "channel_id"))
         if not channel_id or discord_guild.get_channel(int(channel_id)) is None:
-            problems.append(f"ギルド{guild_id}のバトル専用チャンネルがありません。")
+            problems.append(
+                battle_texts.RECOVERY_NO_CHANNEL.format(guild_id=guild_id)
+            )
 
     for unit in state.units.values():
         player_guild = get_player_guild(unit.player_id)
         if player_guild is None or int(player_guild["guild_id"]) != unit.guild_id:
-            problems.append(f"<@{unit.player_id}> の所属が変わっています。")
+            problems.append(
+                battle_texts.RECOVERY_MEMBER_MOVED.format(user_id=unit.player_id)
+            )
 
     return problems
 

@@ -20,6 +20,9 @@ from database.battle import get_active_battles
 from database.guild import get_active_guilds
 from utils import ensure_panel_message, remove_legacy_panels
 
+from texts import battle as battle_texts
+from texts import common as common_texts
+
 from . import service, views
 
 
@@ -241,7 +244,7 @@ class GuildBattle(commands.Cog):
         self, interaction: discord.Interaction, battle_id: int, reason: str
     ) -> None:
         if not game_shared.is_manager(interaction.user):
-            await game_shared.respond(interaction, "運営だけが実行できます。")
+            await game_shared.respond(interaction, battle_texts.ADMIN_ONLY)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -252,18 +255,20 @@ class GuildBattle(commands.Cog):
 
         if not result["ok"]:
             messages = {
-                "reason_required": "中止理由を入力してください。",
-                "battle_not_found": "指定のバトルが見つかりません。",
-                "already_finished": "このバトルは既に終了しています。",
+                "reason_required": battle_texts.ABORT_REASON_REQUIRED,
+                "battle_not_found": battle_texts.ABORT_BATTLE_NOT_FOUND,
+                # この文面は texts/common.py の ERRORS にもあるため共用する
+                "already_finished": common_texts.ERRORS["already_finished"],
             }
             await game_shared.respond(
-                interaction, messages.get(result["error"], "中止できませんでした。")
+                interaction,
+                messages.get(result["error"], battle_texts.ABORT_FAILED),
             )
             return
 
         await game_shared.respond(
             interaction,
-            f"バトル {battle_id} を強制中止しました。勝敗と報酬は記録されません。",
+            battle_texts.ABORT_DONE.format(battle_id=battle_id),
         )
 
     @app_commands.command(
@@ -274,7 +279,7 @@ class GuildBattle(commands.Cog):
         self, interaction: discord.Interaction, battle_id: int
     ) -> None:
         if not game_shared.is_manager(interaction.user):
-            await game_shared.respond(interaction, "運営だけが実行できます。")
+            await game_shared.respond(interaction, battle_texts.ADMIN_ONLY)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -292,14 +297,12 @@ class GuildBattle(commands.Cog):
         )
 
         if not resumed:
-            await game_shared.respond(
-                interaction,
-                "再開できませんでした。ギルド・チャンネル・出場者の状態を確認し、"
-                "復旧できない場合は `/バトル中止` で終了させてください。",
-            )
+            await game_shared.respond(interaction, battle_texts.RESUME_FAILED)
             return
 
-        await game_shared.respond(interaction, f"バトル {battle_id} を再開しました。")
+        await game_shared.respond(
+            interaction, battle_texts.RESUME_DONE.format(battle_id=battle_id)
+        )
 
 
 # ==================================================

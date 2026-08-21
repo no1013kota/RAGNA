@@ -64,6 +64,8 @@ from game.models import (
 from utils import ensure_panel_message, remove_legacy_panels
 
 from . import service
+from texts import battle as battle_texts
+from texts import common as common_texts
 from texts import panels as panel_texts
 
 
@@ -78,9 +80,9 @@ ROSTER_PANEL_TITLE = panel_texts.BATTLE_ROSTER
 RANKING_PANEL_TITLE = panel_texts.BATTLE_RANKING
 
 # 改名前のパネル表題。見つけたら片づけて、新しいパネルへ置き換える。
-LEGACY_ROSTER_PANEL_TITLES = ("バトル出場者",)
-LEGACY_FAMILIAR_PANEL_TITLES = ("バトル使い魔登録",)
-LEGACY_RANKING_PANEL_TITLES = ("ギルドバトルランキング",)
+LEGACY_ROSTER_PANEL_TITLES = panel_texts.BATTLE_ROSTER_LEGACY
+LEGACY_FAMILIAR_PANEL_TITLES = panel_texts.BATTLE_LEGACY
+LEGACY_RANKING_PANEL_TITLES = panel_texts.BATTLE_RANKING_LEGACY
 
 # 一時Viewの有効時間（秒）
 EPHEMERAL_TIMEOUT = 300
@@ -119,14 +121,14 @@ def master_guild_of_channel(interaction: discord.Interaction) -> tuple[dict | No
 
     channel = interaction.channel
     if channel is None:
-        return None, "チャンネル情報を取得できませんでした。"
+        return None, common_texts.CHANNEL_ERROR
 
     guild_row = get_guild_by_channel(channel.id)
     if guild_row is None or guild_row.get("master_text_channel_id") != channel.id:
-        return None, "このチャンネルはギルドマスター専用TCではありません。"
+        return None, battle_texts.NOT_MASTER_CHANNEL
 
     if guild_row["status"] != "active":
-        return None, "このギルドは現在活動中ではありません。"
+        return None, battle_texts.GUILD_NOT_ACTIVE
 
     if guild_row["master_id"] != interaction.user.id:
         return None, game_shared.error_message("not_master")
@@ -143,14 +145,14 @@ def roster_guild_of_channel(interaction: discord.Interaction) -> tuple[dict | No
 
     channel = interaction.channel
     if channel is None:
-        return None, "チャンネル情報を取得できませんでした。"
+        return None, common_texts.CHANNEL_ERROR
 
     guild_row = get_guild_by_channel(channel.id)
     if guild_row is None or guild_row.get("battle_member_channel_id") != channel.id:
-        return None, "このチャンネルは使い魔バトルチャンネルではありません。"
+        return None, battle_texts.NOT_BATTLE_MEMBER_CHANNEL
 
     if guild_row["status"] != "active":
-        return None, "このギルドは現在活動中ではありません。"
+        return None, battle_texts.GUILD_NOT_ACTIVE
 
     return guild_row, None
 
@@ -168,21 +170,21 @@ def load_actor(channel_id: int, user_id: int):
 
     battle_row = get_battle_for_channel(channel_id)
     if battle_row is None:
-        return None, None, None, "このチャンネルで進行中のバトルはありません。"
+        return None, None, None, battle_texts.NO_BATTLE_IN_CHANNEL
 
     if battle_row["status"] != "in_progress":
-        return None, None, None, "このバトルは現在進行中ではありません。"
+        return None, None, None, battle_texts.BATTLE_NOT_IN_PROGRESS
 
     state = load_battle_state(int(battle_row["battle_id"]))
     if state is None:
-        return None, None, None, "バトル情報を取得できませんでした。"
+        return None, None, None, battle_texts.BATTLE_LOAD_ERROR
 
     unit = state.current_unit()
     if unit is None:
-        return None, None, None, "現在は行動を受け付けていません。"
+        return None, None, None, battle_texts.NO_ACTION_ACCEPTED
 
     if unit.player_id != user_id:
-        return None, None, None, "現在の行動順のプレイヤーだけが操作できます。"
+        return None, None, None, battle_texts.NOT_YOUR_TURN
 
     return battle_row, state, unit, None
 
@@ -194,17 +196,22 @@ def _unit_option(unit, state=None) -> discord.SelectOption:
     攻撃対象を選ぶときに「強化されている敵かどうか」が分かるようにするためです。
     """
 
-    label = f"{_familiar_name(unit.familiar_id)} Lv.{unit.level}"
-    description = (
-        f"HP {unit.current_hp}/{unit.max_hp}"
-        f"／ATK {battle_embed.atk_text(unit)}"
-        f"／SPD {battle_embed.speed_text(unit)}"
+    label = battle_texts.FAMILIAR_LABEL.format(
+        name=_familiar_name(unit.familiar_id), level=unit.level
+    )
+    description = battle_texts.UNIT_STATS.format(
+        hp=unit.current_hp,
+        max_hp=unit.max_hp,
+        atk=battle_embed.atk_text(unit),
+        speed=battle_embed.speed_text(unit),
     )
 
     if state is not None:
         marks = _effect_marks(state, unit)
         if marks:
-            description = f"{description}／{marks}"
+            description = battle_texts.UNIT_STATS_WITH_EFFECTS.format(
+                stats=description, marks=marks
+            )
 
     return discord.SelectOption(
         label=label[:100],
@@ -254,11 +261,11 @@ async def _apply_and_report(
         return False
     except Exception:
         logger.exception(f"バトル行動の処理に失敗しました: battle_id={battle_id}")
-        await game_shared.respond(interaction, "行動を処理できませんでした。")
+        await game_shared.respond(interaction, battle_texts.ACTION_FAILED)
         return False
 
     if not applied:
-        await game_shared.respond(interaction, "他の操作が先に処理されました。")
+        await game_shared.respond(interaction, battle_texts.ACTION_RACED)
         return False
 
     if success_message is not None:
@@ -332,7 +339,7 @@ class PagedSelectView(discord.ui.View):
 
         if paging:
             previous = discord.ui.Button(
-                label="◀ 前へ",
+                label=battle_texts.PAGE_PREVIOUS,
                 style=discord.ButtonStyle.secondary,
                 row=rows,
                 disabled=self.page == 0,
@@ -341,7 +348,7 @@ class PagedSelectView(discord.ui.View):
             self.add_item(previous)
 
             following = discord.ui.Button(
-                label="次へ ▶",
+                label=battle_texts.PAGE_NEXT,
                 style=discord.ButtonStyle.secondary,
                 row=rows,
                 disabled=self.page >= self.page_count - 1,
@@ -364,9 +371,9 @@ class PagedSelectView(discord.ui.View):
             return ""
 
         if ranks[0] == ranks[-1]:
-            return f"（{ranks[0]}ランク）"
+            return battle_texts.SELECT_RANK_ONE.format(rank=ranks[0])
 
-        return f"（{ranks[0]}〜{ranks[-1]}ランク）"
+        return battle_texts.SELECT_RANK_RANGE.format(first=ranks[0], last=ranks[-1])
 
     async def _previous_callback(self, interaction: discord.Interaction) -> None:
         self.page = max(0, self.page - 1)
@@ -393,7 +400,7 @@ class PagedSelectView(discord.ui.View):
 class ConfirmView(discord.ui.View):
     """2段階確認用の一時View。"""
 
-    def __init__(self, *, confirm_label: str = "実行する") -> None:
+    def __init__(self, *, confirm_label: str = battle_texts.CONFIRM_BUTTON) -> None:
         super().__init__(timeout=EPHEMERAL_TIMEOUT)
 
         confirm = discord.ui.Button(
@@ -402,7 +409,9 @@ class ConfirmView(discord.ui.View):
         confirm.callback = self._confirm_callback
         self.add_item(confirm)
 
-        cancel = discord.ui.Button(label="やめる", style=discord.ButtonStyle.secondary)
+        cancel = discord.ui.Button(
+            label=battle_texts.CANCEL_BUTTON, style=discord.ButtonStyle.secondary
+        )
         cancel.callback = self._cancel_callback
         self.add_item(cancel)
 
@@ -425,7 +434,9 @@ class ConfirmView(discord.ui.View):
             item.disabled = True
 
         try:
-            await interaction.response.edit_message(content="操作を取り消しました。", view=self)
+            await interaction.response.edit_message(
+                content=battle_texts.CANCELLED_OPERATION, view=self
+            )
         except discord.HTTPException:
             pass
 
@@ -493,15 +504,22 @@ async def apply_roster(
         await ensure_roster_panel(interaction.client, discord_guild, guild_row)
 
     lines = [
-        game_shared.item_line("出場者", f"{len(user_ids)}人"),
         game_shared.item_line(
-            "使い魔", f"{sum(count for _, count in assignments)}体"
-            f"（最大{master.battle.max_units}体）"
+            battle_texts.LABEL_MEMBERS,
+            battle_texts.ROSTER_MEMBER_COUNT.format(count=len(user_ids)),
+        ),
+        game_shared.item_line(
+            battle_texts.LABEL_FAMILIARS,
+            battle_texts.ROSTER_FAMILIAR_COUNT.format(
+                count=sum(count for _, count in assignments),
+                max_units=master.battle.max_units,
+            ),
         ),
         "",
     ]
     lines.extend(
-        f"<@{user_id}>：{count}体" for user_id, count in assignments
+        battle_texts.ROSTER_ASSIGN_LINE.format(user_id=user_id, count=count)
+        for user_id, count in assignments
     )
 
     added = "・".join(f"<@{user_id}>" for user_id in result["added"])
@@ -509,24 +527,24 @@ async def apply_roster(
     lines.append("")
 
     if added:
-        lines.append(game_shared.item_line("追加", added))
+        lines.append(game_shared.item_line(battle_texts.LABEL_ADDED, added))
     if removed:
-        lines.append(game_shared.item_line("除外", removed))
+        lines.append(game_shared.item_line(battle_texts.LABEL_REMOVED, removed))
 
     if result.get("adopted"):
         lines.append(
-            f"-# 事前登録の順番から{len(result['adopted'])}体を自動でセットしました。"
+            battle_texts.ROSTER_ADOPTED_NOTE.format(count=len(result["adopted"]))
         )
 
     if result.get("released"):
         lines.append(
-            f"-# 割り当ての変更にともない、{len(result['released'])}体の"
-            "使い魔セットを解除しました。"
+            battle_texts.ROSTER_RELEASED_NOTE.format(count=len(result["released"]))
         )
 
     lines.append(
-        f"-# 出場者は「#{game_shared.CHANNEL_LABELS['battle_member']}」で、"
-        "自分の使い魔を差し替えられます。"
+        battle_texts.ROSTER_SWAP_HINT.format(
+            channel=game_shared.CHANNEL_LABELS["battle_member"]
+        )
     )
 
     await game_shared.respond(interaction, "\n".join(lines))
@@ -548,14 +566,20 @@ class RosterSelectView(discord.ui.View):
         options = [
             discord.SelectOption(
                 label=row["display_name"][:100],
-                description="ギルドマスター" if row["member_role"] == "master" else None,
+                description=(
+                    battle_texts.OPTION_GUILD_MASTER
+                    if row["member_role"] == "master"
+                    else None
+                ),
                 value=str(row["user_id"]),
             )
             for row in members[:SELECT_LIMIT]
         ]
 
         select = discord.ui.Select(
-            placeholder=f"出場者を選択（最大{master.battle.max_members}人）",
+            placeholder=battle_texts.ROSTER_SELECT_PLACEHOLDER.format(
+                max_members=master.battle.max_members
+            ),
             min_values=master.battle.min_members,
             max_values=min(master.battle.max_members, len(options)),
             options=options,
@@ -593,10 +617,8 @@ class RosterSelectView(discord.ui.View):
 
         await game_shared.respond(
             interaction,
-            (
-                "出場者ごとに使い魔の体数を決めて「確定」を押してください。\n"
-                f"-# 1人あたり最大{limit}体、ギルド合計{master.battle.max_units}体までです。\n"
-                "-# 体数の分だけ、本人の事前登録から自動でセットします。"
+            battle_texts.ROSTER_COUNT_PROMPT.format(
+                limit=limit, max_units=master.battle.max_units
             ),
             view=RosterCountView(
                 guild_row=guild_row,
@@ -635,13 +657,17 @@ class RosterCountView(discord.ui.View):
         for row, user_id in enumerate(user_ids):
             current = self.counts[user_id]
             select = discord.ui.Select(
-                placeholder=f"{names.get(user_id, user_id)}：{current}体",
+                placeholder=battle_texts.ROSTER_COUNT_LABEL.format(
+                    name=names.get(user_id, user_id), count=current
+                ),
                 min_values=1,
                 max_values=1,
                 row=row,
                 options=[
                     discord.SelectOption(
-                        label=f"{names.get(user_id, user_id)}：{count}体"[:100],
+                        label=battle_texts.ROSTER_COUNT_LABEL.format(
+                            name=names.get(user_id, user_id), count=count
+                        )[:100],
                         value=f"{user_id}:{count}",
                         default=count == current,
                     )
@@ -653,7 +679,9 @@ class RosterCountView(discord.ui.View):
             self._selects[user_id] = select
 
         confirm = discord.ui.Button(
-            label="確定", style=discord.ButtonStyle.success, row=len(user_ids)
+            label=battle_texts.ROSTER_COUNT_CONFIRM,
+            style=discord.ButtonStyle.success,
+            row=len(user_ids),
         )
         confirm.callback = self._confirm_callback
         self.add_item(confirm)
@@ -680,9 +708,13 @@ class RosterCountView(discord.ui.View):
         try:
             await interaction.response.edit_message(
                 content=(
-                    "出場者ごとに使い魔の体数を決めて「確定」を押してください。\n"
+                    battle_texts.ROSTER_COUNT_HEADING
+                    + "\n"
                     + game_shared.item_line(
-                        "現在の合計", f"{total}/{self.max_units}体"
+                        battle_texts.LABEL_CURRENT_TOTAL,
+                        battle_texts.ROSTER_COUNT_TOTAL.format(
+                            total=total, max_units=self.max_units
+                        ),
                     )
                 ),
                 view=self,
@@ -713,7 +745,7 @@ class RosterFamiliarAddView(PagedSelectView):
     """出場者が持ち込む使い魔を1体追加する一時View（9節）。"""
 
     def __init__(self, guild_id: int, options: list[discord.SelectOption]) -> None:
-        super().__init__(options, placeholder="セットする使い魔を選択")
+        super().__init__(options, placeholder=battle_texts.ENTRY_ADD_PLACEHOLDER)
 
         self.guild_id = guild_id
 
@@ -751,16 +783,19 @@ class RosterFamiliarAddView(PagedSelectView):
 
         owned = get_owned_familiar(int(value))
         name = (
-            f"**{_familiar_name(owned['familiar_id'])} Lv.{owned['level']}**"
+            battle_texts.FAMILIAR_LABEL_BOLD.format(
+                name=_familiar_name(owned["familiar_id"]), level=owned["level"]
+            )
             if owned
-            else "使い魔"
+            else battle_texts.FAMILIAR_FALLBACK
         )
         total = len(get_battle_entries(self.guild_id))
 
         await game_shared.respond(
             interaction,
-            f"{name} をセットしました。（ギルド合計 {total}/{master.battle.max_units}体）\n"
-            "-# 事前登録の先頭も、いま出場する使い魔の順番に合わせました。",
+            battle_texts.ENTRY_ADDED.format(
+                name=name, count=total, max_units=master.battle.max_units
+            ),
         )
 
 
@@ -768,7 +803,7 @@ class RosterFamiliarRemoveView(PagedSelectView):
     """自分がセットした使い魔を1体解除する一時View。"""
 
     def __init__(self, guild_id: int, options: list[discord.SelectOption]) -> None:
-        super().__init__(options, placeholder="解除する使い魔を選択")
+        super().__init__(options, placeholder=battle_texts.ENTRY_REMOVE_PLACEHOLDER)
 
         self.guild_id = guild_id
 
@@ -787,8 +822,9 @@ class RosterFamiliarRemoveView(PagedSelectView):
 
         await game_shared.respond(
             interaction,
-            f"セットを解除しました。（ギルド合計 {total}/{master.battle.max_units}体）\n"
-            "-# 事前登録からも外しました。使うときは登録し直してください。",
+            battle_texts.ENTRY_REMOVED.format(
+                count=total, max_units=master.battle.max_units
+            ),
         )
 
 
@@ -802,7 +838,7 @@ class RosterFamiliarSwapView(PagedSelectView):
         guild_id: int,
         removed_instance_id: int,
     ) -> None:
-        super().__init__(options, placeholder="入れ替える使い魔を選択")
+        super().__init__(options, placeholder=battle_texts.ENTRY_SWAP_PLACEHOLDER)
 
         self.guild_id = guild_id
         self.removed_instance_id = removed_instance_id
@@ -829,17 +865,15 @@ class RosterFamiliarSwapView(PagedSelectView):
 
         owned = get_owned_familiar(int(value))
         name = (
-            f"**{_familiar_name(owned['familiar_id'])} Lv.{owned['level']}**"
+            battle_texts.FAMILIAR_LABEL_BOLD.format(
+                name=_familiar_name(owned["familiar_id"]), level=owned["level"]
+            )
             if owned
-            else "使い魔"
+            else battle_texts.FAMILIAR_FALLBACK
         )
 
         await game_shared.respond(
-            interaction,
-            f"{name} へ入れ替えました。\n"
-            "-# 事前登録の同じ順番も、この使い魔へ入れ替えました。\n"
-            "-# 外した使い魔は1つ下の控えへ下げます"
-            "（登録が上限まで埋まっている場合は登録から抜けます）。",
+            interaction, battle_texts.ENTRY_SWAPPED.format(name=name)
         )
 
 
@@ -849,7 +883,7 @@ class RosterFamiliarSwapTargetView(PagedSelectView):
     def __init__(
         self, options: list[discord.SelectOption], *, guild_id: int
     ) -> None:
-        super().__init__(options, placeholder="入れ替える枠を選択")
+        super().__init__(options, placeholder=battle_texts.ENTRY_SWAP_SLOT_PLACEHOLDER)
 
         self.guild_id = guild_id
 
@@ -861,20 +895,22 @@ class RosterFamiliarSwapTargetView(PagedSelectView):
             issues = settable_blockers(self.guild_id, interaction.user.id)
             await game_shared.respond(
                 interaction,
-                "**入れ替えられる使い魔がありません。**\n" + "\n".join(issues),
+                battle_texts.ENTRY_NO_SWAPPABLE_HEADING + "\n" + "\n".join(issues),
             )
             return
 
         owned = get_owned_familiar(int(value))
         current = (
-            f"{_familiar_name(owned['familiar_id'])} Lv.{owned['level']}"
+            battle_texts.FAMILIAR_LABEL.format(
+                name=_familiar_name(owned["familiar_id"]), level=owned["level"]
+            )
             if owned
-            else "この使い魔"
+            else battle_texts.ENTRY_SWAP_FALLBACK
         )
 
         await game_shared.respond(
             interaction,
-            f"**{current}** を、どの使い魔へ入れ替えますか？",
+            battle_texts.ENTRY_SWAP_PROMPT.format(familiar=current),
             view=RosterFamiliarSwapView(
                 options, guild_id=self.guild_id, removed_instance_id=int(value)
             ),
@@ -902,12 +938,14 @@ class RosterFamiliarActionView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await game_shared.respond(interaction, "この操作は本人だけが使用できます。")
+            await game_shared.respond(interaction, battle_texts.OWNER_ONLY)
             return False
 
         return True
 
-    @discord.ui.button(label="使い魔を追加", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label=battle_texts.ENTRY_BUTTON_ADD, style=discord.ButtonStyle.success
+    )
     async def add_familiar(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -918,45 +956,49 @@ class RosterFamiliarActionView(discord.ui.View):
             issues = settable_blockers(self.guild_id, interaction.user.id)
             await game_shared.respond(
                 interaction,
-                "**セットできる使い魔がありません。**\n" + "\n".join(issues),
+                battle_texts.ENTRY_NO_SETTABLE_HEADING + "\n" + "\n".join(issues),
             )
             return
 
         await game_shared.respond(
             interaction,
-            "セットする使い魔を選んでください。",
+            battle_texts.ENTRY_ADD_PROMPT,
             view=RosterFamiliarAddView(self.guild_id, options),
         )
 
-    @discord.ui.button(label="入れ替え", style=discord.ButtonStyle.primary)
+    @discord.ui.button(
+        label=battle_texts.ENTRY_BUTTON_SWAP, style=discord.ButtonStyle.primary
+    )
     async def swap_familiar(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         options = build_current_entry_options(self.guild_id, interaction.user.id)
 
         if not options:
-            await game_shared.respond(interaction, "入れ替えられる使い魔がありません。")
+            await game_shared.respond(interaction, battle_texts.ENTRY_NO_SWAPPABLE)
             return
 
         await game_shared.respond(
             interaction,
-            "入れ替える枠を選んでください。",
+            battle_texts.ENTRY_SWAP_SLOT_PROMPT,
             view=RosterFamiliarSwapTargetView(options, guild_id=self.guild_id),
         )
 
-    @discord.ui.button(label="セットを解除", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label=battle_texts.ENTRY_BUTTON_REMOVE, style=discord.ButtonStyle.secondary
+    )
     async def remove_familiar(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         options = build_current_entry_options(self.guild_id, interaction.user.id)
 
         if not options:
-            await game_shared.respond(interaction, "解除できる使い魔がありません。")
+            await game_shared.respond(interaction, battle_texts.ENTRY_NO_REMOVABLE)
             return
 
         await game_shared.respond(
             interaction,
-            "解除する使い魔を選んでください。",
+            battle_texts.ENTRY_REMOVE_PROMPT,
             view=RosterFamiliarRemoveView(self.guild_id, options),
         )
 
@@ -1003,14 +1045,21 @@ def familiar_option(
 
     stats = master.level_stats(familiar_id, level)
     description = (
-        f"HP {stats.max_hp}／ATK {stats.atk}／SPD {stats.speed}／COST {familiar.cost}"
+        battle_texts.OPTION_STATS.format(
+            hp=stats.max_hp,
+            atk=stats.atk,
+            speed=stats.speed,
+            cost=familiar.cost,
+        )
         if stats
         else familiar.description
     )
 
-    label = f"{prefix}{familiar.rank} {familiar.name} Lv.{level}"
+    label = battle_texts.OPTION_LABEL.format(
+        prefix=prefix, rank=familiar.rank, name=familiar.name, level=level
+    )
     if count > 1:
-        label = f"{label} ×{count}"
+        label = battle_texts.OPTION_LABEL_COUNT.format(label=label, count=count)
 
     return discord.SelectOption(
         label=label[:100],
@@ -1115,22 +1164,20 @@ def settable_blockers(guild_id: int, user_id: int) -> list[str]:
 
     rank_info = game_shared.get_player_rank_info(user_id)
     if rank_info is None:
-        return [
-            "プレイヤーランクを確認できませんでした。運営へ連絡してください。"
-        ]
+        return [battle_texts.RANK_UNKNOWN]
 
     usable = master.usable_ranks(
         rank_info["player_rank"], is_sub_manager=rank_info["is_sub_manager"]
     )
     if not usable:
         return [
-            "クラスロール（S・A・B・C）が付いていないため、使い魔を使役できません。",
-            "-# 運営へ連絡してクラスロールを付けてもらってください。",
+            battle_texts.NO_CLASS_ROLE,
+            battle_texts.NO_CLASS_ROLE_HINT,
         ]
 
     owned = get_owned_familiars(user_id)
     if not owned:
-        return ["使い魔を所有していません。ガチャで入手してください。"]
+        return [battle_texts.NO_OWNED_FAMILIAR]
 
     already_set = {
         int(entry["instance_id"]) for entry in get_battle_entries(guild_id)
@@ -1141,8 +1188,8 @@ def settable_blockers(guild_id: int, user_id: int) -> list[str]:
 
     if not remaining:
         return [
-            "所有している使い魔はすべてセット済みです。",
-            "-# 入れ替えるには「入れ替え」から、外すには「セットを解除」から操作してください。",
+            battle_texts.ALL_ALREADY_SET,
+            battle_texts.ALL_ALREADY_SET_HINT,
         ]
 
     # 残っているのに候補が無い＝使役できるランクが足りない
@@ -1154,9 +1201,10 @@ def settable_blockers(guild_id: int, user_id: int) -> list[str]:
         }
     )
     return [
-        f"あなたのランク（{rank_info['player_rank']}）では、"
-        f"残っている使い魔（{'・'.join(ranks)}）を使役できません。",
-        f"-# 使役できるのは {'・'.join(usable)} までです（自分のランクより1段階上まで）。",
+        battle_texts.RANK_TOO_LOW.format(
+            player_rank=rank_info["player_rank"], ranks="・".join(ranks)
+        ),
+        battle_texts.RANK_USABLE_HINT.format(ranks="・".join(usable)),
     ]
 
 
@@ -1187,11 +1235,19 @@ def build_entry_overview(
         by_user.setdefault(int(entry["user_id"]), []).append(entry)
 
     lines = [
-        "**出場する使い魔**",
+        battle_texts.ENTRY_OVERVIEW_HEADING,
         game_shared.item_line(
-            "ギルド合計", f"{len(entries)}/{master.battle.max_units}体"
+            battle_texts.LABEL_GUILD_TOTAL,
+            battle_texts.ENTRY_GUILD_TOTAL.format(
+                count=len(entries), max_units=master.battle.max_units
+            ),
         ),
-        game_shared.item_line("あなたの枠", f"{len(mine)}/{assigned}体"),
+        game_shared.item_line(
+            battle_texts.LABEL_YOUR_SLOT,
+            battle_texts.ENTRY_YOUR_SLOT.format(
+                count=len(mine), assigned=assigned
+            ),
+        ),
         "",
     ]
 
@@ -1200,20 +1256,29 @@ def build_entry_overview(
         count = int(member["familiar_count"] or 0)
         owned_entries = by_user.get(user_id, [])
 
-        mark = "▶" if user_id == viewer_id else "・"
-        suffix = "（あなた）" if user_id == viewer_id else ""
+        is_viewer = user_id == viewer_id
+        mark = (
+            battle_texts.ENTRY_MARK_YOU if is_viewer else battle_texts.ENTRY_MARK_OTHER
+        )
+        suffix = battle_texts.ENTRY_SUFFIX_YOU if is_viewer else ""
         lines.append(
-            f"{mark} <@{user_id}>{suffix}　{len(owned_entries)}/{count}体"
+            battle_texts.ENTRY_MEMBER_LINE.format(
+                mark=mark,
+                user_id=user_id,
+                suffix=suffix,
+                count=len(owned_entries),
+                assigned=count,
+            )
         )
 
         if not owned_entries:
-            lines.append("　未設定")
+            lines.append(battle_texts.ENTRY_UNSET)
             continue
 
         for entry in owned_entries:
             owned = get_owned_familiar(int(entry["instance_id"]))
             if owned is None:
-                lines.append("　所有していません")
+                lines.append(battle_texts.ENTRY_NOT_OWNED)
                 continue
 
             familiar_id = str(owned["familiar_id"])
@@ -1222,18 +1287,24 @@ def build_entry_overview(
             stats = master.level_stats(familiar_id, level)
 
             detail = (
-                f"HP {stats.max_hp}／ATK {stats.atk}／SPD {stats.speed}"
+                battle_texts.FAMILIAR_STATS.format(
+                    hp=stats.max_hp, atk=stats.atk, speed=stats.speed
+                )
                 if stats
-                else "—"
+                else battle_texts.DASH
             )
             rank = game_shared.rank_label(familiar.rank) if familiar else "?"
-            cost = familiar.cost if familiar else "—"
+            cost = familiar.cost if familiar else battle_texts.DASH
 
             lines.append(
-                f"　{rank} **{_familiar_name(familiar_id)}** Lv.{level}"
-                f"　COST {cost}"
+                battle_texts.ENTRY_FAMILIAR_LINE.format(
+                    rank=rank,
+                    name=_familiar_name(familiar_id),
+                    level=level,
+                    cost=cost,
+                )
             )
-            lines.append(f"　　{detail}")
+            lines.append(battle_texts.ENTRY_DETAIL_LINE.format(detail=detail))
 
     total_cost = 0
     for entry in entries:
@@ -1243,17 +1314,19 @@ def build_entry_overview(
             total_cost += familiar.cost
 
     cap = master.battle.max_total_cost
-    cost_text = f"{total_cost}" if cap <= 0 else f"{total_cost}/{cap}"
+    cost_text = (
+        f"{total_cost}"
+        if cap <= 0
+        else battle_texts.ENTRY_COST_WITH_LIMIT.format(cost=total_cost, limit=cap)
+    )
     if cap > 0 and total_cost > cap:
-        cost_text = f"{cost_text} ⚠ 上限超過"
+        cost_text = battle_texts.ENTRY_COST_OVER.format(cost=cost_text)
 
     lines.append("")
-    lines.append(game_shared.item_line("合計COST", cost_text))
+    lines.append(game_shared.item_line(battle_texts.LABEL_TOTAL_COST, cost_text))
     if cap > 0:
-        lines.append("-# COSTはランクで決まります：S 5／A 4／B 3／C 2")
-    lines.append(
-        "-# 体数はギルドマスターが割り当てます。枠のなかで自由に差し替えできます。"
-    )
+        lines.append(battle_texts.COST_TABLE_NOTE)
+    lines.append(battle_texts.ENTRY_OVERVIEW_FOOTER)
 
     return "\n".join(lines)[:1900]
 
@@ -1280,7 +1353,7 @@ def build_current_entry_options(
             int(entry["instance_id"]),
             familiar_id,
             level,
-            prefix=f"{entry['entry_slot']}体目：",
+            prefix=battle_texts.ENTRY_SLOT_PREFIX.format(slot=entry["entry_slot"]),
         )
         if option is not None:
             found.append((familiar_sort_key(familiar_id, level), option))
@@ -1310,28 +1383,24 @@ def entry_error_message(
         limit = detail.get("limit")
 
     if code == "entries_full":
-        return (
-            f"このギルドは既に{master.battle.max_units}体セット済みです。"
-            "解除してから追加してください。"
+        return battle_texts.ENTRY_ERROR_FULL.format(
+            max_units=master.battle.max_units
         )
     if code == "cost_over":
         current = int(detail.get("current_cost", 0))
         adding = int(detail.get("adding_cost", 0))
         cap = int(detail.get("max_total_cost", master.battle.max_total_cost))
-        return (
-            f"編成の合計COST上限を超えます（現在{current} + {adding} > 上限{cap}）。\n"
-            "-# COSTの低い使い魔へ入れ替えるか、先に1体解除してください。\n"
-            "-# COSTはランクで決まります：S 5／A 4／B 3／C 2"
+        return battle_texts.ENTRY_ERROR_COST_OVER.format(
+            current=current, adding=adding, limit=cap
         )
     if code == "member_limit":
-        return (
-            f"あなたに割り当てられた体数は{limit if limit is not None else 0}体です。"
-            "先に1体解除してから差し替えてください。"
+        return battle_texts.ENTRY_ERROR_MEMBER_LIMIT.format(
+            limit=limit if limit is not None else 0
         )
     if code == "already_set":
-        return "その使い魔は既にセットされています。"
+        return battle_texts.ENTRY_ERROR_ALREADY_SET
     if code == "not_set":
-        return "その使い魔はセットされていません。"
+        return battle_texts.ENTRY_ERROR_NOT_SET
 
     return game_shared.error_message(code)
 
@@ -1348,9 +1417,8 @@ def bet_rate_option(rate) -> discord.SelectOption:
 
     return discord.SelectOption(
         label=rate.name[:100],
-        description=(
-            f"ギルドごと {game_shared.format_coin(rate.coin)}／"
-            "勝ったギルドが受け取ります"
+        description=battle_texts.BET_RATE_OPTION_DESCRIPTION.format(
+            coin=game_shared.format_coin(rate.coin)
         )[:100],
         value=rate.rate_id,
     )
@@ -1371,7 +1439,7 @@ class BetRateSelectView(discord.ui.View):
         self._running = False
 
         select = discord.ui.Select(
-            placeholder=f"{action}のバトルレートを選択"[:150],
+            placeholder=battle_texts.BET_RATE_PLACEHOLDER.format(action=action)[:150],
             min_values=1,
             max_values=1,
             options=[bet_rate_option(rate) for rate in service.bet_rates()],
@@ -1391,12 +1459,12 @@ class BetRateSelectView(discord.ui.View):
 
     async def _select_callback(self, interaction: discord.Interaction) -> None:
         if self._running:
-            await game_shared.respond(interaction, "処理中です。しばらくお待ちください。")
+            await game_shared.respond(interaction, common_texts.ALREADY_RUNNING)
             return
 
         rate = service.bet_rate(self._select.values[0])
         if rate is None:
-            await game_shared.respond(interaction, "そのレートは選べません。")
+            await game_shared.respond(interaction, battle_texts.BET_RATE_UNAVAILABLE)
             return
 
         self._running = True
@@ -1419,13 +1487,7 @@ class BetRateSelectView(discord.ui.View):
 def bet_rate_guide(next_step: str) -> str:
     """レート選択の案内文を作る。``next_step`` は選んだ直後に起きること。"""
 
-    return "\n".join(
-        [
-            f"**バトルレートを選んでください。**選ぶとすぐに{next_step}。",
-            "-# 賭けたcoinは、負けたギルドから勝ったギルドへ移ります。",
-            "-# ギルドの負担額は出場者で均等に分担します。",
-        ]
-    )
+    return battle_texts.BET_RATE_GUIDE.format(next_step=next_step)
 
 
 def opponent_options(guild_id: int) -> list[discord.SelectOption]:
@@ -1443,9 +1505,10 @@ def opponent_options(guild_id: int) -> list[discord.SelectOption]:
         options.append(
             discord.SelectOption(
                 label=candidate["name"][:100],
-                description=(
-                    f"{candidate['wins']}勝 {candidate['losses']}敗 "
-                    f"{candidate['draws']}分"
+                description=battle_texts.OPPONENT_OPTION_RECORD.format(
+                    wins=candidate["wins"],
+                    losses=candidate["losses"],
+                    draws=candidate["draws"],
                 )[:100],
                 value=str(candidate_id),
             )
@@ -1461,10 +1524,13 @@ def bet_confirmation(guild_id: int, bet_coin: int) -> str:
 
     return "\n".join(
         [
-            game_shared.item_line("ベット額", game_shared.format_coin(bet_coin)),
-            f"-# {service.bet_share_notice(bet_coin, len(roster))}",
-            "-# 負けた側のcoinは勝った側へ移ります。残高が足りない場合は"
-            "持っているぶんだけ移ります。",
+            game_shared.item_line(
+                battle_texts.LABEL_BET, game_shared.format_coin(bet_coin)
+            ),
+            battle_texts.BET_SHARE_LINE.format(
+                notice=service.bet_share_notice(bet_coin, len(roster))
+            ),
+            battle_texts.BET_TRANSFER_NOTE,
         ]
     )
 
@@ -1482,7 +1548,7 @@ class OpponentSelectView(PagedSelectView):
         *,
         bet_coin: int,
     ) -> None:
-        super().__init__(options, placeholder="対戦を申し込むギルドを選択")
+        super().__init__(options, placeholder=battle_texts.OPPONENT_SELECT_PLACEHOLDER)
 
         self.guild_row = guild_row
         self.bet_coin = bet_coin
@@ -1524,28 +1590,37 @@ class OpponentSelectView(PagedSelectView):
         if not isinstance(channel, discord.TextChannel):
             resolve_battle_request(request_id, "cancelled")
             await game_shared.respond(
-                interaction, "相手ギルドのマスター専用TCが見つかりませんでした。"
+                interaction, battle_texts.REQUEST_NO_OPPONENT_CHANNEL
             )
             return
 
         embed = discord.Embed(
-            title="⚔ ギルドバトル申請",
+            title=battle_texts.REQUEST_EMBED_TITLE,
             description="\n".join(
                 [
-                    f"**{guild_row['name']}** から対戦の申し込みが届きました。",
-                    "承認すると開始前チェックを行い、条件を満たしていればバトルが始まります。",
+                    battle_texts.REQUEST_EMBED_INTRO.format(
+                        guild_name=guild_row["name"]
+                    ),
+                    battle_texts.REQUEST_EMBED_NOTE,
                     "",
-                    game_shared.item_line("申請元", guild_row["name"]),
-                    game_shared.item_line("申請先", opponent_row["name"]),
                     game_shared.item_line(
-                        "レート", service.bet_rate_label(self.bet_coin) or "—"
+                        battle_texts.LABEL_REQUEST_FROM, guild_row["name"]
                     ),
                     game_shared.item_line(
-                        "ベット額", f"ギルドごと {game_shared.format_coin(self.bet_coin)}"
+                        battle_texts.LABEL_REQUEST_TO, opponent_row["name"]
+                    ),
+                    game_shared.item_line(
+                        battle_texts.LABEL_RATE,
+                        service.bet_rate_label(self.bet_coin) or battle_texts.DASH,
+                    ),
+                    game_shared.item_line(
+                        battle_texts.LABEL_BET,
+                        battle_texts.BET_PER_GUILD.format(
+                            coin=game_shared.format_coin(self.bet_coin)
+                        ),
                     ),
                     "",
-                    "-# 承認すると、負けた側のcoinが勝った側へ移ります。"
-                    "出場者で均等に分担します。",
+                    battle_texts.REQUEST_EMBED_FOOTER,
                 ]
             ),
             color=config.COLOR_PURPLE,
@@ -1556,10 +1631,9 @@ class OpponentSelectView(PagedSelectView):
 
         await game_shared.respond(
             interaction,
-            (
-                f"**{opponent_row['name']}** へバトル申請を送信しました。\n"
-                f"{bet_confirmation(guild_id, self.bet_coin)}\n"
-                "-# 相手が回答する前なら、もう一度「バトル申請」から取り消せます。"
+            battle_texts.REQUEST_SENT.format(
+                guild_name=opponent_row["name"],
+                bet=bet_confirmation(guild_id, self.bet_coin),
             ),
         )
 
@@ -1568,7 +1642,7 @@ class RequestCancelView(ConfirmView):
     """送信済みバトル申請を取り消す一時View。"""
 
     def __init__(self, request_id: int) -> None:
-        super().__init__(confirm_label="申請を取り消す")
+        super().__init__(confirm_label=battle_texts.REQUEST_CANCEL_BUTTON)
 
         self.request_id = request_id
 
@@ -1598,13 +1672,15 @@ class RequestCancelView(ConfirmView):
             await _notify_guild_channel(
                 interaction.client,
                 opponent_row,
-                title="⚔ ギルドバトル申請の取消",
-                description=f"**{guild_row['name']}** がバトル申請を取り消しました。",
+                title=battle_texts.REQUEST_CANCELLED_TITLE,
+                description=battle_texts.REQUEST_CANCELLED_BODY.format(
+                    guild_name=guild_row["name"]
+                ),
                 color=config.COLOR_GREY,
                 channel_key="guild_text_channel_id",
             )
 
-        await game_shared.respond(interaction, "バトル申請を取り消しました。")
+        await game_shared.respond(interaction, battle_texts.REQUEST_CANCELLED_DONE)
 
 
 async def _delete_posted_message(
@@ -1677,7 +1753,7 @@ class RecruitmentCancelView(ConfirmView):
     """公開バトル募集を取り消す一時View。"""
 
     def __init__(self, recruitment_id: int) -> None:
-        super().__init__(confirm_label="募集を取り消す")
+        super().__init__(confirm_label=battle_texts.RECRUIT_CANCEL_BUTTON)
 
         self.recruitment_id = recruitment_id
 
@@ -1701,9 +1777,7 @@ class RecruitmentCancelView(ConfirmView):
 
         # 取り消した募集は残しても申し込めないため、投稿ごと片づける
         await _delete_recruitment_message(interaction.client, result)
-        await game_shared.respond(
-            interaction, "バトル募集を取り消し、募集の投稿も削除しました。"
-        )
+        await game_shared.respond(interaction, battle_texts.RECRUIT_CANCELLED_DONE)
 
 
 def recruitment_embed(
@@ -1716,23 +1790,32 @@ def recruitment_embed(
     rate_name = service.bet_rate_label(amount)
 
     return discord.Embed(
-        title="⚔ GUILD BATTLE",
+        title=battle_texts.RECRUIT_EMBED_TITLE,
         description="\n".join(
             [
-                f"「**{guild_row['name']}**」が対戦ギルドを募集しています。",
+                battle_texts.RECRUIT_EMBED_INTRO.format(
+                    guild_name=guild_row["name"]
+                ),
                 "",
                 game_shared.item_line(
-                    "出場人数",
-                    f"{master.battle.min_members}～{master.battle.max_members}人",
+                    battle_texts.LABEL_MEMBER_RANGE,
+                    battle_texts.RECRUIT_MEMBER_RANGE.format(
+                        min_members=master.battle.min_members,
+                        max_members=master.battle.max_members,
+                    ),
                 ),
-                game_shared.item_line("レート", rate_name or "—"),
                 game_shared.item_line(
-                    "ベット額", f"ギルドごと {game_shared.format_coin(amount)}"
+                    battle_texts.LABEL_RATE, rate_name or battle_texts.DASH
                 ),
-                game_shared.item_line("状態", state_text),
+                game_shared.item_line(
+                    battle_texts.LABEL_BET,
+                    battle_texts.BET_PER_GUILD.format(
+                        coin=game_shared.format_coin(amount)
+                    ),
+                ),
+                game_shared.item_line(battle_texts.LABEL_STATE, state_text),
                 "",
-                "-# 申し込むと、負けた側のcoinが勝った側へ移ります。"
-                "出場者で均等に分担します。",
+                battle_texts.RECRUIT_EMBED_FOOTER,
             ]
         ),
         color=config.COLOR_PURPLE,
@@ -1795,11 +1878,15 @@ class ActionChoiceView(discord.ui.View):
         self.battle_id = battle_id
         self.unit_id = unit_id
 
-        skill = discord.ui.Button(label="特殊スキル", style=discord.ButtonStyle.primary)
+        skill = discord.ui.Button(
+            label=battle_texts.BUTTON_SKILL, style=discord.ButtonStyle.primary
+        )
         skill.callback = self._skill_callback
         self.add_item(skill)
 
-        attack = discord.ui.Button(label="攻撃", style=discord.ButtonStyle.danger)
+        attack = discord.ui.Button(
+            label=battle_texts.BUTTON_ATTACK, style=discord.ButtonStyle.danger
+        )
         attack.callback = self._attack_callback
         self.add_item(attack)
 
@@ -1820,7 +1907,7 @@ class AttackTargetView(PagedSelectView):
         expected_seq: int,
         options: list[discord.SelectOption],
     ) -> None:
-        super().__init__(options, placeholder="攻撃対象を選択")
+        super().__init__(options, placeholder=battle_texts.ATTACK_TARGET_PLACEHOLDER)
 
         self.battle_id = battle_id
         self.unit_id = unit_id
@@ -1855,7 +1942,7 @@ class SkillSelectView(PagedSelectView):
         expected_seq: int,
         options: list[discord.SelectOption],
     ) -> None:
-        super().__init__(options, placeholder="使用するスキルを選択")
+        super().__init__(options, placeholder=battle_texts.SKILL_SELECT_PLACEHOLDER)
 
         self.battle_id = battle_id
         self.unit_id = unit_id
@@ -1865,7 +1952,7 @@ class SkillSelectView(PagedSelectView):
         master = load_master_data()
         skill = master.get_skill(value)
         if skill is None:
-            await game_shared.respond(interaction, "スキル定義が見つかりません。")
+            await game_shared.respond(interaction, battle_texts.SKILL_NOT_FOUND)
             return
 
         flow = SkillTargetFlow(
@@ -1931,23 +2018,28 @@ class SkillTargetFlow:
         state = load_battle_state(self.battle_id)
         unit = state.unit(self.unit_id) if state else None
         if state is None or unit is None:
-            await game_shared.respond(interaction, "バトル情報を取得できませんでした。")
+            await game_shared.respond(interaction, battle_texts.BATTLE_LOAD_ERROR)
             return
 
         candidates = battle_engine.selectable_targets(state, unit, group)
         if not candidates:
-            await game_shared.respond(interaction, "選択できる対象がいません。")
+            await game_shared.respond(interaction, battle_texts.NO_SELECTABLE_TARGET)
             return
 
         if group.allow_duplicate:
             need = 1
-            label = (
-                f"{self.skill.name}：{group.display_label}"
-                f"{self.pick_index + 1}体目"
+            label = battle_texts.SKILL_TARGET_LABEL_EACH.format(
+                skill=self.skill.name,
+                target=group.display_label,
+                index=self.pick_index + 1,
             )
         else:
             need = min(group.count, len(candidates))
-            label = f"{self.skill.name}：{group.display_label}を{need}体選択"
+            label = battle_texts.SKILL_TARGET_LABEL.format(
+                skill=self.skill.name,
+                target=group.display_label,
+                count=need,
+            )
 
         options = [_unit_option(candidate, state) for candidate in candidates]
         view = SkillTargetSelectView(self, group, options, need=need, label=label)
@@ -1974,7 +2066,7 @@ class SkillTargetFlow:
     async def _show_confirm(self, interaction: discord.Interaction) -> None:
         state = load_battle_state(self.battle_id)
         if state is None:
-            await game_shared.respond(interaction, "バトル情報を取得できませんでした。")
+            await game_shared.respond(interaction, battle_texts.BATTLE_LOAD_ERROR)
             return
 
         lines = [self.skill.description]
@@ -1991,7 +2083,7 @@ class SkillTargetFlow:
                 )
 
         embed = discord.Embed(
-            title=f"✦ SKILL「{self.skill.name}」を使用しますか？",
+            title=battle_texts.SKILL_CONFIRM_TITLE.format(skill=self.skill.name),
             description="\n".join(lines)[:2000],
             color=battle_embed.COLOR_SKILL,
         )
@@ -2017,14 +2109,16 @@ class SkillTargetFlow:
             self.battle_id,
             action,
             expected_seq=self.expected_seq,
-            success_message=f"スキル「{self.skill.name}」を使用しました。",
+            success_message=battle_texts.SKILL_USED.format(skill=self.skill.name),
         )
 
         if not applied or self.skill.consumes_attack:
             return
 
         # 攻撃権を消費しないスキルの後は、続けて攻撃を選ばせる（19.2節）
-        await open_attack_selection(interaction, notice="続けて攻撃対象を選んでください。")
+        await open_attack_selection(
+            interaction, notice=battle_texts.ATTACK_AFTER_SKILL_PROMPT
+        )
 
 
 class SkillTargetSelectView(discord.ui.View):
@@ -2054,7 +2148,9 @@ class SkillTargetSelectView(discord.ui.View):
         self.add_item(select)
         self._select = select
 
-        cancel = discord.ui.Button(label="やめる", style=discord.ButtonStyle.secondary)
+        cancel = discord.ui.Button(
+            label=battle_texts.CANCEL_BUTTON, style=discord.ButtonStyle.secondary
+        )
         cancel.callback = self._cancel_callback
         self.add_item(cancel)
 
@@ -2065,7 +2161,7 @@ class SkillTargetSelectView(discord.ui.View):
     async def _cancel_callback(self, interaction: discord.Interaction) -> None:
         await game_shared.respond(
             interaction,
-            "スキルの使用をやめました。行動を選び直してください。",
+            battle_texts.SKILL_CANCELLED,
             view=ActionChoiceView(self.flow.battle_id, self.flow.unit_id),
         )
 
@@ -2078,11 +2174,15 @@ class SkillConfirmView(discord.ui.View):
 
         self.flow = flow
 
-        confirm = discord.ui.Button(label="使用する", style=discord.ButtonStyle.primary)
+        confirm = discord.ui.Button(
+            label=battle_texts.SKILL_CONFIRM_BUTTON, style=discord.ButtonStyle.primary
+        )
         confirm.callback = self._confirm_callback
         self.add_item(confirm)
 
-        cancel = discord.ui.Button(label="やめる", style=discord.ButtonStyle.secondary)
+        cancel = discord.ui.Button(
+            label=battle_texts.CANCEL_BUTTON, style=discord.ButtonStyle.secondary
+        )
         cancel.callback = self._cancel_callback
         self.add_item(cancel)
 
@@ -2096,7 +2196,7 @@ class SkillConfirmView(discord.ui.View):
     async def _cancel_callback(self, interaction: discord.Interaction) -> None:
         await game_shared.respond(
             interaction,
-            "スキルの使用をやめました。行動を選び直してください。",
+            battle_texts.SKILL_CANCELLED,
             view=ActionChoiceView(self.flow.battle_id, self.flow.unit_id),
         )
 
@@ -2108,7 +2208,7 @@ async def open_attack_selection(
 
     channel = interaction.channel
     if channel is None:
-        await game_shared.respond(interaction, "チャンネル情報を取得できませんでした。")
+        await game_shared.respond(interaction, common_texts.CHANNEL_ERROR)
         return
 
     battle_row, state, unit, error = load_actor(channel.id, interaction.user.id)
@@ -2118,7 +2218,7 @@ async def open_attack_selection(
 
     choices = battle_engine.attack_target_choices(state, unit)
     if not choices:
-        await game_shared.respond(interaction, "攻撃できる対象がいません。")
+        await game_shared.respond(interaction, battle_texts.NO_ATTACK_TARGET)
         return
 
     options = [_unit_option(choice, state) for choice in choices]
@@ -2128,16 +2228,20 @@ async def open_attack_selection(
 
     # 自分の攻撃力と、その内訳（バフが乗っているか）を先に見せる
     attack_power = effects.attack_atk(state, unit)
-    lines = [notice or "攻撃対象を選んでください。", ""]
+    lines = [notice or battle_texts.ATTACK_PROMPT, ""]
     lines.append(
         game_shared.item_line(
-            "あなたの攻撃力",
+            battle_texts.LABEL_YOUR_ATK,
             f"**{battle_embed.stat_with_delta(attack_power, unit.base_atk)}**",
         )
     )
 
     marks = _effect_marks(state, unit)
-    lines.append(game_shared.item_line("かかっている効果", marks or "なし"))
+    lines.append(
+        game_shared.item_line(
+            battle_texts.LABEL_EFFECTS, marks or battle_texts.EFFECT_NONE
+        )
+    )
 
     await game_shared.respond(interaction, "\n".join(lines), view=view)
 
@@ -2147,7 +2251,7 @@ async def open_skill_selection(interaction: discord.Interaction) -> None:
 
     channel = interaction.channel
     if channel is None:
-        await game_shared.respond(interaction, "チャンネル情報を取得できませんでした。")
+        await game_shared.respond(interaction, common_texts.CHANNEL_ERROR)
         return
 
     battle_row, state, unit, error = load_actor(channel.id, interaction.user.id)
@@ -2156,23 +2260,29 @@ async def open_skill_selection(interaction: discord.Interaction) -> None:
         return
 
     if unit.state_flags.get("skill_used_this_turn"):
-        await game_shared.respond(interaction, "このターンは既にスキルを使用しています。")
+        await game_shared.respond(interaction, battle_texts.SKILL_ALREADY_USED)
         return
 
     skills = battle_engine.available_skills(state, unit)
     if not skills:
-        await game_shared.respond(interaction, "現在使用できるスキルがありません。")
+        await game_shared.respond(interaction, battle_texts.NO_AVAILABLE_SKILL)
         return
 
     options = []
     for skill in skills:
         used = int(unit.active_skill_uses.get(skill.skill_id, 0))
         limit = skill.max_uses_per_battle
-        remaining = "回数無制限" if limit is None else f"残り{limit - used}回"
+        remaining = (
+            battle_texts.SKILL_UNLIMITED
+            if limit is None
+            else battle_texts.SKILL_REMAINING.format(count=limit - used)
+        )
         options.append(
             discord.SelectOption(
                 label=skill.name[:100],
-                description=f"{remaining}　{skill.description}"[:100],
+                description=battle_texts.SKILL_OPTION_DESCRIPTION.format(
+                    remaining=remaining, description=skill.description
+                )[:100],
                 value=skill.skill_id,
             )
         )
@@ -2180,7 +2290,7 @@ async def open_skill_selection(interaction: discord.Interaction) -> None:
     view = SkillSelectView(
         int(battle_row["battle_id"]), unit.battle_unit_id, state.action_seq, options
     )
-    await game_shared.respond(interaction, "使用するスキルを選んでください。", view=view)
+    await game_shared.respond(interaction, battle_texts.SKILL_PROMPT, view=view)
 
 
 # ==================================================
@@ -2190,7 +2300,7 @@ class SurrenderConfirmView(ConfirmView):
     """降参の最終確認。"""
 
     def __init__(self, guild_id: int, battle_id: int) -> None:
-        super().__init__(confirm_label="降参する")
+        super().__init__(confirm_label=battle_texts.SURRENDER_CONFIRM_BUTTON)
 
         self.guild_id = guild_id
         self.battle_id = battle_id
@@ -2214,7 +2324,7 @@ class SurrenderConfirmView(ConfirmView):
             return
 
         if not applied:
-            await game_shared.respond(interaction, "降参を処理できませんでした。")
+            await game_shared.respond(interaction, battle_texts.SURRENDER_FAILED)
             return
 
         await game_shared.game_admin_log(
@@ -2224,7 +2334,7 @@ class SurrenderConfirmView(ConfirmView):
             target_guild_id=self.guild_id,
             target_battle_id=self.battle_id,
         )
-        await game_shared.respond(interaction, "降参しました。")
+        await game_shared.respond(interaction, battle_texts.SURRENDER_DONE)
 
 
 # ==================================================
@@ -2240,7 +2350,7 @@ class GuildBattlePanelView(discord.ui.View):
     # メンバーセット
     # ==================================================
     @discord.ui.button(
-        label="メンバーセット",
+        label=battle_texts.BUTTON_SET_MEMBERS,
         style=discord.ButtonStyle.primary,
         custom_id="guild_battle:set_members",
     )
@@ -2277,12 +2387,12 @@ class GuildBattlePanelView(discord.ui.View):
             )
 
         if not members:
-            await game_shared.respond(interaction, "所属メンバーがいません。")
+            await game_shared.respond(interaction, battle_texts.NO_GUILD_MEMBERS)
             return
 
         await game_shared.respond(
             interaction,
-            "バトルへ出場するメンバーを選んでください。",
+            battle_texts.ROSTER_SELECT_PROMPT,
             view=RosterSelectView(guild_row, members),
         )
 
@@ -2290,7 +2400,7 @@ class GuildBattlePanelView(discord.ui.View):
     # セット確認（11節）
     # ==================================================
     @discord.ui.button(
-        label="セット確認",
+        label=battle_texts.BUTTON_CHECK_ROSTER,
         style=discord.ButtonStyle.secondary,
         custom_id="guild_battle:check_roster",
     )
@@ -2310,7 +2420,7 @@ class GuildBattlePanelView(discord.ui.View):
     # バトル申請（12.1節）
     # ==================================================
     @discord.ui.button(
-        label="バトル申請",
+        label=battle_texts.BUTTON_REQUEST,
         style=discord.ButtonStyle.success,
         custom_id="guild_battle:request",
     )
@@ -2328,16 +2438,17 @@ class GuildBattlePanelView(discord.ui.View):
         if pending is not None:
             if int(pending["from_guild_id"]) == guild_id:
                 opponent = get_guild(int(pending["to_guild_id"]))
-                name = opponent["name"] if opponent else "相手ギルド"
+                name = (
+                    opponent["name"] if opponent else battle_texts.OPPONENT_FALLBACK
+                )
                 await game_shared.respond(
                     interaction,
-                    f"**{name}** へ申請中です。取り消せます。",
+                    battle_texts.REQUEST_PENDING_OUT.format(guild_name=name),
                     view=RequestCancelView(int(pending["request_id"])),
                 )
             else:
                 await game_shared.respond(
-                    interaction,
-                    "受信中のバトル申請があります。先に承認または拒否してください。",
+                    interaction, battle_texts.REQUEST_PENDING_IN
                 )
             return
 
@@ -2345,12 +2456,15 @@ class GuildBattlePanelView(discord.ui.View):
         issues = service.entry_blockers(interaction.client, guild_id)
         if issues:
             await game_shared.respond(
-                interaction, service.blocker_message(issues, action="バトル申請")
+                interaction,
+                service.blocker_message(
+                    issues, action=battle_texts.ACTION_REQUEST
+                ),
             )
             return
 
         if not opponent_options(guild_id):
-            await game_shared.respond(interaction, "現在申し込めるギルドがありません。")
+            await game_shared.respond(interaction, battle_texts.NO_OPPONENT_AVAILABLE)
             return
 
         async def open_opponent_select(
@@ -2359,25 +2473,24 @@ class GuildBattlePanelView(discord.ui.View):
             options = opponent_options(guild_id)
             if not options:
                 await game_shared.respond(
-                    rate_interaction, "現在申し込めるギルドがありません。"
+                    rate_interaction, battle_texts.NO_OPPONENT_AVAILABLE
                 )
                 return
 
             await game_shared.respond(
                 rate_interaction,
-                (
-                    f"**{rate.name}** で対戦を申し込むギルドを選んでください。\n"
-                    f"{bet_confirmation(guild_id, rate.coin)}"
+                battle_texts.OPPONENT_SELECT_PROMPT.format(
+                    rate=rate.name, bet=bet_confirmation(guild_id, rate.coin)
                 ),
                 view=OpponentSelectView(guild_row, options, bet_coin=rate.coin),
             )
 
         await game_shared.respond(
             interaction,
-            bet_rate_guide("相手ギルドの選択へ進みます"),
+            bet_rate_guide(battle_texts.NEXT_STEP_OPPONENT),
             view=BetRateSelectView(
                 guild_row=guild_row,
-                action="バトル申請",
+                action=battle_texts.ACTION_REQUEST,
                 on_choose=open_opponent_select,
             ),
         )
@@ -2386,7 +2499,7 @@ class GuildBattlePanelView(discord.ui.View):
     # バトル募集（12.2節）
     # ==================================================
     @discord.ui.button(
-        label="バトル募集",
+        label=battle_texts.BUTTON_RECRUIT,
         style=discord.ButtonStyle.success,
         custom_id="guild_battle:recruit",
     )
@@ -2405,7 +2518,7 @@ class GuildBattlePanelView(discord.ui.View):
             if lock["lock_type"] == "recruitment":
                 await game_shared.respond(
                     interaction,
-                    "現在バトルを募集中です。取り消せます。",
+                    battle_texts.RECRUIT_PENDING,
                     view=RecruitmentCancelView(int(lock["reference_id"])),
                 )
             else:
@@ -2416,7 +2529,7 @@ class GuildBattlePanelView(discord.ui.View):
 
         if not config.GUILD_BATTLE_RECRUITMENT_CHANNEL_ID:
             await game_shared.respond(
-                interaction, "ギルドバトル募集チャンネルが設定されていません。"
+                interaction, battle_texts.RECRUIT_CHANNEL_UNSET
             )
             return
 
@@ -2425,7 +2538,7 @@ class GuildBattlePanelView(discord.ui.View):
         )
         if not isinstance(channel, discord.TextChannel):
             await game_shared.respond(
-                interaction, "ギルドバトル募集チャンネルが見つかりません。"
+                interaction, battle_texts.RECRUIT_CHANNEL_NOT_FOUND
             )
             return
 
@@ -2433,7 +2546,8 @@ class GuildBattlePanelView(discord.ui.View):
         issues = service.entry_blockers(interaction.client, guild_id)
         if issues:
             await game_shared.respond(
-                interaction, service.blocker_message(issues, action="バトル募集")
+                interaction,
+                service.blocker_message(issues, action=battle_texts.ACTION_RECRUIT),
             )
             return
 
@@ -2450,7 +2564,9 @@ class GuildBattlePanelView(discord.ui.View):
             recruitment_id = int(result["recruitment_id"])
             message = await channel.send(
                 embed=recruitment_embed(
-                    guild_row, state_text="対戦相手募集中", bet_coin=rate.coin
+                    guild_row,
+                    state_text=battle_texts.RECRUIT_STATE_OPEN,
+                    bet_coin=rate.coin,
                 ),
                 view=BattleRecruitmentView(),
             )
@@ -2458,19 +2574,19 @@ class GuildBattlePanelView(discord.ui.View):
 
             await game_shared.respond(
                 rate_interaction,
-                (
-                    f"{channel.mention} へ **{rate.name}** のバトル募集を"
-                    "投稿しました。\n"
-                    f"{bet_confirmation(guild_id, rate.coin)}"
+                battle_texts.RECRUIT_POSTED.format(
+                    channel=channel.mention,
+                    rate=rate.name,
+                    bet=bet_confirmation(guild_id, rate.coin),
                 ),
             )
 
         await game_shared.respond(
             interaction,
-            bet_rate_guide("募集を投稿します"),
+            bet_rate_guide(battle_texts.NEXT_STEP_RECRUIT),
             view=BetRateSelectView(
                 guild_row=guild_row,
-                action="バトル募集",
+                action=battle_texts.ACTION_RECRUIT,
                 on_choose=post_recruitment,
             ),
         )
@@ -2479,7 +2595,7 @@ class GuildBattlePanelView(discord.ui.View):
     # 降参（26.1節）
     # ==================================================
     @discord.ui.button(
-        label="降参",
+        label=battle_texts.BUTTON_SURRENDER,
         style=discord.ButtonStyle.danger,
         custom_id="guild_battle:surrender",
     )
@@ -2494,15 +2610,12 @@ class GuildBattlePanelView(discord.ui.View):
         guild_id = int(guild_row["guild_id"])
         battle_row = get_active_battle_for_guild(guild_id)
         if battle_row is None or battle_row["status"] != "in_progress":
-            await game_shared.respond(interaction, "進行中のバトルがありません。")
+            await game_shared.respond(interaction, battle_texts.NO_ACTIVE_BATTLE)
             return
 
         await game_shared.respond(
             interaction,
-            (
-                "本当に降参しますか？\n"
-                "降参したギルドの敗北として戦績へ記録されます。"
-            ),
+            battle_texts.SURRENDER_CONFIRM,
             view=SurrenderConfirmView(guild_id, int(battle_row["battle_id"])),
         )
 
@@ -2518,7 +2631,7 @@ class BattleMemberPanelView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="事前登録",
+        label=battle_texts.BUTTON_REGISTER,
         style=discord.ButtonStyle.primary,
         custom_id="guild_battle:register_familiars",
     )
@@ -2552,7 +2665,7 @@ class BattleMemberPanelView(discord.ui.View):
         await game_shared.respond(interaction, status, view=view)
 
     @discord.ui.button(
-        label="出場する使い魔",
+        label=battle_texts.BUTTON_SET_FAMILIAR,
         style=discord.ButtonStyle.success,
         custom_id="guild_battle:set_familiar",
     )
@@ -2585,14 +2698,7 @@ class BattleMemberPanelView(discord.ui.View):
         )
 
         if assigned is None:
-            await game_shared.respond(
-                interaction,
-                (
-                    "あなたは出場者に選ばれていません。\n"
-                    "-# 「事前登録」で使い魔を登録しておくと、"
-                    "出場者に選ばれたときに順番どおり自動でセットされます。"
-                ),
-            )
+            await game_shared.respond(interaction, battle_texts.NOT_IN_ROSTER)
             return
 
         rank_info = game_shared.get_player_rank_info(interaction.user.id)
@@ -2607,10 +2713,7 @@ class BattleMemberPanelView(discord.ui.View):
                 success=False,
                 reason="player_roles が未同期のため使い魔セットを中止",
             )
-            await game_shared.respond(
-                interaction,
-                "プレイヤーランクを確認できませんでした。運営へ連絡してください。",
-            )
+            await game_shared.respond(interaction, battle_texts.RANK_UNKNOWN)
             return
 
         master = load_master_data()
@@ -2648,11 +2751,11 @@ class BattleRequestView(discord.ui.View):
             return None, blocked
 
         if interaction.message is None:
-            return None, "申請情報を取得できませんでした。"
+            return None, battle_texts.REQUEST_LOAD_ERROR
 
         request_row = get_battle_request_by_message(interaction.message.id)
         if request_row is None:
-            return None, "この申請は見つかりませんでした。"
+            return None, battle_texts.REQUEST_NOT_FOUND
 
         if request_row["status"] != "pending":
             return None, game_shared.error_message("not_pending")
@@ -2667,7 +2770,7 @@ class BattleRequestView(discord.ui.View):
         return request_row, None
 
     @discord.ui.button(
-        label="承認",
+        label=battle_texts.BUTTON_APPROVE,
         style=discord.ButtonStyle.success,
         custom_id="guild_battle:request_approve",
     )
@@ -2693,9 +2796,8 @@ class BattleRequestView(discord.ui.View):
         await _delete_request_message(interaction.client, result)
         await game_shared.respond(
             interaction,
-            (
-                "申請を承認しました。開始前チェックを行います。\n"
-                + bet_confirmation(
+            battle_texts.REQUEST_APPROVED.format(
+                bet=bet_confirmation(
                     int(request_row["to_guild_id"]),
                     service.default_bet_coin() if bet_coin is None else int(bet_coin),
                 )
@@ -2714,7 +2816,7 @@ class BattleRequestView(discord.ui.View):
             await game_shared.respond(interaction, started["message"])
 
     @discord.ui.button(
-        label="拒否",
+        label=battle_texts.BUTTON_REJECT,
         style=discord.ButtonStyle.danger,
         custom_id="guild_battle:request_reject",
     )
@@ -2743,15 +2845,18 @@ class BattleRequestView(discord.ui.View):
             await _notify_guild_channel(
                 interaction.client,
                 from_guild,
-                title="⚔ ギルドバトル申請の結果",
-                description=(
-                    f"**{to_guild['name'] if to_guild else '相手ギルド'}** が"
-                    "バトル申請を拒否しました。"
+                title=battle_texts.REQUEST_RESULT_TITLE,
+                description=battle_texts.REQUEST_REJECTED_BODY.format(
+                    guild_name=(
+                        to_guild["name"]
+                        if to_guild
+                        else battle_texts.OPPONENT_FALLBACK
+                    )
                 ),
                 color=config.COLOR_RED,
             )
 
-        await game_shared.respond(interaction, "申請を拒否しました。")
+        await game_shared.respond(interaction, battle_texts.REQUEST_REJECTED_DONE)
 
 
 # ==================================================
@@ -2764,7 +2869,7 @@ class BattleRecruitmentView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="対戦申請",
+        label=battle_texts.BUTTON_APPLY,
         style=discord.ButtonStyle.success,
         custom_id="guild_battle:recruit_apply",
     )
@@ -2777,12 +2882,12 @@ class BattleRecruitmentView(discord.ui.View):
             return
 
         if interaction.message is None:
-            await game_shared.respond(interaction, "募集情報を取得できませんでした。")
+            await game_shared.respond(interaction, battle_texts.RECRUIT_LOAD_ERROR)
             return
 
         recruitment = get_battle_recruitment_by_message(interaction.message.id)
         if recruitment is None:
-            await game_shared.respond(interaction, "この募集は見つかりませんでした。")
+            await game_shared.respond(interaction, battle_texts.RECRUIT_NOT_FOUND)
             return
 
         if recruitment["status"] != "open":
@@ -2791,9 +2896,7 @@ class BattleRecruitmentView(discord.ui.View):
 
         challenger = get_player_guild(interaction.user.id)
         if challenger is None or challenger["master_id"] != interaction.user.id:
-            await game_shared.respond(
-                interaction, "ギルドマスターだけが対戦を申し込めます。"
-            )
+            await game_shared.respond(interaction, battle_texts.APPLY_MASTER_ONLY)
             return
 
         challenger_id = int(challenger["guild_id"])
@@ -2808,7 +2911,8 @@ class BattleRecruitmentView(discord.ui.View):
         issues = service.entry_blockers(interaction.client, challenger_id)
         if issues:
             await game_shared.respond(
-                interaction, service.blocker_message(issues, action="対戦申請")
+                interaction,
+                service.blocker_message(issues, action=battle_texts.ACTION_APPLY),
             )
             return
 
@@ -2825,12 +2929,13 @@ class BattleRecruitmentView(discord.ui.View):
         if bet_coin is None:
             bet_coin = recruitment.get("bet_coin")
 
-        await close_recruitment_message(interaction.client, result, state_text="募集終了")
+        await close_recruitment_message(
+            interaction.client, result, state_text=battle_texts.RECRUIT_STATE_CLOSED
+        )
         await game_shared.respond(
             interaction,
-            (
-                "対戦が成立しました。開始前チェックを行います。\n"
-                + bet_confirmation(
+            battle_texts.MATCH_MADE.format(
+                bet=bet_confirmation(
                     challenger_id,
                     service.default_bet_coin() if bet_coin is None else int(bet_coin),
                 )
@@ -2858,7 +2963,7 @@ class BattleCommandView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="特殊スキル",
+        label=battle_texts.BUTTON_SKILL,
         style=discord.ButtonStyle.primary,
         custom_id="guild_battle:skill",
     )
@@ -2868,7 +2973,7 @@ class BattleCommandView(discord.ui.View):
         await open_skill_selection(interaction)
 
     @discord.ui.button(
-        label="攻撃",
+        label=battle_texts.BUTTON_ATTACK,
         style=discord.ButtonStyle.danger,
         custom_id="guild_battle:attack",
     )
@@ -2888,7 +2993,7 @@ class BattleRankingPanelView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="ランキング",
+        label=battle_texts.BUTTON_RANKING,
         style=discord.ButtonStyle.primary,
         custom_id="guild_battle:ranking",
     )
@@ -2921,9 +3026,11 @@ def build_roster_embed(guild_id: int) -> discord.Embed:
     for entry in entries:
         owned = get_owned_familiar(int(entry["instance_id"]))
         text = (
-            f"{_familiar_name(owned['familiar_id'])} Lv.{owned['level']}"
+            battle_texts.FAMILIAR_LABEL.format(
+                name=_familiar_name(owned["familiar_id"]), level=owned["level"]
+            )
             if owned is not None and owned["status"] == "owned"
-            else "所有していません"
+            else battle_texts.ROSTER_NOT_OWNED
         )
         by_user.setdefault(int(entry["user_id"]), []).append(text)
 
@@ -2942,52 +3049,58 @@ def build_roster_embed(guild_id: int) -> discord.Embed:
         familiars = by_user.get(user_id, [])
 
         if familiars and len(familiars) >= assigned:
-            ready = "✅"
+            ready = battle_texts.ROSTER_READY_OK
             ready_count += 1
             familiar_text = "\n　".join(familiars)
         elif familiars:
-            ready = "⚠ 割り当てに足りません"
+            ready = battle_texts.ROSTER_READY_SHORT
             familiar_text = "\n　".join(familiars)
         else:
-            ready = "❌"
-            familiar_text = "未設定"
+            ready = battle_texts.ROSTER_READY_NONE
+            familiar_text = battle_texts.ROSTER_UNSET
 
         lines.append(
-            f"{mark} <@{user_id}>（{len(familiars)}/{assigned}体）\n"
-            f"使い魔：{familiar_text}\n準備：{ready}"
+            battle_texts.ROSTER_EMBED_MEMBER.format(
+                mark=mark,
+                user_id=user_id,
+                count=len(familiars),
+                assigned=assigned,
+                familiars=familiar_text,
+                ready=ready,
+            )
         )
 
     if not lines:
-        lines.append("出場者が選択されていません。")
+        lines.append(battle_texts.ROSTER_EMPTY)
 
     # 編成ロック中は操作しても弾かれるだけで理由が分からないため、状態を先に示す
     locked = bool(guild_row and guild_row["roster_locked"])
     state_text = (
-        "🔒 編成ロック中（バトルが成立したため、終了まで変更できません）"
-        if locked
-        else "変更できます"
+        battle_texts.ROSTER_LOCKED if locked else battle_texts.ROSTER_UNLOCKED
     )
 
     header = [
-        game_shared.item_line("状態", state_text),
+        game_shared.item_line(battle_texts.LABEL_STATE, state_text),
         game_shared.item_line(
-            "出場者", f"{len(roster)}人（最大{master.battle.max_members}人）"
+            battle_texts.LABEL_MEMBERS,
+            battle_texts.ROSTER_MEMBER_SUMMARY.format(
+                count=len(roster), max_members=master.battle.max_members
+            ),
         ),
         game_shared.item_line(
-            "使い魔", f"{len(entries)}体（最大{master.battle.max_units}体）"
+            battle_texts.LABEL_FAMILIARS,
+            battle_texts.ROSTER_FAMILIAR_SUMMARY.format(
+                count=len(entries), max_units=master.battle.max_units
+            ),
         ),
         "",
     ]
 
     if locked:
-        header.insert(
-            1,
-            "-# ロック中は出場者・使い魔の変更と、セット中の使い魔の合成・売却、"
-            "脱退・追放・解散ができません。事前登録だけはいつでも変更できます。",
-        )
+        header.insert(1, battle_texts.ROSTER_LOCKED_NOTE)
 
     embed = discord.Embed(
-        title="【ギルドバトル編成】",
+        title=battle_texts.ROSTER_EMBED_TITLE,
         description=("\n".join(header) + "\n\n".join(lines))[:4000],
         color=config.COLOR_BLUE,
     )
@@ -3015,15 +3128,19 @@ def build_ranking_embed(user_id: int) -> discord.Embed:
 
     if ranking:
         lines = [
-            (
-                f"{row['rank']}. **{row['name']}**　{row['points']}点"
-                f"（{row['wins']}勝 {row['losses']}敗 {row['draws']}分）"
+            battle_texts.RANKING_LINE.format(
+                rank=row["rank"],
+                name=row["name"],
+                points=row["points"],
+                wins=row["wins"],
+                losses=row["losses"],
+                draws=row["draws"],
             )
             for row in ranking
         ]
         description = "\n".join(lines)[:4000]
     else:
-        description = "まだランキング対象のギルドがありません。"
+        description = battle_texts.RANKING_EMPTY
 
     own_guild = get_player_guild(user_id)
     if own_guild is not None:
@@ -3033,24 +3150,31 @@ def build_ranking_embed(user_id: int) -> discord.Embed:
             draw_points=ranking_balance.draw_points,
             lose_points=ranking_balance.lose_points,
         )
-        position_text = f"{position}位" if position else "順位なし"
+        position_text = (
+            battle_texts.RANKING_POSITION.format(position=position)
+            if position
+            else battle_texts.RANKING_NO_POSITION
+        )
         description = (
             f"{description}\n\n"
             + game_shared.item_line(
-                "あなたのギルド", f"**{own_guild['name']}**　{position_text}"
+                battle_texts.LABEL_YOUR_GUILD,
+                battle_texts.RANKING_OWN_GUILD.format(
+                    name=own_guild["name"], position=position_text
+                ),
             )
         )
 
     embed = discord.Embed(
-        title="🏆 ギルドランキング",
+        title=battle_texts.RANKING_EMBED_TITLE,
         description=description[:4000],
         color=config.COLOR_GOLD,
     )
     embed.set_footer(
-        text=(
-            f"勝利{ranking_balance.win_points}点 / "
-            f"引き分け{ranking_balance.draw_points}点 / "
-            f"敗北{ranking_balance.lose_points}点"
+        text=battle_texts.RANKING_FOOTER.format(
+            win=ranking_balance.win_points,
+            draw=ranking_balance.draw_points,
+            lose=ranking_balance.lose_points,
         )
     )
 
@@ -3064,13 +3188,8 @@ def battle_panel_embed() -> discord.Embed:
 
     return discord.Embed(
         title=BATTLE_PANEL_TITLE,
-        description=(
-            "\u200b\n"
-            f"**最大{master.battle.max_units}体どうしのギルドバトル**\n"
-            "-# バトル申請またはバトル募集を行い、それに他のギルドが応募することでバトル開始します。\n"
-            "-# まずはギルドマスターがメンバーセットで出場者と「1人あたりの使い魔の体数」を決めます\n"
-            "-# メンバーは「#使い魔バトル」で使いたい使い魔を優先度順にセットします。\n"
-            "-# バトルに出場する使い魔は、ギルドマスターが決めた1人あたりの使い魔の体数の数、優先度順に選択されます。\n"
+        description=battle_texts.BATTLE_PANEL_BODY.format(
+            max_units=master.battle.max_units
         ),
         color=config.COLOR_PURPLE,
     )
@@ -3083,20 +3202,8 @@ def roster_panel_embed() -> discord.Embed:
 
     return discord.Embed(
         title=ROSTER_PANEL_TITLE,
-        description=(
-            "\u200b\n"
-            "**事前登録**\n"
-            "-# あなたがバトルで使う使い魔を、優先度順に登録します。"
-            f"（{master.battle.max_units}体まで）\n"
-            "-# ギルドマスターがバトル出場者を選択したとき、この優先度で使い魔が選択されます。\n\n"
-            "**出場する使い魔**\n"
-            "-# ギルドマスターがギルドマスター専用tcからバトル出場者を選択すると\n"
-            "-# 選ばれた人が、実際に使う使い魔を確認できます。\n"
-            "-# あなたが使う使い魔の数もギルドマスターが決めています。\n\n"
-            "**2つは常に同じ内容になります**\n"
-            "-# 事前登録を変えると、出場する使い魔もその優先度へ入れ替わります。\n"
-            "-# 出場する使い魔を変えると、事前登録の順番もそれに合わせます。\n"
-            "-# ただしバトルが成立して編成ロック中の間は、出場する使い魔は変わりません。\n"
+        description=battle_texts.ROSTER_PANEL_BODY.format(
+            max_units=master.battle.max_units
         ),
         color=config.COLOR_BLUE,
     )
@@ -3107,11 +3214,7 @@ def ranking_panel_embed() -> discord.Embed:
 
     return discord.Embed(
         title=RANKING_PANEL_TITLE,
-        description=(
-            "\u200b\n"
-            "**ギルドバトルの通算成績**\n"
-            "-# ボタンを押すと上位ギルドと自分のギルド順位を表示します。"
-        ),
+        description=battle_texts.RANKING_PANEL_BODY,
         color=config.COLOR_GOLD,
     )
 
@@ -3182,12 +3285,24 @@ def registered_familiar_lines(user_id: int) -> list[str]:
     lines: list[str] = []
     for row in get_player_battle_familiars(user_id):
         stats = master.level_stats(str(row["familiar_id"]), int(row["level"]))
-        detail = f"HP {stats.max_hp}／ATK {stats.atk}／SPD {stats.speed}" if stats else "—"
+        detail = (
+            battle_texts.FAMILIAR_STATS.format(
+                hp=stats.max_hp, atk=stats.atk, speed=stats.speed
+            )
+            if stats
+            else battle_texts.DASH
+        )
 
         lines.append(
             game_shared.item_line(
-                f"{row['priority']}番目",
-                f"{_familiar_name(row['familiar_id'])} Lv.{row['level']}　{detail}",
+                battle_texts.REGISTER_PRIORITY_LABEL.format(
+                    priority=row["priority"]
+                ),
+                battle_texts.REGISTER_LINE.format(
+                    name=_familiar_name(row["familiar_id"]),
+                    level=row["level"],
+                    detail=detail,
+                ),
             )
         )
 
@@ -3215,23 +3330,27 @@ def registration_sync_notice(result: dict | None) -> list[str]:
         return []
 
     lines = [
-        f"-# 出場する使い魔も、この優先順へ入れ替えました"
-        f"（セット {len(adopted)}体／解除 {len(released)}体）。"
+        battle_texts.REGISTER_SYNC_NOTE.format(
+            adopted=len(adopted), released=len(released)
+        )
     ]
 
     if skipped:
         names = "・".join(
-            f"{_familiar_name(owned['familiar_id'])} Lv.{owned['level']}"
+            battle_texts.FAMILIAR_LABEL.format(
+                name=_familiar_name(owned["familiar_id"]), level=owned["level"]
+            )
             for instance_id in skipped
             if (owned := get_owned_familiar(int(instance_id))) is not None
         )
         lines.append(
-            f"⚠ ギルドの合計COST上限（{master.battle.max_total_cost}）のため、"
-            f"{len(skipped)}体をセットできませんでした：{names or '—'}"
+            battle_texts.REGISTER_COST_SKIPPED.format(
+                limit=master.battle.max_total_cost,
+                count=len(skipped),
+                names=names or battle_texts.DASH,
+            )
         )
-        lines.append(
-            "-# COSTの低い使い魔を上位へ登録し直すか、ほかの出場者と調整してください。"
-        )
+        lines.append(battle_texts.REGISTER_COST_SKIPPED_HINT)
 
     return lines
 
@@ -3242,21 +3361,23 @@ def build_register_status(user_id: int, result: dict | None = None) -> str:
     master = load_master_data()
 
     lines = registered_familiar_lines(user_id)
-    body = lines or ["-# まだ登録していません。"]
+    body = lines or [battle_texts.REGISTER_EMPTY]
 
     return "\n".join(
         [
             game_shared.item_line(
-                "登録済み", f"{len(lines)}/{master.battle.max_units}体"
+                battle_texts.LABEL_REGISTERED,
+                battle_texts.REGISTER_COUNT.format(
+                    count=len(lines), max_units=master.battle.max_units
+                ),
             ),
             "",
             *body,
             "",
             *registration_sync_notice(result),
-            "-# 登録した順番のまま、メンバーセット時に自動でセットされます。",
-            "-# 出場者に選ばれている間は、ここを変えると"
-            "「出場する使い魔」も同じ順番へ入れ替わります。",
-            "-# 出場者でなくても、バトル中でもいつでも変更できます。",
+            battle_texts.REGISTER_NOTE_ORDER,
+            battle_texts.REGISTER_NOTE_SYNC,
+            battle_texts.REGISTER_NOTE_ANYTIME,
         ]
     )
 
@@ -3290,7 +3411,9 @@ def build_registered_options(user_id: int) -> list[discord.SelectOption]:
             int(row["instance_id"]),
             str(row["familiar_id"]),
             int(row["level"]),
-            prefix=f"{row['priority']}番目：",
+            prefix=battle_texts.REGISTER_SLOT_PREFIX.format(
+                priority=row["priority"]
+            ),
         )
         if option is not None:
             options.append(option)
@@ -3302,7 +3425,7 @@ class RegisterAddView(PagedSelectView):
     """事前登録の末尾へ使い魔を1体追加する一時View。"""
 
     def __init__(self, options: list[discord.SelectOption]) -> None:
-        super().__init__(options, placeholder="登録する使い魔を選択")
+        super().__init__(options, placeholder=battle_texts.REGISTER_ADD_PLACEHOLDER)
 
     async def on_choice(self, interaction: discord.Interaction, value: str) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -3317,12 +3440,14 @@ class RegisterAddView(PagedSelectView):
         if len(current) >= master.battle.max_units:
             await game_shared.respond(
                 interaction,
-                f"登録できるのは{master.battle.max_units}体までです。",
+                battle_texts.REGISTER_FULL.format(
+                    max_units=master.battle.max_units
+                ),
             )
             return
 
         if int(value) in current:
-            await game_shared.respond(interaction, "その使い魔は既に登録されています。")
+            await game_shared.respond(interaction, battle_texts.REGISTER_ALREADY)
             return
 
         result = set_player_battle_familiars(user_id, [*current, int(value)])
@@ -3353,7 +3478,9 @@ class RegisterRemoveView(PagedSelectView):
 
         target = int(value)
         if target not in current:
-            await game_shared.respond(interaction, "その使い魔は登録されていません。")
+            await game_shared.respond(
+                interaction, battle_texts.REGISTER_NOT_REGISTERED
+            )
             return
 
         # 取り消した分を詰めて、以降の優先順を1つ繰り上げる
@@ -3378,8 +3505,7 @@ class RegisterReplaceTargetView(PagedSelectView):
 
         if not options:
             await game_shared.respond(
-                interaction,
-                "入れ替えられる使い魔がありません。ガチャで入手してください。",
+                interaction, battle_texts.REGISTER_NO_REPLACEMENT
             )
             return
 
@@ -3388,16 +3514,17 @@ class RegisterReplaceTargetView(PagedSelectView):
             (row for row in current if int(row["instance_id"]) == int(value)), None
         )
         if target is None:
-            await game_shared.respond(interaction, "その使い魔は登録されていません。")
+            await game_shared.respond(
+                interaction, battle_texts.REGISTER_NOT_REGISTERED
+            )
             return
 
         await game_shared.respond(
             interaction,
-            (
-                f"**{target['priority']}番目**（"
-                f"{_familiar_name(target['familiar_id'])} Lv.{target['level']}）"
-                "を、どの使い魔へ入れ替えますか？\n"
-                "-# 優先順はそのままです。"
+            battle_texts.REGISTER_REPLACE_PROMPT.format(
+                priority=target["priority"],
+                name=_familiar_name(target["familiar_id"]),
+                level=target["level"],
             ),
             view=RegisterReplaceView(options, replaced_instance_id=int(value)),
         )
@@ -3412,7 +3539,7 @@ class RegisterReplaceView(PagedSelectView):
         *,
         replaced_instance_id: int,
     ) -> None:
-        super().__init__(options, placeholder="入れ替える使い魔を選択")
+        super().__init__(options, placeholder=battle_texts.REGISTER_REPLACE_PLACEHOLDER)
 
         self.replaced_instance_id = replaced_instance_id
 
@@ -3426,12 +3553,14 @@ class RegisterReplaceView(PagedSelectView):
         ]
 
         if self.replaced_instance_id not in current:
-            await game_shared.respond(interaction, "その使い魔は登録されていません。")
+            await game_shared.respond(
+                interaction, battle_texts.REGISTER_NOT_REGISTERED
+            )
             return
 
         new_instance_id = int(value)
         if new_instance_id in current:
-            await game_shared.respond(interaction, "その使い魔は既に登録されています。")
+            await game_shared.respond(interaction, battle_texts.REGISTER_ALREADY)
             return
 
         # 優先順を変えずに、同じ位置だけ差し替える
@@ -3469,12 +3598,14 @@ class BattleFamiliarRegisterView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await game_shared.respond(interaction, "この操作は本人だけが使用できます。")
+            await game_shared.respond(interaction, battle_texts.OWNER_ONLY)
             return False
 
         return True
 
-    @discord.ui.button(label="登録を追加", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label=battle_texts.REGISTER_BUTTON_ADD, style=discord.ButtonStyle.success
+    )
     async def add_familiar(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -3482,49 +3613,60 @@ class BattleFamiliarRegisterView(discord.ui.View):
 
         if not options:
             await game_shared.respond(
-                interaction, "登録できる使い魔がありません。ガチャで入手してください。"
+                interaction, battle_texts.REGISTER_NO_CANDIDATES
             )
             return
 
         await game_shared.respond(
             interaction,
-            "登録する使い魔を選んでください。選んだ順が優先順になります。",
+            battle_texts.REGISTER_ADD_PROMPT,
             view=RegisterAddView(options),
         )
 
-    @discord.ui.button(label="入れ替え", style=discord.ButtonStyle.primary)
+    @discord.ui.button(
+        label=battle_texts.REGISTER_BUTTON_REPLACE, style=discord.ButtonStyle.primary
+    )
     async def replace_familiar(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         options = build_registered_options(interaction.user.id)
 
         if not options:
-            await game_shared.respond(interaction, "登録されている使い魔がありません。")
+            await game_shared.respond(interaction, battle_texts.REGISTER_NONE)
             return
 
         await game_shared.respond(
             interaction,
-            "入れ替える枠を選んでください。優先順はそのままです。",
-            view=RegisterReplaceTargetView(options, placeholder="入れ替える枠を選択"),
+            battle_texts.REGISTER_REPLACE_SLOT_PROMPT,
+            view=RegisterReplaceTargetView(
+                options, placeholder=battle_texts.REGISTER_REPLACE_SLOT_PLACEHOLDER
+            ),
         )
 
-    @discord.ui.button(label="個別に取消", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label=battle_texts.REGISTER_BUTTON_REMOVE_ONE,
+        style=discord.ButtonStyle.secondary,
+    )
     async def remove_one(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         options = build_registered_options(interaction.user.id)
 
         if not options:
-            await game_shared.respond(interaction, "登録されている使い魔がありません。")
+            await game_shared.respond(interaction, battle_texts.REGISTER_NONE)
             return
 
         await game_shared.respond(
             interaction,
-            "取り消す使い魔を選んでください。以降の優先順は1つ繰り上がります。",
-            view=RegisterRemoveView(options, placeholder="取り消す使い魔を選択"),
+            battle_texts.REGISTER_REMOVE_PROMPT,
+            view=RegisterRemoveView(
+                options, placeholder=battle_texts.REGISTER_REMOVE_PLACEHOLDER
+            ),
         )
 
-    @discord.ui.button(label="最後を取消", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label=battle_texts.REGISTER_BUTTON_UNDO, style=discord.ButtonStyle.secondary
+    )
     async def undo(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -3536,7 +3678,7 @@ class BattleFamiliarRegisterView(discord.ui.View):
         ]
 
         if not current:
-            await game_shared.respond(interaction, "登録されている使い魔がありません。")
+            await game_shared.respond(interaction, battle_texts.REGISTER_NONE)
             return
 
         result = set_player_battle_familiars(interaction.user.id, current[:-1])
@@ -3547,7 +3689,9 @@ class BattleFamiliarRegisterView(discord.ui.View):
             view=BattleFamiliarRegisterView(interaction.user.id),
         )
 
-    @discord.ui.button(label="すべて取消", style=discord.ButtonStyle.danger)
+    @discord.ui.button(
+        label=battle_texts.REGISTER_BUTTON_CLEAR, style=discord.ButtonStyle.danger
+    )
     async def clear_all(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
