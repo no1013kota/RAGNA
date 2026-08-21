@@ -9,6 +9,30 @@ RailwayではWebサービスではなく、常駐Workerとして起動します�
 - [RAGNA Online ギルド・ギルドバトル仕様](docs/GAME_SPEC.md)
 - [RAGNA Online 戦闘ルール・使い魔データ](docs/BATTLE_RULES.md)
 
+## 表示される文章を変えたいとき
+
+Discordに表示される日本語は `texts/` にまとめてあります。
+プログラムを読まずに、このフォルダのファイルだけを書き換えれば文言を変更できます。
+書き換え方は [`texts/__init__.py`](texts/__init__.py) の冒頭に書いてあります。
+
+| 変えたいもの | 開くファイル |
+| --- | --- |
+| 常設パネルの表題 | `texts/panels.py` |
+| Botが作るチャンネル名 | `texts/channels.py` |
+| 共通の案内・エラー文 | `texts/common.py` |
+| 使い魔（ガチャ・合成・売却） | `texts/familiar.py` |
+| ギルド | `texts/guild.py` |
+| ギルドバトル | `texts/battle.py` |
+| バトル中の戦況表示 | `texts/battle_display.py` |
+| coin・ATM | `texts/coin.py` |
+| メンバー・招待pt・評価 | `texts/member.py` |
+| 宿屋 | `texts/hotel.py` |
+| お問い合わせ | `texts/ticket.py` |
+
+使い魔名・スキル名・スキル説明と、金額や確率などの数値は `data/master/*.json` にあります。
+
+書き換えたら `python scripts/check_project.py` で壊れていないか確認できます。
+
 ## 必要な設定
 
 - Python 3.12

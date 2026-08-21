@@ -13,6 +13,7 @@ from database.hotel import (
 )
 from utils import ensure_panel_message
 from .views import HotelPremiumView, HotelSecretView, HotelView
+from texts import panels as panel_texts
 
 JST = timezone(timedelta(hours=9))
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ class HotelCog(commands.Cog):
             self.bot,
             guild,
             config.CHANNEL_HOTEL_PANEL,
-            panel_title="入室プラン",
+            panel_title=panel_texts.HOTEL,
             embed=embed,
             view=HotelView(),
             panel_name="宿屋パネル",

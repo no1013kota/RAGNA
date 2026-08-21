@@ -48,6 +48,19 @@ RAGNA/
 │   ├── familiars.json        # 使い魔40体（能力値・性別・スキル）
 │   ├── skills.json           # アクティブ・パッシブ34件
 │   └── gacha.json            # ガチャ料金と排出率
+├── texts/                    # Discordに表示する日本語の文言（表示専用・処理を持たない）
+│   ├── __init__.py           # 編集ルールと目次
+│   ├── panels.py             # 常設パネルの表題
+│   ├── channels.py           # Botが作るチャンネル・カテゴリー名
+│   ├── common.py             # 共通の案内・エラー文とエラーコード対応表
+│   ├── familiar.py           # ガチャ・使い魔管理・一覧・合成・売却
+│   ├── guild.py              # ギルド
+│   ├── battle.py             # ギルドバトルの操作画面
+│   ├── battle_display.py     # バトル中の戦況・行動ログ・結果
+│   ├── coin.py               # coinとATM
+│   ├── member.py             # メンバー・招待pt・評価・クラスチェンジ
+│   ├── hotel.py              # 宿屋
+│   └── ticket.py             # お問い合わせ
 ├── assets/familiars/         # 使い魔画像（<使い魔ID>.png と仮画像 default.png）
 ├── database/
 │   ├── __init__.py           # 旧importとの互換窓口
@@ -90,7 +103,26 @@ RAGNA/
 | `game/*.py` | Discordに依存しない戦闘計算とマスターデータ | Discord APIとSQL |
 | `data/master/*.json` | 料金・確率・能力値などのゲームバランス値 | 処理ロジック |
 | `cogs/game_shared.py` | ゲーム3Cogが共通で使うDiscord処理 | 戦闘計算とSQL |
+| `texts/*.py` | Discordに表示する日本語の文言（定数だけ） | 処理・条件分岐・import |
 | `utils.py` | 複数機能で使う、業務ルールを持たない共通処理 | 特定機能だけの処理 |
+
+## 表示文言の置き場所
+
+利用者に見える日本語は `texts/` に集約しています。Botの持ち主がプログラムを
+読まずに文言だけを直せるようにするためで、`texts/*.py` には定数しか置きません。
+Cog側は `from texts import familiar as familiar_texts` のように読み込み、
+`familiar_texts.SELL_SELECT_PROMPT` のように参照します。値を埋め込む文は
+`"{name} を{count}体売却しました。"` のようなプレースホルダにして、
+呼び出し側で `.format(...)` します。
+
+`texts/` へ置かないものは次の3つです。
+
+- `logger` へ渡す文字列と例外メッセージ（利用者に見えないため、各モジュールのまま）
+- 使い魔名・スキル名・スキル説明（`data/master/*.json`）
+- 料金・確率・上限などの数値（`data/master/balance.json`）
+
+編集方法の説明は `texts/__init__.py` の冒頭に日本語で書いてあります。
+体裁は `tests/test_texts.py` が確認します。
 
 現在の `database/<機能>.py` は、安全に互換性を保つため `core.py` の既存実装を再公開しています。
 新しいコードは必ず機能別の窓口からimportしてください。これにより、将来SQL実装を一領域ずつ移しても

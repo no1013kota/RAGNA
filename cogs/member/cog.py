@@ -20,6 +20,7 @@ from database.trial_member import (
 )
 from database.xp import get_vc_time
 from .views import InvitePointView
+from texts import panels as panel_texts
 
 
 logger = logging.getLogger(__name__)
@@ -490,7 +491,7 @@ class Member(commands.Cog):
             self.bot,
             guild,
             config.CHANNEL_INVITE_POINT_PANEL,
-            panel_title="招待リスト",
+            panel_title=panel_texts.INVITE_LIST,
             embed=embed,
             view=InvitePointView(),
             panel_name="招待ポイントパネル",

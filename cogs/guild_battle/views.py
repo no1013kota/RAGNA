@@ -64,6 +64,7 @@ from game.models import (
 from utils import ensure_panel_message, remove_legacy_panels
 
 from . import service
+from texts import panels as panel_texts
 
 
 logger = logging.getLogger(__name__)
@@ -72,9 +73,9 @@ logger = logging.getLogger(__name__)
 DISABLED_MESSAGE = game_shared.DISABLED_MESSAGE
 
 # 常設パネルのタイトル（``ensure_panel_message`` の重複判定に使う）
-BATTLE_PANEL_TITLE = "ギルドバトル"
-ROSTER_PANEL_TITLE = "使い魔セット"
-RANKING_PANEL_TITLE = "ギルドランキング"
+BATTLE_PANEL_TITLE = panel_texts.BATTLE
+ROSTER_PANEL_TITLE = panel_texts.BATTLE_ROSTER
+RANKING_PANEL_TITLE = panel_texts.BATTLE_RANKING
 
 # 改名前のパネル表題。見つけたら片づけて、新しいパネルへ置き換える。
 LEGACY_ROSTER_PANEL_TITLES = ("バトル出場者",)
@@ -213,17 +214,13 @@ def _unit_option(unit, state=None) -> discord.SelectOption:
 
 
 def _effect_marks(state, unit) -> str:
-    """バフ・デバフ・状態異常を短くまとめた文字列を返す。"""
+    """かかっている効果を短くまとめた文字列を返す。
 
-    summary = effects.buff_summary(state, unit)
+    バフ・デバフは含めません。ATKとSPDの増減は「9（+2）」の形で数値に出ている
+    ため、記号で重ねると読みにくくなります（``battle_embed.effect_marks``と同じ方針）。
+    """
 
-    marks: list[str] = []
-    marks.extend(f"🔺{text}" for text in summary["buffs"])
-    marks.extend(f"🔻{text}" for text in summary["debuffs"])
-    marks.extend(f"☠{text}" for text in summary["statuses"])
-    marks.extend(f"◆{text}" for text in summary["others"])
-
-    return " ".join(marks)
+    return " ".join(battle_embed.effect_marks(state, unit))
 
 
 async def _apply_and_report(

@@ -9,13 +9,14 @@ from database.coin import (
     get_balance,
 )
 
+from texts import panels as panel_texts
 from utils import ensure_panel_message, ensure_top_panel
 
 JST = timezone(timedelta(hours=9))
 logger = logging.getLogger(__name__)
 
 # ATMパネルの表題。coinを使うパネルがあるチャンネルの一番上へ置く。
-ATM_PANEL_TITLE = "ATM"
+ATM_PANEL_TITLE = panel_texts.ATM
 
 
 def build_atm_panel_embed() -> discord.Embed:

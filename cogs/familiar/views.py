@@ -26,6 +26,9 @@ from database.familiar import (
 )
 from game.master_data import load_master_data
 
+from texts import familiar as familiar_texts
+from texts import panels as panel_texts
+
 from . import service
 
 
@@ -35,10 +38,10 @@ logger = logging.getLogger(__name__)
 # ==================================================
 # 共通メッセージ
 # ==================================================
-MASTER_ERROR_MESSAGE = "使い魔データを読み込めませんでした。運営へお問い合わせください。"
+MASTER_ERROR_MESSAGE = familiar_texts.MASTER_ERROR
 UNEXPECTED_ERROR_MESSAGE = game_shared.UNEXPECTED_ERROR_MESSAGE
-NO_FAMILIAR_MESSAGE = "所有している使い魔がありません。ガチャで入手してください。"
-LOCKED_NOTICE = "-# バトルで使用中の使い魔は表示されません。"
+NO_FAMILIAR_MESSAGE = familiar_texts.NO_FAMILIAR
+LOCKED_NOTICE = familiar_texts.LOCKED_NOTICE
 
 # セレクトの上限（Discordの仕様）
 PAGE_SIZE = 25
@@ -107,7 +110,7 @@ class _PageButton(discord.ui.Button):
 class GroupPageView(discord.ui.View):
     """まとめた所有使い魔をページングしながら1つ選ばせる一時View。"""
 
-    placeholder = "使い魔を選択してください"
+    placeholder = familiar_texts.SELECT_PLACEHOLDER
 
     def __init__(
         self,
@@ -140,11 +143,15 @@ class GroupPageView(discord.ui.View):
 
         if self.page_count > 1:
             self.add_item(
-                _PageButton(label="◀ 前のページ", delta=-1, disabled=self.page == 0)
+                _PageButton(
+                    label=familiar_texts.PAGE_PREVIOUS,
+                    delta=-1,
+                    disabled=self.page == 0,
+                )
             )
             self.add_item(
                 _PageButton(
-                    label="次のページ ▶",
+                    label=familiar_texts.PAGE_NEXT,
                     delta=1,
                     disabled=self.page >= self.page_count - 1,
                 )
@@ -162,7 +169,7 @@ class GroupPageView(discord.ui.View):
     # ----- 共通の実行者確認 -----
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await game_shared.respond(interaction, "この操作は実行者だけが使用できます。")
+            await game_shared.respond(interaction, familiar_texts.NOT_YOUR_MENU)
             return False
 
         return True
@@ -202,7 +209,7 @@ class _CountSelect(discord.ui.Select):
 class CountView(discord.ui.View):
     """体数を1つ選ばせる一時View。"""
 
-    placeholder = "体数を選択してください"
+    placeholder = familiar_texts.COUNT_PLACEHOLDER
 
     def __init__(
         self,
@@ -218,7 +225,7 @@ class CountView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await game_shared.respond(interaction, "この操作は実行者だけが使用できます。")
+            await game_shared.respond(interaction, familiar_texts.NOT_YOUR_MENU)
             return False
 
         return True
@@ -237,7 +244,7 @@ class GachaPanelView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="単発ガチャ",
+        label=familiar_texts.GACHA_BUTTON_SINGLE,
         style=discord.ButtonStyle.primary,
         custom_id="familiar:gacha_single",
     )
@@ -247,7 +254,7 @@ class GachaPanelView(discord.ui.View):
         await _open_gacha_confirm(interaction, multi=False)
 
     @discord.ui.button(
-        label="10連ガチャ",
+        label=familiar_texts.GACHA_BUTTON_MULTI,
         style=discord.ButtonStyle.success,
         custom_id="familiar:gacha_multi",
     )
@@ -257,7 +264,7 @@ class GachaPanelView(discord.ui.View):
         await _open_gacha_confirm(interaction, multi=True)
 
     @discord.ui.button(
-        label="排出使い魔の確認",
+        label=familiar_texts.GACHA_BUTTON_RATES,
         style=discord.ButtonStyle.secondary,
         custom_id="familiar:gacha_rates",
     )
@@ -277,7 +284,7 @@ class GachaPanelView(discord.ui.View):
             return
 
         if pool is None:
-            await game_shared.respond(interaction, "現在このガチャは利用できません。")
+            await game_shared.respond(interaction, familiar_texts.GACHA_UNAVAILABLE)
             return
 
         try:
@@ -289,7 +296,7 @@ class GachaPanelView(discord.ui.View):
 
         if not has_familiars:
             await game_shared.respond(
-                interaction, "排出できる使い魔が登録されていません。"
+                interaction, familiar_texts.GACHA_NO_FAMILIARS
             )
             return
 
@@ -310,14 +317,14 @@ async def _open_gacha_confirm(interaction: discord.Interaction, *, multi: bool) 
         return
 
     if pool is None or not pool.is_public:
-        await game_shared.respond(interaction, "現在このガチャは利用できません。")
+        await game_shared.respond(interaction, familiar_texts.GACHA_UNAVAILABLE)
         return
 
     count, cost = service.gacha_plan(pool, multi=multi)
 
     if not service.build_rank_table(pool):
         await game_shared.respond(
-            interaction, "抽選できる使い魔が登録されていないため、ガチャを利用できません。"
+            interaction, familiar_texts.GACHA_NO_POOL
         )
         return
 
@@ -349,15 +356,17 @@ class GachaConfirmView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await game_shared.respond(interaction, "この操作は実行者だけが使用できます。")
+            await game_shared.respond(interaction, familiar_texts.NOT_YOUR_MENU)
             return False
 
         return True
 
-    @discord.ui.button(label="実行する", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label=familiar_texts.GACHA_BUTTON_CONFIRM, style=discord.ButtonStyle.success
+    )
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._running:
-            await game_shared.respond(interaction, "処理中です。しばらくお待ちください。")
+            await game_shared.respond(interaction, familiar_texts.ALREADY_RUNNING)
             return
 
         self._running = True
@@ -379,7 +388,7 @@ class GachaConfirmView(discord.ui.View):
 
             pool = service.get_pool(self.pool_id)
             if pool is None or not pool.is_public:
-                await game_shared.respond(interaction, "現在このガチャは利用できません。")
+                await game_shared.respond(interaction, familiar_texts.GACHA_UNAVAILABLE)
                 return
 
             master = load_master_data()
@@ -458,7 +467,7 @@ class GachaConfirmView(discord.ui.View):
             logger.exception("ガチャの抽選対象が不足しています")
             await game_shared.respond(
                 interaction,
-                "抽選できる使い魔が登録されていないため、ガチャを利用できません。",
+                familiar_texts.GACHA_NO_POOL,
             )
 
         except Exception:
@@ -468,13 +477,15 @@ class GachaConfirmView(discord.ui.View):
         finally:
             self.stop()
 
-    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label=familiar_texts.GACHA_BUTTON_CANCEL, style=discord.ButtonStyle.secondary
+    )
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
 
         try:
             await interaction.response.edit_message(
-                content="キャンセルしました。", embed=None, view=None
+                content=familiar_texts.CANCELLED, embed=None, view=None
             )
         except discord.HTTPException:
             logger.warning("ガチャ確認画面の取消表示に失敗しました")
@@ -491,7 +502,7 @@ class FamiliarManagePanelView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="一覧",
+        label=familiar_texts.MANAGE_BUTTON_LIST,
         style=discord.ButtonStyle.primary,
         custom_id="familiar:list",
     )
@@ -525,7 +536,7 @@ class FamiliarManagePanelView(discord.ui.View):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(
-        label="合成",
+        label=familiar_texts.MANAGE_BUTTON_FUSE,
         style=discord.ButtonStyle.success,
         custom_id="familiar:fuse",
     )
@@ -535,7 +546,7 @@ class FamiliarManagePanelView(discord.ui.View):
         await _open_fusion(interaction)
 
     @discord.ui.button(
-        label="売却",
+        label=familiar_texts.MANAGE_BUTTON_SELL,
         style=discord.ButtonStyle.danger,
         custom_id="familiar:sell",
     )
@@ -548,7 +559,7 @@ class FamiliarManagePanelView(discord.ui.View):
 class FamiliarListView(GroupPageView):
     """所有使い魔を選んで詳細を表示する。"""
 
-    placeholder = "詳細を見る使い魔を選択してください"
+    placeholder = familiar_texts.LIST_SELECT_PLACEHOLDER
 
     async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -627,7 +638,7 @@ async def _open_fusion(interaction: discord.Interaction) -> None:
 class FuseBaseView(GroupPageView):
     """レベルアップさせるベース個体を選ぶ。"""
 
-    placeholder = "合成する使い魔を選択してください"
+    placeholder = familiar_texts.FUSE_SELECT_PLACEHOLDER
 
     async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -689,7 +700,7 @@ class FuseBaseView(GroupPageView):
 class FuseCountView(CountView):
     """何体合成するかを選び、そのまま実行する。"""
 
-    placeholder = "合成する体数を選択してください"
+    placeholder = familiar_texts.FUSE_COUNT_PLACEHOLDER
 
     def __init__(
         self,
@@ -706,7 +717,7 @@ class FuseCountView(CountView):
 
     async def on_count(self, interaction: discord.Interaction, count: int) -> None:
         if self._running:
-            await game_shared.respond(interaction, "処理中です。しばらくお待ちください。")
+            await game_shared.respond(interaction, familiar_texts.ALREADY_RUNNING)
             return
 
         self._running = True
@@ -800,7 +811,7 @@ async def _open_sell(interaction: discord.Interaction) -> None:
 class SellSelectView(GroupPageView):
     """売却する使い魔を選ぶ。次に体数を選ばせる。"""
 
-    placeholder = "売却する使い魔を選択してください"
+    placeholder = familiar_texts.SELL_SELECT_PLACEHOLDER
 
     async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -860,7 +871,7 @@ class SellSelectView(GroupPageView):
 class SellCountView(CountView):
     """何体売却するかを選び、最終確認へ進む。"""
 
-    placeholder = "売却する体数を選択してください"
+    placeholder = familiar_texts.SELL_COUNT_PLACEHOLDER
 
     def __init__(
         self,
@@ -910,15 +921,17 @@ class SellConfirmView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await game_shared.respond(interaction, "この操作は実行者だけが使用できます。")
+            await game_shared.respond(interaction, familiar_texts.NOT_YOUR_MENU)
             return False
 
         return True
 
-    @discord.ui.button(label="売却する", style=discord.ButtonStyle.danger)
+    @discord.ui.button(
+        label=familiar_texts.SELL_BUTTON_CONFIRM, style=discord.ButtonStyle.danger
+    )
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._running:
-            await game_shared.respond(interaction, "処理中です。しばらくお待ちください。")
+            await game_shared.respond(interaction, familiar_texts.ALREADY_RUNNING)
             return
 
         self._running = True
@@ -979,13 +992,15 @@ class SellConfirmView(discord.ui.View):
         finally:
             self.stop()
 
-    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label=familiar_texts.GACHA_BUTTON_CANCEL, style=discord.ButtonStyle.secondary
+    )
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
 
         try:
             await interaction.response.edit_message(
-                content="キャンセルしました。", embed=None, view=None
+                content=familiar_texts.CANCELLED, embed=None, view=None
             )
         except discord.HTTPException:
             logger.warning("売却確認画面の取消表示に失敗しました")
@@ -994,11 +1009,11 @@ class SellConfirmView(discord.ui.View):
 # ==================================================
 # パネルEmbed
 # ==================================================
-GACHA_PANEL_TITLE = "ガチャ"
-MANAGE_PANEL_TITLE = "使い魔管理"
+GACHA_PANEL_TITLE = panel_texts.GACHA
+MANAGE_PANEL_TITLE = panel_texts.FAMILIAR_MANAGE
 
 # 改名前の表題。見つけたら片づけて、新しいパネルへ置き換える。
-LEGACY_PANEL_TITLES = ("使い魔ガチャ",)
+LEGACY_PANEL_TITLES = panel_texts.GACHA_LEGACY
 
 
 def build_gacha_panel_embed() -> discord.Embed:

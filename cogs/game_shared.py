@@ -21,6 +21,8 @@ from database.player_rank import (
     sync_player_rank,
     sync_player_ranks,
 )
+from texts import channels as channel_texts
+from texts import common as texts_common
 
 
 logger = logging.getLogger(__name__)
@@ -29,19 +31,14 @@ logger = logging.getLogger(__name__)
 # ==================================================
 # 共通の定数
 # ==================================================
-# 利用者へ返す共通メッセージ
-DISABLED_MESSAGE = "現在この機能はご利用いただけません。"
-CHANNEL_ERROR_MESSAGE = "チャンネル情報を取得できませんでした。"
-UNEXPECTED_ERROR_MESSAGE = "処理に失敗しました。時間をおいて試してください。"
+# 利用者へ返す共通メッセージ。文面は texts/common.py にまとめています。
+DISABLED_MESSAGE = texts_common.DISABLED
+CHANNEL_ERROR_MESSAGE = texts_common.CHANNEL_ERROR
+UNEXPECTED_ERROR_MESSAGE = texts_common.UNEXPECTED_ERROR
 
 # 利用資格（4節）。本メンバー（騎士）・七聖・運営だけが遊べます。
-MEMBER_ONLY_MESSAGE = (
-    "ラグナオンラインは本メンバー（騎士）から利用できます。\n"
-    "-# 仮メンバー・準メンバーの方は、本メンバーになってからご利用ください。"
-)
-RANK_UNSYNCED_MESSAGE = (
-    "プレイヤー情報を確認できませんでした。運営へ連絡してください。"
-)
+MEMBER_ONLY_MESSAGE = texts_common.MEMBER_ONLY
+RANK_UNSYNCED_MESSAGE = texts_common.RANK_UNSYNCED
 
 # ギルド名にメンション表現が含まれていても通知が飛ばないようにする（5.2節）
 NO_MENTIONS = discord.AllowedMentions.none()
@@ -77,46 +74,17 @@ def parse_iso(value: str | None) -> datetime | None:
 # ==================================================
 # エラーコードの日本語表示
 # ==================================================
-ERROR_MESSAGES = {
-    # ギルド
-    "already_in_guild": "既にギルドへ所属しています。",
-    "insufficient_balance": "coinが不足しています。",
-    "guild_not_found": "ギルド情報が見つかりません。",
-    "guild_full": "このギルドは現在満員のため参加申請できません。",
-    "capacity_max": "メンバー枠は最大まで拡張済みです。",
-    "not_master": "ギルドマスターだけが実行できます。",
-    "not_member": "対象がこのギルドに所属していません。",
-    "master_cannot_leave": "ギルドマスターは脱退できません。マスターを譲渡するか、ギルドを解散してください。",
-    "already_requested": "既にこのギルドへ参加申請しています。",
-    "recruitment_closed": "このギルドは現在メンバーを募集していません。",
-    "not_pending": "この申請は既に処理済みです。",
-    "not_owner": "この申請の作成者だけが取り消せます。",
-    # 使い魔
-    "not_owned": "その使い魔を所有していません。",
-    "different_familiar": "同じ種類の使い魔同士でしか合成できません。",
-    "same_instance": "同じ個体を素材にできません。",
-    "max_level": "この使い魔は既に最大レベルです。",
-    "in_use": "バトルで使用中の使い魔は操作できません。",
-    # バトル
-    "roster_locked": "編成がロックされているため変更できません。",
-    "duplicate_member": "同じメンバーを重複して選択できません。",
-    "not_selected": "出場者に選ばれていません。",
-    "same_guild": "自分のギルドへは申し込めません。",
-    "guild_busy": "このギルドには既に有効な申請・募集・進行中バトルがあります。",
-    "opponent_busy": "相手ギルドには既に有効な申請・募集・進行中バトルがあります。",
-    "already_matched": "この募集は既に受付を終了しました。",
-    "not_open": "この募集は既に終了しています。",
-    "already_finished": "このバトルは既に終了しています。",
-}
+# 文面は texts/common.py の ERRORS にまとめています。
+ERROR_MESSAGES = texts_common.ERRORS
 
 
 def error_message(code: str | None) -> str:
     """DB層のエラーコードを利用者向けの日本語へ変換する。"""
 
     if not code:
-        return "処理に失敗しました。"
+        return texts_common.FAILED
 
-    return ERROR_MESSAGES.get(code, "処理に失敗しました。")
+    return ERROR_MESSAGES.get(code, texts_common.FAILED)
 
 
 # ==================================================
@@ -291,27 +259,21 @@ def is_manager(member: discord.Member) -> bool:
 # ==================================================
 # ギルド専用チャンネル（5.3節）
 # ==================================================
-CHANNEL_LABELS = {
-    "guild_text": "ギルドtc",
-    "guild_voice": "ギルドvc",
-    "master_text": "ギルドマスター専用tc",
-    "battle_member": "使い魔バトル",
-    "guild_info": "ギルド情報",
-}
+# 名前は texts/channels.py にまとめています。
+CHANNEL_LABELS = channel_texts.GUILD_CHANNELS
 
 # 改名前のチャンネル名。既存ギルドを新しい名前へ寄せるために参照する。
-LEGACY_CHANNEL_NAMES = {
-    "battle_member": ("バトル出場者専用tc", "使い魔セット"),
-}
+LEGACY_CHANNEL_NAMES = channel_texts.GUILD_CHANNELS_LEGACY
 
 # 対戦成立時に作るバトル専用チャンネルの名前（34.14節）
-BATTLE_CHANNEL_PREFIX = "バトル-"
+BATTLE_CHANNEL_PREFIX = channel_texts.BATTLE_CHANNEL_PREFIX
 
 # 解散したギルドのチャンネルを集めるカテゴリー（7.5節）。
 # Discordはカテゴリーの中にカテゴリーを作れないため、配下チャンネルをここへ移し、
-# 空になったギルドカテゴリーを削除します。1カテゴリー50チャンネルの上限があるので、
-# 埋まったら「解散ギルド保存2」「解散ギルド保存3」…を作って続けます。
-GUILD_ARCHIVE_CATEGORY_NAME = "解散ギルド保存"
+# 空になったギルドカテゴリーを削除します。
+GUILD_ARCHIVE_CATEGORY_NAME = channel_texts.GUILD_ARCHIVE_CATEGORY
+
+# 1カテゴリーに置けるチャンネル数の上限（Discordの仕様）
 CATEGORY_CHANNEL_LIMIT = 50
 
 

@@ -23,6 +23,7 @@ from cogs.familiar import service as familiar_service  # noqa: E402
 from cogs.guild import service as guild_service  # noqa: E402
 from cogs.guild import views as guild_views  # noqa: E402
 from cogs.guild_battle import views as battle_views  # noqa: E402
+from texts import panels as panel_texts  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -543,14 +544,34 @@ class AtmPanelChannelTests(unittest.TestCase):
 
     @staticmethod
     def panel_titles_in_cogs() -> set[str]:
-        """各Cogが ``panel_title=`` で設置している表題を集める。"""
+        """各Cogが ``panel_title=`` で設置している表題を集める。
+
+        表題の文面は ``texts/panels.py`` にまとめてあるため、Cog側は定数名で
+        渡しています。そこで、書かれている名前を ``texts.panels`` の定数として
+        引き直します（引けない書き方はこのテストの対象外）。
+        """
 
         found: set[str] = set()
+
         for path in (ROOT / "cogs").rglob("*.py"):
-            for match in re.finditer(
-                r'panel_title="([^"]+)"', path.read_text(encoding="utf-8")
-            ):
-                found.add(match.group(1))
+            source = path.read_text(encoding="utf-8")
+
+            for literal in re.finditer(r'panel_title="([^"]+)"', source):
+                found.add(literal.group(1))
+
+            for name in re.finditer(r"panel_title=[\w.]*?(\w+),", source):
+                value = getattr(panel_texts, name.group(1), None)
+                if isinstance(value, str):
+                    found.add(value)
+
+        # Cog側の別名（例 ``ATM_PANEL_TITLE``）でも引けるようにする
+        for module in (coin_views, familiar_service, guild_service, battle_views):
+            for attribute in dir(module):
+                if not attribute.endswith("PANEL_TITLE"):
+                    continue
+                value = getattr(module, attribute)
+                if isinstance(value, str):
+                    found.add(value)
 
         return found
 

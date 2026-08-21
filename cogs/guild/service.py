@@ -47,6 +47,7 @@ from database.guild import (
     set_recruitment_status,
 )
 from game.master_data import load_master_data
+from texts import panels as panel_texts
 
 
 logger = logging.getLogger(__name__)
@@ -59,27 +60,27 @@ logger = logging.getLogger(__name__)
 NO_MENTIONS = game_shared.NO_MENTIONS
 
 # ギルド紹介チャンネルの常設パネルのタイトル（ensure_panel_messageの識別キー）
-PANEL_TITLE = "RAGNA Online"
+PANEL_TITLE = panel_texts.GAME_ENTRY
 
 # 改名前の表題。見つけたら片づけて、新しいパネルへ置き換える。
-LEGACY_PANEL_TITLES = ("RAGNA Online ギルド",)
+LEGACY_PANEL_TITLES = panel_texts.GAME_ENTRY_LEGACY
 
 # マスター専用TCへ設置する常設パネルのタイトル
-MANAGE_PANEL_TITLE = "ギルド管理"
+MANAGE_PANEL_TITLE = panel_texts.GUILD_MANAGE
 
 # メンバー用パネルは表題がギルド名になるため、ボタンの custom_id で見分ける。
 # ギルド名を変えてもパネルが増えず、表題だけが書き換わります（8.3節）。
 MEMBER_PANEL_CUSTOM_IDS = ("guild:info", "guild:leave")
 
 # 改名前のメンバー用パネルの表題。旧ギルドTCに残っていたら片づける。
-LEGACY_MEMBER_PANEL_TITLES = ("ギルドメンバー",)
+LEGACY_MEMBER_PANEL_TITLES = panel_texts.GUILD_MEMBER_LEGACY
 
 # 旧パネルの片づけを済ませたギルド。起動ごとにリセットされる（29節）。
 _legacy_member_panels_checked: set[int] = set()
 
 # 募集Embed・参加申請Embedのタイトル（6.1節・6.2節）
-RECRUITMENT_TITLE = "【ギルドメンバー募集】"
-JOIN_REQUEST_TITLE = "【ギルド参加申請】"
+RECRUITMENT_TITLE = panel_texts.GUILD_RECRUITMENT
+JOIN_REQUEST_TITLE = panel_texts.GUILD_JOIN_REQUEST
 
 # 募集状態の表示名
 RECRUITMENT_LABELS = {

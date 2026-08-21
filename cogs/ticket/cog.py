@@ -8,6 +8,7 @@ import asyncio
 from discord.ext import commands, tasks
 from utils import ensure_panel_message
 from .views import TicketCloseView, TicketManagerView, TicketPanelView, TicketStaffView
+from texts import panels as panel_texts
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class Ticket(commands.Cog):
             self.bot,
             guild,
             config.CHANNEL_TICKET_PANEL,
-            panel_title="窓口",
+            panel_title=panel_texts.TICKET,
             embed=embed,
             view=TicketPanelView(),
             panel_name="お問い合わせパネル",

@@ -35,6 +35,7 @@ from database.trial_member import (
     clear_trial_member_evaluations,
 )
 from utils import ensure_panel_message
+from texts import panels as panel_texts
 
 
 logger = logging.getLogger(__name__)
@@ -1301,7 +1302,7 @@ class TrialMember(commands.Cog):
             self.bot,
             guild,
             config.CHANNEL_EVALUATION_PANEL,
-            panel_title="評価シート",
+            panel_title=panel_texts.EVALUATION_SHEET,
             embed=embed,
             view=EvaluationPanelView(),
             panel_name="評価パネル",

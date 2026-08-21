@@ -8,6 +8,8 @@ import os
 
 from dotenv import load_dotenv
 
+from texts import panels as panel_texts
+
 
 load_dotenv()
 
@@ -205,11 +207,13 @@ CHANNEL_TICKET_PANEL = 1523188012429869176  # お問い合わせパネル
 # ATMパネルはここの一番上へ置きます。値に挙げた表題のパネルだけが並べ替えの
 # ために削除されるので、貼り直せない投稿（申請Embedなど）は挙げません。
 # ゲーム機能のチャンネルは環境変数で決まるため、各Cogが自分で設置します。
+# 表題は texts/panels.py が正。ここで文字列を書くと二重管理になり、表題を
+# 変えたときに並べ替えが効かなくなるため、必ず定数で参照します。
 ATM_PANEL_CHANNELS = {
-    CHANNEL_EVALUATION_PANEL: ("評価シート",),
-    CHANNEL_HOTEL_PANEL: ("入室プラン",),
-    CHANNEL_INVITE_POINT_PANEL: ("招待リスト",),
-    CHANNEL_TICKET_PANEL: ("窓口",),
+    CHANNEL_EVALUATION_PANEL: (panel_texts.EVALUATION_SHEET,),
+    CHANNEL_HOTEL_PANEL: (panel_texts.HOTEL,),
+    CHANNEL_INVITE_POINT_PANEL: (panel_texts.INVITE_LIST,),
+    CHANNEL_TICKET_PANEL: (panel_texts.TICKET,),
 }
 
 # ==================================================
