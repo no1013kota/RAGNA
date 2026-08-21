@@ -19,6 +19,7 @@ from database.xp import (
     set_vc_month_state,
     reset_monthly_vc_data
 )
+from texts import member as member_texts
 
 JST = ZoneInfo("Asia/Tokyo")
 logger = logging.getLogger(__name__)
@@ -259,13 +260,11 @@ class XP(commands.Cog):
             monthly_xp += session["pending_xp"]
 
         embed = discord.Embed(
-            description=(
-                "【XP】\n"
-                f"今月：{monthly_xp:,} XP\n"
-                f"累計：{total_xp:,} XP\n\n"
-                "【通話時間】\n"
-                f"今月：{format_time(monthly_minutes)}\n"
-                f"累計：{format_time(total_minutes)}"
+            description=member_texts.XP_BODY.format(
+                monthly_xp=f"{monthly_xp:,}",
+                total_xp=f"{total_xp:,}",
+                monthly_time=format_time(monthly_minutes),
+                total_time=format_time(total_minutes)
             ),
             color=config.COLOR_BLUE
         )
