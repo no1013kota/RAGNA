@@ -114,6 +114,49 @@ def check_python_syntax(errors: list[str]) -> None:
             errors.append(f"Python構文エラー: {path.relative_to(ROOT)}: {exc}")
 
 
+def check_texts(errors: list[str]) -> None:
+    """表示文言のファイルが、書き換えても安全な形のままかを確認する。
+
+    ``texts/`` は文言だけを置く場所です。処理やimportが混ざると、書き換えた
+    ときにBotが動かなくなる恐れがあるので、定数だけであることを確かめます。
+    """
+
+    texts_dir = ROOT / "texts"
+    if not texts_dir.is_dir():
+        errors.append("表示文言のフォルダ texts/ がありません")
+        return
+
+    for path in sorted(texts_dir.glob("*.py")):
+        name = path.relative_to(ROOT)
+
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (SyntaxError, UnicodeError):
+            continue  # 構文エラーは check_python_syntax が報告する
+
+        if path.name == "__init__.py":
+            continue
+
+        if not ast.get_docstring(tree):
+            errors.append(f"{name}: 先頭の説明文がありません")
+
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                errors.append(f"{name}: 文言のファイルに import は書けません")
+            elif isinstance(
+                node,
+                (
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                    ast.ClassDef,
+                    ast.If,
+                    ast.For,
+                    ast.While,
+                ),
+            ):
+                errors.append(f"{name}: 文言のファイルに処理は書けません")
+
+
 def check_configuration(errors: list[str]) -> None:
     """Railway設定と秘密情報の基本的な事故を検査する。"""
 
@@ -165,6 +208,7 @@ def main() -> int:
     check_required_files(errors)
     check_feature_packages(errors)
     check_python_syntax(errors)
+    check_texts(errors)
     check_configuration(errors)
     check_master_data(errors)
     check_database(errors)
