@@ -11,3 +11,6 @@ logs
 data/*.db
 data/*.db-*
 data/*.db.*
+
+# 使い魔画像の縮小前の原本（配布物ではないため管理外）
+assets/familiars/original/
