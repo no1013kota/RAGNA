@@ -307,6 +307,13 @@ LEGACY_CHANNEL_NAMES = {
 # 対戦成立時に作るバトル専用チャンネルの名前（34.14節）
 BATTLE_CHANNEL_PREFIX = "バトル-"
 
+# 解散したギルドのチャンネルを集めるカテゴリー（7.5節）。
+# Discordはカテゴリーの中にカテゴリーを作れないため、配下チャンネルをここへ移し、
+# 空になったギルドカテゴリーを削除します。1カテゴリー50チャンネルの上限があるので、
+# 埋まったら「解散ギルド保存2」「解散ギルド保存3」…を作って続けます。
+GUILD_ARCHIVE_CATEGORY_NAME = "解散ギルド保存"
+CATEGORY_CHANNEL_LIMIT = 50
+
 
 def battle_channel_name(battle_id: int) -> str:
     return f"{BATTLE_CHANNEL_PREFIX}{battle_id}"
@@ -561,7 +568,12 @@ async def open_battle_log_channel(
     return True
 
 
-async def delete_channel(guild: discord.Guild, channel_id: int | None) -> bool:
+async def delete_channel(
+    guild: discord.Guild,
+    channel_id: int | None,
+    *,
+    reason: str = "RAGNA Onlineの保存期間終了",
+) -> bool:
     """チャンネルを削除する。既に無い場合も成功として扱う。"""
 
     if not channel_id:
@@ -572,7 +584,7 @@ async def delete_channel(guild: discord.Guild, channel_id: int | None) -> bool:
         return True
 
     try:
-        await channel.delete(reason="RAGNA Onlineバトルチャンネルの保存期間終了")
+        await channel.delete(reason=reason)
     except discord.NotFound:
         return True
     except Exception:
@@ -699,10 +711,68 @@ async def revoke_guild_permissions(guild: discord.Guild, guild_row: dict) -> boo
     return succeeded
 
 
+def _archive_category_names(guild: discord.Guild) -> list[discord.CategoryChannel]:
+    """保存カテゴリーを、作った順（名前の番号順）で返す。"""
+
+    found: list[tuple[int, discord.CategoryChannel]] = []
+
+    for category in guild.categories:
+        if category.name == GUILD_ARCHIVE_CATEGORY_NAME:
+            found.append((1, category))
+            continue
+
+        suffix = category.name.removeprefix(GUILD_ARCHIVE_CATEGORY_NAME)
+        if suffix != category.name and suffix.isdigit():
+            found.append((int(suffix), category))
+
+    found.sort(key=lambda item: item[0])
+    return [category for _, category in found]
+
+
+async def ensure_guild_archive_category(
+    guild: discord.Guild, *, needed: int = 1
+) -> discord.CategoryChannel | None:
+    """解散ギルドの保存カテゴリーを返す。空きが無ければ次の番号で作る（7.5節）。
+
+    ``needed`` は今から入れたいチャンネル数です。1カテゴリー50チャンネルの上限に
+    収まるものを探し、どれも埋まっていれば新しく作ります。
+    """
+
+    categories = _archive_category_names(guild)
+
+    for category in categories:
+        if len(category.channels) + needed <= CATEGORY_CHANNEL_LIMIT:
+            return category
+
+    number = len(categories) + 1
+    name = (
+        GUILD_ARCHIVE_CATEGORY_NAME
+        if number == 1
+        else f"{GUILD_ARCHIVE_CATEGORY_NAME}{number}"
+    )
+
+    try:
+        return await guild.create_category(
+            name=name,
+            overwrites=_base_overwrites(guild),
+            reason="RAGNA Online解散ギルドの保存",
+        )
+    except Exception:
+        logger.exception("解散ギルド保存カテゴリーの作成に失敗しました: %s", name)
+        return None
+
+
 async def archive_guild_channels(
     guild: discord.Guild, guild_row: dict, *, prefix: str
 ) -> bool:
-    """解散したギルドのカテゴリーを運営限定の保管状態にする（5.3節・7.5節）。"""
+    """解散したギルドのチャンネルを保存カテゴリーへ移す（5.3節・7.5節）。
+
+    Discordはカテゴリーの中にカテゴリーを作れないため、配下のチャンネルを
+    「解散ギルド保存」カテゴリーへ移し、空になったギルドカテゴリーを削除します。
+    移したチャンネルは「【解散済】ギルド名-ギルドtc」のように名前を変えます。
+    保存カテゴリーには複数ギルドが並ぶため、名前だけでどのギルドの物か
+    分かるようにしておく必要があります。
+    """
 
     category_id = guild_row.get("category_id")
     if not category_id:
@@ -710,54 +780,84 @@ async def archive_guild_channels(
 
     category = guild.get_channel(category_id)
     if not isinstance(category, discord.CategoryChannel):
+        return False
+
+    channels = list(category.channels)
+    archive = await ensure_guild_archive_category(guild, needed=len(channels) or 1)
+    if archive is None:
         return False
 
     overwrites = _base_overwrites(guild)
-    name = category.name
-    if not name.startswith(prefix):
-        name = f"{prefix}{name}"
+    guild_name = str(guild_row.get("name") or category.name)
+    reason = "RAGNA Onlineギルドの解散"
+    succeeded = True
+
+    for channel in channels:
+        name = f"{prefix}{guild_name}-{channel.name}"
+
+        try:
+            await channel.edit(
+                name=name[:100],
+                category=archive,
+                overwrites=overwrites,
+                reason=reason,
+            )
+        except Exception:
+            logger.exception(
+                "解散チャンネルの保存に失敗しました: channel_id=%s", channel.id
+            )
+            succeeded = False
 
     try:
-        await category.edit(
-            name=name[:100],
-            overwrites=overwrites,
-            position=len(guild.categories),
-            reason="RAGNA Onlineギルドの解散",
-        )
+        await category.delete(reason=reason)
+    except discord.NotFound:
+        pass
+    except Exception:
+        logger.exception("空になったギルドカテゴリーの削除に失敗しました: %s", category_id)
+        succeeded = False
 
-        for channel in category.channels:
-            await channel.edit(
-                overwrites=overwrites, reason="RAGNA Onlineギルドの解散"
-            )
-
-    except (discord.HTTPException, discord.Forbidden):
-        logger.exception("ギルドカテゴリーのアーカイブに失敗しました: %s", category_id)
-        return False
-
-    return True
+    return succeeded
 
 
 async def delete_guild_channels(guild: discord.Guild, guild_row: dict) -> bool:
-    """保存期間を過ぎたギルドカテゴリーを削除する。"""
+    """保存期間を過ぎた解散ギルドのチャンネルを削除する（7.5節）。
 
+    解散時にチャンネルは保存カテゴリーへ移っているため、カテゴリーを辿らずに
+    記録しておいたチャンネルIDで消します。カテゴリーだけを見ていると、
+    移動済みのチャンネルを消し忘れたまま「削除済み」にしてしまいます。
+    """
+
+    reason = "RAGNA Onlineギルドの保存期間終了"
+    succeeded = True
+
+    columns = (
+        "guild_text_channel_id",
+        "guild_voice_channel_id",
+        "master_text_channel_id",
+        "battle_member_channel_id",
+        "info_channel_id",
+    )
+
+    for column in columns:
+        if not await delete_channel(guild, guild_row.get(column), reason=reason):
+            succeeded = False
+
+    # 解散に失敗してカテゴリーが残っている場合は、配下ごと片づける
     category_id = guild_row.get("category_id")
-    if not category_id:
-        return True
+    category = guild.get_channel(int(category_id)) if category_id else None
 
-    category = guild.get_channel(category_id)
-    if not isinstance(category, discord.CategoryChannel):
-        return True
+    if isinstance(category, discord.CategoryChannel):
+        try:
+            for channel in list(category.channels):
+                await channel.delete(reason=reason)
+            await category.delete(reason=reason)
+        except discord.NotFound:
+            pass
+        except Exception:
+            logger.exception("ギルドカテゴリーの削除に失敗しました: %s", category_id)
+            succeeded = False
 
-    try:
-        for channel in list(category.channels):
-            await channel.delete(reason="RAGNA Onlineギルドの保存期間終了")
-        await category.delete(reason="RAGNA Onlineギルドの保存期間終了")
-
-    except (discord.HTTPException, discord.Forbidden):
-        logger.exception("ギルドカテゴリーの削除に失敗しました: %s", category_id)
-        return False
-
-    return True
+    return succeeded
 
 
 # ==================================================
@@ -1046,6 +1146,7 @@ __all__ = [
     "create_guild_channels",
     "delete_guild_channels",
     "ensure_channel_name",
+    "ensure_guild_archive_category",
     "ensure_guild_info_channel",
     "error_message",
     "format_coin",

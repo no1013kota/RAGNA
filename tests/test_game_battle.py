@@ -1172,6 +1172,52 @@ class DefeatTests(unittest.TestCase):
         self.assertTrue(ally.alive)
         self.assertEqual(ally.current_hp, 18)
 
+    def test_a_defeated_familiar_stops_firing_its_passives(self) -> None:
+        # 19.3節：戦闘不能の使い魔のパッシブは発動しない（全キャラ共通）
+        state = build_state([("hel", 1), ("cyclops", 1)], [("surtr", 5)])
+        battle_engine.start_battle(state)
+
+        hel = unit_of(state, "hel", GUILD_A)
+        surtr = unit_of(state, "surtr", GUILD_B)
+
+        # ヘル自身が倒れるとき、自分の蘇生パッシブは使えない
+        hel.current_hp = 1
+        battle_engine.deal_damage(state, surtr, hel, 99, attack_type="normal")
+        self.assertFalse(hel.alive)
+
+        # 倒れたあとは、味方が倒れても蘇生しない
+        cyclops = unit_of(state, "cyclops", GUILD_A)
+        cyclops.current_hp = 1
+        battle_engine.deal_damage(state, surtr, cyclops, 99, attack_type="normal")
+        self.assertFalse(cyclops.alive)
+
+    def test_a_living_familiar_still_fires_its_passives(self) -> None:
+        state = build_state([("hel", 1), ("cyclops", 1)], [("surtr", 5)])
+        battle_engine.start_battle(state)
+
+        cyclops = unit_of(state, "cyclops", GUILD_A)
+        surtr = unit_of(state, "surtr", GUILD_B)
+        cyclops.current_hp = 1
+
+        battle_engine.deal_damage(state, surtr, cyclops, 99, attack_type="normal")
+
+        self.assertTrue(cyclops.alive)
+        self.assertEqual(cyclops.current_hp, 10)
+
+    def test_surviving_passives_are_unaffected(self) -> None:
+        # 「戦闘不能になる直前」に耐えるパッシブは、まだ生きているので発動する
+        state = build_state([("dullahan", 1)], [("surtr", 5)])
+        battle_engine.start_battle(state)
+
+        dullahan = unit_of(state, "dullahan", GUILD_A)
+        surtr = unit_of(state, "surtr", GUILD_B)
+        dullahan.current_hp = 5
+
+        battle_engine.deal_damage(state, surtr, dullahan, 99, attack_type="normal")
+
+        self.assertTrue(dullahan.alive)
+        self.assertEqual(dullahan.current_hp, 1)
+
     def test_phoenix_revives_a_defeated_ally(self) -> None:
         state = build_state([("phoenix", 1), ("garm", 1)], [("cyclops", 1)])
         battle_engine.start_battle(state)

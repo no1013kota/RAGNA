@@ -56,9 +56,6 @@ HP_BAR_EMPTY = "░"
 
 SLOT_MARKS = ("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩")
 
-# ランクを一目で見分けるための記号（cogs へ依存しないよう、ここで定義する）
-RANK_EMOJIS = {"S": "🌟", "A": "💎", "B": "🔷", "C": "⬜"}
-
 # 1つの行動ログEmbedとしてまとめ始めるイベント。
 # パッシブは含めない。攻撃やスキルの途中で発動するため、まとめ始めてしまうと
 # そのあとのダメージ表示がパッシブ側のEmbedへ入ってしまう。
@@ -97,20 +94,14 @@ def unit_name(state: BattleState, unit_id: int | None) -> str:
     return familiar_name(unit.familiar_id)
 
 
-def rank_mark(familiar_id: str) -> str:
-    """使い魔のランク記号を返す。編成表や行動順の見分けに使う。"""
-
-    familiar = load_master_data().get_familiar(familiar_id)
-    if familiar is None:
-        return ""
-
-    return RANK_EMOJIS.get(familiar.rank, "")
-
-
 def unit_label(state: BattleState, unit: BattleUnit) -> str:
-    """「🌟ロキ Lv.3」のような表示名を返す。"""
+    """「ロキ Lv.3」のような表示名を返す。
 
-    return f"{rank_mark(unit.familiar_id)}{familiar_name(unit.familiar_id)} Lv.{unit.level}"
+    バトル中はランク記号を付けません。強さはATKやHPで分かるため、
+    行動順や戦況が記号で埋まって読みにくくなるのを避けます。
+    """
+
+    return f"{familiar_name(unit.familiar_id)} Lv.{unit.level}"
 
 
 def survivor_text(state: BattleState, guild_id: int) -> str:
@@ -177,7 +168,7 @@ def turn_queue_text(
             continue
 
         mark = side_mark(state, unit.guild_id, viewer_guild_id)
-        label = f"{mark}{rank_mark(unit.familiar_id)}{familiar_name(unit.familiar_id)}"
+        label = f"{mark}{familiar_name(unit.familiar_id)}"
         if state.current_unit_id == unit.battle_unit_id:
             label = f"▶**{label}**"
 
@@ -775,19 +766,20 @@ def build_action_log_messages(
 # ==================================================
 # 戦況Embed
 # ==================================================
-def _unit_line(state: BattleState, unit: BattleUnit, index: int) -> str:
-    mark = SLOT_MARKS[index] if index < len(SLOT_MARKS) else f"{index + 1}."
+def _unit_line(state: BattleState, unit: BattleUnit) -> str:
+    """戦況Embedの使い魔1体分。いま生き残りとHPを見るための表示に絞る。
+
+    枠番号・COST・スキルの残り回数は編成を決めるための情報なので、
+    戦況では出しません（編成確認とターン通知で確認できます）。
+    """
+
     name = familiar_name(unit.familiar_id)
 
-    rank = rank_mark(unit.familiar_id)
-
     if not unit.alive:
-        head = f"{mark}{rank} ~~{name}~~ 💀 戦闘不能"
         bar = HP_BAR_EMPTY * HP_BAR_LENGTH
-        return f"{head}\n`{bar}` 0/{unit.max_hp}"
+        return f"~~{name}~~ 💀 戦闘不能\n`{bar}` 0/{unit.max_hp}"
 
     bar = hp_bar(unit.current_hp, unit.max_hp)
-    head = f"{mark}{rank} **{name}** Lv.{unit.level}　COST {unit.cost}"
     stats = (
         f"`{bar}` {unit.current_hp}/{unit.max_hp}"
         f"　ATK {atk_text(unit)}　SPD {speed_text(unit)}"
@@ -800,13 +792,9 @@ def _unit_line(state: BattleState, unit: BattleUnit, index: int) -> str:
     marks.extend(f"☠{text}" for text in summary["statuses"])
     marks.extend(f"◆{text}" for text in summary["others"])
 
-    lines = [head, stats]
+    lines = [f"**{name}** Lv.{unit.level}", stats]
     if marks:
         lines.append("　" + " ".join(marks))
-
-    skill_marks = _skill_usage(unit)
-    if skill_marks:
-        lines.append("　" + skill_marks)
 
     return "\n".join(lines)
 
@@ -959,19 +947,9 @@ def build_opponent_turn_embed(
 ) -> discord.Embed:
     """相手ギルドのターンが始まったことを知らせるEmbed（17節）。"""
 
-    name = guild_names.get(unit.guild_id, f"ギルド{unit.guild_id}")
-    viewer_guild_id = state.enemy_guild_id(unit.guild_id)
-
     lines = [
-        item_line(
-            "行動する使い魔",
-            f"{side_mark(state, unit.guild_id, viewer_guild_id)}"
-            f"**{unit_label(state, unit)}**",
-        ),
-        item_line("所属", name),
-        item_line("操作するプレイヤー", _player_label(player_names, unit.player_id)),
+        item_line("行動する使い魔", f"**{unit_label(state, unit)}**"),
         item_line("ステータス", stat_line(state, unit)),
-        item_line("ラウンド", state.current_round),
     ]
 
     summary = effects_module.buff_summary(state, unit)
@@ -983,18 +961,6 @@ def build_opponent_turn_embed(
 
     if marks:
         lines.append(item_line("かかっている効果", " ".join(marks)))
-
-    lines.extend(
-        [
-            item_line(
-                "次の順番",
-                turn_queue_text(state, limit=4, viewer_guild_id=viewer_guild_id),
-            ),
-            "",
-            f"-# {SIDE_LEGEND}",
-            "-# 相手の行動が終わるまでお待ちください。",
-        ]
-    )
 
     return discord.Embed(
         title="⏳ 相手のターンです",
@@ -1008,36 +974,18 @@ def build_status_embed(
     *,
     guild_names: dict[int, str],
     highlight_guild_id: int | None = None,
-    turn_remaining_seconds: int | None = None,
     bet_coin: int | None = None,
     viewer_guild_id: int | None = None,
 ) -> discord.Embed:
     """その時点の戦況をまとめたEmbedを作る（17節・24節）。
 
+    戦況は「どちらが何体残っていて、HPがどれだけあるか」だけを見せます。
+    ラウンドと行動順はラウンドの見出しEmbed、行動中の使い魔はターン通知が
+    受け持つため、ここでは重ねて出しません。
+
     ``viewer_guild_id`` を渡すと、そのギルドから見た自ギルド・相手ギルドを
     記号で示します。バトル専用チャンネルはギルドごとに分かれているためです。
     """
-
-    header = [item_line("ラウンド", state.current_round)]
-
-    current = state.current_unit()
-    if current is not None:
-        owner = guild_names.get(current.guild_id, f"ギルド{current.guild_id}")
-        mark = side_mark(state, current.guild_id, viewer_guild_id)
-        header.append(
-            item_line("行動中", f"{mark}{unit_label(state, current)}（{owner}）")
-        )
-
-        if turn_remaining_seconds is not None:
-            header.append(
-                item_line(
-                    "自動攻撃まで", format_remaining_time(turn_remaining_seconds)
-                )
-            )
-
-    header.append(
-        item_line("行動順", turn_queue_text(state, viewer_guild_id=viewer_guild_id))
-    )
 
     sections: list[str] = []
 
@@ -1047,10 +995,7 @@ def build_status_embed(
         prefix = "▶ " if guild_id == highlight_guild_id else ""
         mark = side_mark(state, guild_id, viewer_guild_id)
 
-        blocks = [
-            _unit_line(state, unit, index)
-            for index, unit in enumerate(state.guild_units(guild_id))
-        ]
+        blocks = [_unit_line(state, unit) for unit in state.guild_units(guild_id)]
 
         body = "\n".join(blocks) if blocks else "—"
         if len(body) > 1500:
@@ -1069,7 +1014,7 @@ def build_status_embed(
 
     embed = discord.Embed(
         title="【戦況】",
-        description="\n\n".join(["\n".join(header), *sections])[:4000],
+        description="\n\n".join(sections)[:4000],
         color=COLOR_INFO,
     )
     amount = master.battle.bet.coin if bet_coin is None else int(bet_coin)
@@ -1096,6 +1041,9 @@ def build_turn_embed(
     """バトル専用チャンネルへ出すターン通知（16節・17節）。
 
     ``turn_seconds`` は自動攻撃までの残り時間です（17節）。
+
+    行動する使い魔のことだけを載せます。ラウンド番号とそのラウンドの行動順は
+    ラウンドの見出しEmbed、生存とHPは戦況Embedが受け持つため、重ねて出しません。
     """
 
     master = load_master_data()
@@ -1129,18 +1077,11 @@ def build_turn_embed(
                 f"味方 {survivor_text(state, unit.guild_id)}"
                 f"／敵 {survivor_text(state, enemy_guild_id)}",
             ),
-            item_line("ラウンド", state.current_round),
             item_line("自動攻撃まで", format_remaining_time(turn_seconds)),
             item_line(
                 "残り持ち時間",
                 format_remaining_time(state.remaining_seconds.get(unit.guild_id, 0)),
             ),
-            "",
-            item_line(
-                "次の順番",
-                turn_queue_text(state, limit=4, viewer_guild_id=unit.guild_id),
-            ),
-            f"-# {SIDE_LEGEND}",
         ]
     )
 

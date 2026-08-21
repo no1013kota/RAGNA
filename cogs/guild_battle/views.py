@@ -2705,12 +2705,16 @@ class BattleRequestView(discord.ui.View):
             ),
         )
 
-        await service.try_start_battle(
+        started = await service.try_start_battle(
             interaction.client,
             int(request_row["from_guild_id"]),
             int(request_row["to_guild_id"]),
             bet_coin=bet_coin,
         )
+
+        # 開始できなかった理由は、直した人にだけ見せれば足りる（13節）
+        if not started["ok"] and started.get("message"):
+            await game_shared.respond(interaction, started["message"])
 
     @discord.ui.button(
         label="拒否",
@@ -2836,12 +2840,15 @@ class BattleRecruitmentView(discord.ui.View):
             ),
         )
 
-        await service.try_start_battle(
+        started = await service.try_start_battle(
             interaction.client,
             int(result["guild_id"]),
             challenger_id,
             bet_coin=bet_coin,
         )
+
+        if not started["ok"] and started.get("message"):
+            await game_shared.respond(interaction, started["message"])
 
 
 # ==================================================

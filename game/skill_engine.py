@@ -922,14 +922,13 @@ def run_passives(
     entries: list[tuple[int, int, int, str, BattleUnit, Skill]] = []
 
     for unit in _passive_candidates(state, candidates):
-        # 戦闘不能の使い魔は、自分が対象のイベント以外では発動しない
+        # 戦闘不能の使い魔のパッシブは発動しない（19.3節）。
+        # 自分が倒れたことをきっかけにするパッシブも同じで、倒れた瞬間には
+        # もう発動できません。倒れても効果が続くと、先に倒す意味が無くなるためです。
+        # 「戦闘不能になる直前」に耐えるパッシブ（首無し騎士）は、まだ生きている
+        # 状態で判定するため影響を受けません。
         if not unit.alive:
-            is_event_unit = (
-                context.event_unit is not None
-                and context.event_unit.battle_unit_id == unit.battle_unit_id
-            )
-            if not is_event_unit:
-                continue
+            continue
 
         for skill in master.passive_skills_of(unit.familiar_id):
             if trigger not in skill.triggers:

@@ -491,18 +491,18 @@ def blocker_message(issues: list[str], *, action: str) -> str:
     return "\n".join(lines)[:1900]
 
 
-async def _notify_start_failure(
-    bot: discord.Client,
+def start_failure_message(
     guild_ids: tuple[int, int],
     problems: dict[int, list[str]],
-) -> None:
-    """開始前チェックで不足した内容を両ギルドへ具体的に通知する（13節）。"""
+) -> str:
+    """開始前チェックで不足した内容を、そのまま返せる文面にする（13節）。
 
-    discord_guild = bot.get_guild(config.GUILD_ID)
-    if discord_guild is None:
-        return
+    チャンネルへは投稿せず、操作した本人へエフェメラルで返します。開始できない
+    理由は操作した人が直すためのもので、ギルド全員へ残す必要がないからです。
+    """
 
-    lines = ["次の条件を満たしてから、改めて申請・募集してください。"]
+    lines = ["**⚔ ギルドバトルを開始できませんでした**", ""]
+    lines.append("次の条件を満たしてから、改めて申請・募集してください。")
 
     for guild_id in guild_ids:
         guild_row = get_guild(guild_id)
@@ -513,24 +513,7 @@ async def _notify_start_failure(
         lines.append(game_shared.item_line(name, ""))
         lines.extend(f"・{issue}" for issue in issues)
 
-    embed = discord.Embed(
-        title="⚔ ギルドバトルを開始できませんでした",
-        description="\n".join(lines)[:4000],
-        color=config.COLOR_RED,
-    )
-
-    for guild_id in guild_ids:
-        guild_row = get_guild(guild_id)
-        if guild_row is None:
-            continue
-
-        channel_id = guild_row.get("master_text_channel_id")
-        if not channel_id:
-            continue
-
-        channel = discord_guild.get_channel(int(channel_id))
-        if isinstance(channel, discord.TextChannel):
-            await _safe_send(channel, embed=embed)
+    return "\n".join(lines)[:1900]
 
 
 async def ensure_battle_channels(
@@ -641,8 +624,12 @@ async def try_start_battle(
     if problems:
         for guild_id in guild_ids:
             release_battle_lock(guild_id)
-        await _notify_start_failure(bot, guild_ids, problems)
-        return {"ok": False, "error": "precheck_failed", "problems": problems}
+        return {
+            "ok": False,
+            "error": "precheck_failed",
+            "problems": problems,
+            "message": start_failure_message(guild_ids, problems),
+        }
 
     try:
         units = battle_engine.build_unit_payloads(entries)
@@ -650,8 +637,12 @@ async def try_start_battle(
         for guild_id in guild_ids:
             release_battle_lock(guild_id)
         problems = {guild_ids[0]: [str(exc)], guild_ids[1]: [str(exc)]}
-        await _notify_start_failure(bot, guild_ids, problems)
-        return {"ok": False, "error": "master_data_error", "problems": problems}
+        return {
+            "ok": False,
+            "error": "master_data_error",
+            "problems": problems,
+            "message": start_failure_message(guild_ids, problems),
+        }
 
     created = create_battle(
         guild_a_id=guild_ids[0],
@@ -664,11 +655,13 @@ async def try_start_battle(
     if not created["ok"]:
         for guild_id in guild_ids:
             release_battle_lock(guild_id)
-        message = game_shared.error_message(created["error"])
-        await _notify_start_failure(
-            bot, guild_ids, {guild_ids[0]: [message], guild_ids[1]: [message]}
-        )
-        return created
+        reason = game_shared.error_message(created["error"])
+        problems = {guild_ids[0]: [reason], guild_ids[1]: [reason]}
+        return {
+            **created,
+            "problems": problems,
+            "message": start_failure_message(guild_ids, problems),
+        }
 
     battle_id = int(created["battle_id"])
 
@@ -678,7 +671,15 @@ async def try_start_battle(
     started = await start_prepared_battle(bot, battle_id)
 
     if not started:
-        return {"ok": False, "error": "start_failed", "battle_id": battle_id}
+        reason = "バトルの開始処理に失敗しました。時間をおいて試してください。"
+        problems = {guild_ids[0]: [reason], guild_ids[1]: [reason]}
+        return {
+            "ok": False,
+            "error": "start_failed",
+            "battle_id": battle_id,
+            "problems": problems,
+            "message": start_failure_message(guild_ids, problems),
+        }
 
     await game_shared.game_admin_log(
         bot,
@@ -956,15 +957,11 @@ async def refresh_status_embeds(
     current_unit = state.current_unit()
     highlight_guild_id = current_unit.guild_id if current_unit else None
 
-    # 自動攻撃までの残り時間を戦況Embedへ表示する（17節）
-    turn_remaining = turn_remaining_seconds(battle_row) if current_unit else None
-
     for guild_id, channel in channels.items():
         embed = battle_embed.build_status_embed(
             state,
             guild_names=names,
             highlight_guild_id=highlight_guild_id,
-            turn_remaining_seconds=turn_remaining,
             bet_coin=battle_bet_coin(state.battle_id),
             viewer_guild_id=guild_id,
         )
