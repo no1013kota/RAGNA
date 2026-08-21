@@ -59,22 +59,37 @@ def panel_custom_ids(message: discord.Message) -> set[str]:
     return found
 
 
+def view_custom_ids(view: discord.ui.View) -> set[str]:
+    """Viewが持つ操作部品の ``custom_id`` を集める。"""
+
+    return {
+        str(item.custom_id)
+        for item in view.children
+        if getattr(item, "custom_id", None)
+    }
+
+
 async def remove_legacy_panels(
     bot: discord.Client,
     guild: discord.Guild,
     channel_id: int,
     *,
-    titles: tuple[str, ...],
+    titles: tuple[str, ...] = (),
+    custom_ids: tuple[str, ...] = (),
     history_limit: int = 30,
 ) -> int:
-    """表題が変わって不要になった常設パネルを片づける。
+    """置き場や表題が変わって不要になった常設パネルを片づける。
 
-    削除するのは「Bot自身が送った・操作部品付き・表題が ``titles`` と完全一致」の
-    メッセージだけです。利用者の投稿や現行パネルには触れません。パネルの表題を
-    変更したとき、古いパネルが残って二重に見えるのを防ぐために使います。
+    削除するのは「Bot自身が送った・操作部品付き」で、表題が ``titles`` と完全一致
+    するか、``custom_ids`` のボタンを持つメッセージだけです。利用者の投稿には
+    触れません。
+
+    表題がギルド名のように変わるパネルは ``titles`` では見つけられないため、
+    ボタンの ``custom_id`` で探せるようにしています。``custom_ids`` を渡すときは、
+    現行パネルのあるチャンネルを対象にしないでください（消してしまいます）。
     """
 
-    if not titles:
+    if not titles and not custom_ids:
         return 0
 
     channel = guild.get_channel(channel_id)
@@ -88,13 +103,17 @@ async def remove_legacy_panels(
 
     try:
         async for message in channel.history(limit=history_limit):
-            is_legacy_panel = (
-                message.author.id == bot.user.id
-                and bool(message.embeds)
-                and bool(message.components)
-                and message.embeds[0].title in titles
+            if (
+                message.author.id != bot.user.id
+                or not message.embeds
+                or not message.components
+            ):
+                continue
+
+            matched = message.embeds[0].title in titles or bool(
+                set(custom_ids) & panel_custom_ids(message)
             )
-            if not is_legacy_panel:
+            if not matched:
                 continue
 
             try:
@@ -115,6 +134,96 @@ async def remove_legacy_panels(
         logger.exception("旧パネルの確認に失敗しました: channel_id=%s", channel_id)
 
     return removed
+
+
+async def ensure_top_panel(
+    bot: discord.Client,
+    guild: discord.Guild,
+    channel_id: int,
+    *,
+    panel_title: str,
+    embed: discord.Embed,
+    view: discord.ui.View,
+    panel_name: str,
+    movable_titles: tuple[str, ...],
+    history_limit: int = 100,
+) -> str:
+    """常設パネルを、そのチャンネルのBotパネルの中で一番上に置く。
+
+    Discordはメッセージを並べ替えられないため、上に別のパネルがある場合は
+    そちらを削除します。消したパネルは、それぞれの定期タスクが下へ貼り直します。
+    一度並び順が直れば以降は何もしないため、貼り直しが続くことはありません。
+
+    削除するのは ``movable_titles`` に挙げた表題のパネルだけです。同じチャンネルに
+    並ぶ参加申請Embedやバトル申請EmbedもBotの投稿ですが、こちらは貼り直せないため
+    絶対に消してはいけません。知らない投稿は動かさず、その下へ置きます。
+    """
+
+    channel = guild.get_channel(channel_id)
+
+    if channel is not None and hasattr(channel, "history") and bot.user is not None:
+        panels: list = []
+        seen = 0
+
+        try:
+            async for message in channel.history(limit=history_limit):
+                seen += 1
+                if (
+                    message.author.id == bot.user.id
+                    and message.embeds
+                    and message.components
+                ):
+                    panels.append(message)
+        except discord.HTTPException:
+            logger.exception("%sの並び順を確認できませんでした: %s", panel_name, channel_id)
+            panels = []
+            seen = history_limit
+
+        # history は新しい順で届くため、見た目と同じ古い順へ直す
+        panels.reverse()
+
+        above: list = []
+        found = False
+
+        for message in panels:
+            if message.embeds[0].title == panel_title:
+                found = True
+                break
+            if message.embeds[0].title in movable_titles:
+                above.append(message)
+
+        # 自分のパネルが見つからず、履歴を最後まで見られてもいない場合は
+        # 並べ替えない。窓の外にある可能性があり、消して貼り直すたびに
+        # 同じことを繰り返してしまうため。
+        if not found and seen >= history_limit:
+            above = []
+
+        if above:
+            logger.info(
+                "%sを一番上へ置くため、上にあるパネル%d件を貼り直します: channel_id=%s",
+                panel_name,
+                len(above),
+                channel_id,
+            )
+
+        for message in above:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                logger.warning(
+                    "並び替えのためのパネル削除に失敗しました: message_id=%s", message.id
+                )
+
+    return await ensure_panel_message(
+        bot,
+        guild,
+        channel_id,
+        panel_title=panel_title,
+        embed=embed,
+        view=view,
+        panel_name=panel_name,
+        history_limit=history_limit,
+    )
 
 
 async def ensure_panel_message(
@@ -177,10 +286,20 @@ async def ensure_panel_message(
             elif message.embeds[0].title != panel_title:
                 continue
 
-            if message.embeds[0].title == panel_title:
+            same_title = message.embeds[0].title == panel_title
+            # Discordは説明文の前後の空白・改行を落として保存するため、
+            # そのまま比べると毎回「変わった」と判定されて編集が止まらない
+            same_body = (message.embeds[0].description or "").strip() == (
+                embed.description or ""
+            ).strip()
+            same_buttons = panel_custom_ids(message) == view_custom_ids(view)
+
+            if same_title and same_body and same_buttons:
                 return PANEL_FOUND
 
-            # 表題が変わった（例：ギルド名の変更）ので、その場で書き換える
+            # 表題（例：ギルド名の変更）・説明文・ボタン構成のどれかが変わったので、
+            # その場で書き換える。貼り直さずに編集するため、並び順は変わらない。
+            # ボタンまで見るのは、廃止したボタンが押せる状態で残らないようにするため。
             try:
                 await message.edit(embed=embed, view=view)
             except discord.HTTPException:
@@ -190,7 +309,7 @@ async def ensure_panel_message(
                 return PANEL_FOUND
 
             logger.info(
-                "%sの表題を「%s」へ書き換えました: channel_id=%s",
+                "%sを最新の内容へ書き換えました（表題「%s」）: channel_id=%s",
                 panel_name,
                 panel_title,
                 channel_id,

@@ -577,8 +577,18 @@ class BattleTests(GameDatabaseTestCase):
 
         return load_master_data().familiar_limit_per_member(member_count)
 
-    def give_familiars(self, user_id: int, count: int) -> list[int]:
-        """テスト用に使い魔を配り、instance_idを返す。"""
+    def give_familiars(
+        self,
+        user_id: int,
+        count: int,
+        *,
+        rank: str = "B",
+        familiar_id: str = "garm",
+    ) -> list[int]:
+        """テスト用に使い魔を配り、instance_idを返す。
+
+        既定はCOST3のBランク。COST上限を試すときだけランクを指定します。
+        """
 
         self.add_coin(user_id, 30_000 * count)
         drawn = self.familiar_db.draw_gacha(
@@ -586,7 +596,7 @@ class BattleTests(GameDatabaseTestCase):
             pool_id="standard",
             count=count,
             cost=30_000 * count,
-            results=[("B", "garm")] * count,
+            results=[(rank, familiar_id)] * count,
             initial_level=1,
         )
         self.assertTrue(drawn["ok"], drawn)
@@ -692,6 +702,184 @@ class BattleTests(GameDatabaseTestCase):
         )
         self.assertTrue(during_lock["ok"], during_lock)
         self.guild_db.set_roster_locked(self.guild_a, False)
+
+    def entry_ids(self, guild_id: int, user_id: int | None = None) -> list[int]:
+        """セット済みの使い魔IDを枠順で返す。"""
+
+        return [
+            int(entry["instance_id"])
+            for entry in self.battle_db.get_battle_entries(guild_id)
+            if user_id is None or int(entry["user_id"]) == user_id
+        ]
+
+    def registered_ids(self, user_id: int) -> list[int]:
+        """事前登録している使い魔IDを優先順で返す。"""
+
+        return [
+            int(row["instance_id"])
+            for row in self.battle_db.get_player_battle_familiars(user_id)
+        ]
+
+    def test_changing_the_registration_moves_the_entries(self) -> None:
+        # 9節：事前登録を変えたら、出場する使い魔も新しい優先順へ入れ替わる
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 4)
+
+        self.battle_db.set_player_battle_familiars(user_id, instances[:2])
+        self.set_roster(self.guild_a, [(user_id, 2)])
+        self.assertEqual(self.entry_ids(self.guild_a, user_id), instances[:2])
+
+        result = self.battle_db.set_player_battle_familiars(user_id, instances[2:])
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.entry_ids(self.guild_a, user_id), instances[2:])
+        self.assertEqual(result["adopted"], instances[2:])
+        self.assertEqual(result["released"], instances[:2])
+
+    def test_the_registration_leaves_locked_entries_alone(self) -> None:
+        # 編成ロック中は登録だけ変わり、出場する使い魔は凍結したまま
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 4)
+
+        self.battle_db.set_player_battle_familiars(user_id, instances[:2])
+        self.set_roster(self.guild_a, [(user_id, 2)])
+        self.guild_db.set_roster_locked(self.guild_a, True)
+
+        result = self.battle_db.set_player_battle_familiars(user_id, instances[2:])
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.registered_ids(user_id), instances[2:])
+        self.assertEqual(self.entry_ids(self.guild_a, user_id), instances[:2])
+        self.assertEqual(result["adopted"], [])
+
+        self.guild_db.set_roster_locked(self.guild_a, False)
+
+    def test_setting_a_familiar_updates_the_registration(self) -> None:
+        # 9.3節：出場する使い魔を足すと、事前登録の先頭も同じ並びになる
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 3)
+
+        self.battle_db.set_player_battle_familiars(user_id, [instances[2]])
+        self.set_roster(self.guild_a, [(user_id, 2)])
+        self.assertEqual(self.entry_ids(self.guild_a, user_id), [instances[2]])
+
+        self.assertTrue(self.add_entry(self.guild_a, user_id, instances[0])["ok"])
+
+        self.assertEqual(
+            self.entry_ids(self.guild_a, user_id), [instances[2], instances[0]]
+        )
+        self.assertEqual(
+            self.registered_ids(user_id), [instances[2], instances[0]]
+        )
+
+    def test_releasing_a_familiar_drops_it_from_the_registration(self) -> None:
+        # 解除した使い魔は事前登録からも外す（次のメンバーセットで戻らない）
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 2)
+
+        self.battle_db.set_player_battle_familiars(user_id, instances)
+        self.set_roster(self.guild_a, [(user_id, 2)])
+
+        removed = self.battle_db.remove_battle_entry(
+            self.guild_a, user_id, instances[0]
+        )
+
+        self.assertTrue(removed["ok"], removed)
+        self.assertEqual(self.entry_ids(self.guild_a, user_id), [instances[1]])
+        self.assertEqual(self.registered_ids(user_id), [instances[1]])
+
+    def test_swapping_keeps_the_slot_and_the_priority(self) -> None:
+        # 9.3節：入れ替えても枠順と優先順は動かさず、外した方は控えへ下げる
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 3)
+
+        self.battle_db.set_player_battle_familiars(user_id, instances)
+        self.set_roster(self.guild_a, [(user_id, 2)])
+        self.assertEqual(self.entry_ids(self.guild_a, user_id), instances[:2])
+
+        result = self.battle_db.swap_battle_entry(
+            self.guild_a,
+            user_id,
+            instances[1],
+            instances[2],
+            max_units=5,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["entry_slot"], 2)
+        self.assertEqual(
+            self.entry_ids(self.guild_a, user_id), [instances[0], instances[2]]
+        )
+        self.assertEqual(
+            self.registered_ids(user_id),
+            [instances[0], instances[2], instances[1]],
+        )
+
+    def test_swapping_never_drops_another_registration(self) -> None:
+        # 事前登録が上限まで埋まっていても、関係のない登録は消さない
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 6)
+
+        self.battle_db.set_player_battle_familiars(user_id, instances[:5])
+        self.set_roster(self.guild_a, [(user_id, 3)])
+        self.assertEqual(self.entry_ids(self.guild_a, user_id), instances[:3])
+
+        result = self.battle_db.swap_battle_entry(
+            self.guild_a, user_id, instances[1], instances[5], max_units=5
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            self.entry_ids(self.guild_a, user_id),
+            [instances[0], instances[5], instances[2]],
+        )
+        # 外した1体は登録から抜けるが、控えの登録は残したままにする
+        self.assertEqual(
+            self.registered_ids(user_id),
+            [instances[0], instances[5], instances[2], instances[3], instances[4]],
+        )
+
+    def test_the_cost_limit_is_reported_when_the_registration_changes(self) -> None:
+        # 合計COST上限で採用できなかった使い魔は、黙って落とさず理由を返す
+        holder = self.members_a[0]
+        member = self.members_a[1]
+
+        # S(5)×2 + B(3) = 13、B(3)×2 = 6 → 合計19/20
+        holder_big = self.give_familiars(holder, 2, rank="S", familiar_id="surtr")
+        holder_small = self.give_familiars(holder, 1)
+        member_small = self.give_familiars(member, 2)
+        member_big = self.give_familiars(member, 2, rank="S", familiar_id="loki")
+
+        self.battle_db.set_player_battle_familiars(
+            holder, [*holder_big, *holder_small]
+        )
+        self.battle_db.set_player_battle_familiars(member, member_small)
+        self.assertTrue(
+            self.set_roster(self.guild_a, [(holder, 3), (member, 2)])["ok"]
+        )
+        self.assertEqual(len(self.battle_db.get_battle_entries(self.guild_a)), 5)
+
+        # B×2（6）を外してS×2（10）へ変えると、2体目が上限を超える
+        result = self.battle_db.set_player_battle_familiars(member, member_big)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["adopted"], [member_big[0]])
+        self.assertEqual(result["cost_skipped"], [member_big[1]])
+        self.assertEqual(self.entry_ids(self.guild_a, member), [member_big[0]])
+
+    def test_swapping_rejects_familiars_that_are_already_set(self) -> None:
+        user_id = self.members_a[0]
+        instances = self.give_familiars(user_id, 2)
+
+        self.battle_db.set_player_battle_familiars(user_id, instances)
+        self.set_roster(self.guild_a, [(user_id, 2)])
+
+        result = self.battle_db.swap_battle_entry(
+            self.guild_a, user_id, instances[0], instances[1], max_units=5
+        )
+
+        self.assertEqual(result["error"], "already_set")
+        self.assertEqual(self.entry_ids(self.guild_a, user_id), instances)
 
     def test_registration_rejects_familiars_the_player_does_not_own(self) -> None:
         owner = self.members_a[0]

@@ -59,7 +59,8 @@ RAGNA Onlineを有効にする場合は、次のVariablesも追加します（[�
 
 - GAME_ENABLED: true
 - GUILD_INTRO_CHANNEL_ID / GUILD_MEMBER_RECRUITMENT_CHANNEL_ID /
-  FAMILIAR_PANEL_CHANNEL_ID / GUILD_BATTLE_RECRUITMENT_CHANNEL_ID
+  FAMILIAR_PANEL_CHANNEL_ID / GACHA_PANEL_CHANNEL_ID /
+  GUILD_BATTLE_RECRUITMENT_CHANNEL_ID / GUILD_RECEPTION_CHANNEL_ID
 
 Volumeが接続されている場合、DBは自動的に/data/ragna.dbへ保存されます。
 Volumeがないローカル環境ではdata/ragna.dbが使用されます。
@@ -116,18 +117,23 @@ Bot起動時に整合性を確認して/data/ragna.dbへ取り込み、直前の
 公開前に次を用意してください。詳細は
 [ゲーム仕様書 32節](docs/GAME_SPEC.md#32-今後必要な準備物)を参照します。
 
-1. Discordチャンネルを4つ作り、IDを環境変数へ設定します。
+1. Discordチャンネルを6つ作り、IDを環境変数へ設定します。
 
    - `GUILD_INTRO_CHANNEL_ID`：ギルド紹介（設立パネル・申請確認）
    - `GUILD_MEMBER_RECRUITMENT_CHANNEL_ID`：メンバー募集（募集Embed・参加申請）
-   - `FAMILIAR_PANEL_CHANNEL_ID`：ガチャパネルと使い魔管理パネル
-   - `GUILD_BATTLE_RECRUITMENT_CHANNEL_ID`：公開バトル募集とランキング
+   - `FAMILIAR_PANEL_CHANNEL_ID`：使い魔管理パネル（一覧・合成・売却）
+   - `GACHA_PANEL_CHANNEL_ID`：ガチャパネル（未設定なら使い魔チャンネルへ置きます）
+   - `GUILD_BATTLE_RECRUITMENT_CHANNEL_ID`：公開バトル募集
+   - `GUILD_RECEPTION_CHANNEL_ID`：ギルド受付（ギルドランキングパネル）
 
    `GAME_ADMIN_LOG_CHANNEL_ID`（運営ログの転送先）は任意です。未設定でも
    運営操作は `game_admin_logs` テーブルへ必ず記録します。
+   coinを使うパネルがあるチャンネル（ガチャ・使い魔・ギルド紹介）には、
+   ATMパネルを自動で一番上へ置きます。
 
 2. Botにチャンネル管理権限を与え、Botロールを管理対象ロールより上へ置きます。
-   ギルド設立のたびに、専用カテゴリーと4つの常設チャンネルを自動作成します。
+   ギルド設立のたびに、専用カテゴリーと5つの常設チャンネル（ギルドtc・ギルドvc・
+   ギルドマスター専用tc・使い魔バトル・ギルド情報）を自動作成します。
    バトル用チャンネルは対戦成立時に自動生成し、終了から既定7日で自動削除します。
 
 3. 任意で、マスターデータを補完します（未登録でも公開できます）。

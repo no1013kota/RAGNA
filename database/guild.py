@@ -168,7 +168,8 @@ def get_guild_by_channel(channel_id: int) -> dict[str, Any] | None:
                   guild_text_channel_id,
                   guild_voice_channel_id,
                   master_text_channel_id,
-                  battle_member_channel_id
+                  battle_member_channel_id,
+                  info_channel_id
               )
             LIMIT 1
             """,
@@ -556,6 +557,7 @@ def set_guild_channels(
     guild_voice_channel_id: int,
     master_text_channel_id: int,
     battle_member_channel_id: int,
+    info_channel_id: int,
 ) -> None:
     """作成済みDiscordカテゴリー・チャンネルのIDを保存する。"""
 
@@ -570,6 +572,7 @@ def set_guild_channels(
                     guild_voice_channel_id = ?,
                     master_text_channel_id = ?,
                     battle_member_channel_id = ?,
+                    info_channel_id = ?,
                     updated_at = ?
                 WHERE guild_id = ?
                 """,
@@ -579,9 +582,27 @@ def set_guild_channels(
                     guild_voice_channel_id,
                     master_text_channel_id,
                     battle_member_channel_id,
+                    info_channel_id,
                     _now(),
                     guild_id,
                 ),
+            )
+
+
+def set_guild_info_channel(guild_id: int, channel_id: int) -> None:
+    """あとから作ったギルド情報チャンネルのIDを保存する（5.3節）。"""
+
+    with closing(get_connection()) as conn:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE guilds
+                SET info_channel_id = ?,
+                    updated_at = ?
+                WHERE guild_id = ?
+                """,
+                (channel_id, _now(), guild_id),
             )
 
 

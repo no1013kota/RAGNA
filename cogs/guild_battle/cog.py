@@ -121,7 +121,7 @@ class GuildBattle(commands.Cog):
     async def _remove_legacy_panels(self, guild: discord.Guild) -> None:
         """設置先や表題が変わって不要になった旧パネルを片づける。
 
-        - 使い魔チャンネルの旧「バトル使い魔登録」（各ギルドの使い魔セットへ移設）
+        - 使い魔チャンネルの旧「バトル使い魔登録」（各ギルドの使い魔バトルへ移設）
         - バトル募集チャンネルの旧「ギルドバトルランキング」（ギルド受付へ移設）
         """
 

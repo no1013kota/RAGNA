@@ -295,7 +295,7 @@ def check_guild_ready(
         ("category_id", "ギルドカテゴリー"),
         ("guild_text_channel_id", "ギルドTC"),
         ("master_text_channel_id", "ギルドマスター専用TC"),
-        ("battle_member_channel_id", "使い魔セットチャンネル"),
+        ("battle_member_channel_id", "使い魔バトルチャンネル"),
     )
     for column, label in channel_labels:
         channel_id = guild_row.get(column)
@@ -347,6 +347,19 @@ def check_guild_ready(
         player_guild = get_player_guild(user_id)
         if player_guild is None or int(player_guild["guild_id"]) != guild_id:
             issues.append(f"{mention} は現在このギルドへ所属していません。")
+            continue
+
+        # 4節：出場できるのは本メンバー以上。出場者に選ばれたあとで
+        # 資格を失った場合も、バトルを始める前にここで止める。
+        access = game_shared.has_game_access(user_id)
+        if access is None:
+            issues.append(f"{mention} のプレイヤー情報を確認できません。")
+            continue
+        if not access:
+            issues.append(
+                f"{mention} は本メンバーではないため出場できません。"
+                "出場者から外してください。"
+            )
             continue
 
         if user_id in busy_players:
@@ -879,21 +892,42 @@ async def post_action_logs(
     state: BattleState,
     channels: dict[int, discord.TextChannel],
 ) -> None:
-    """行動ログを両ギルドのバトル専用チャンネルへ同じ内容で投稿する（23節）。"""
+    """行動ログを両ギルドのバトル専用チャンネルへ投稿する（23節）。
+
+    内容は同じですが、Embedの色と行動順の記号だけは見ているギルドに
+    合わせて組み立て直します。バトル専用チャンネルはギルドごとに分かれて
+    いるため、自ギルドと相手ギルドを色で見分けられます（17節）。
+    """
 
     if not state.logs or not channels:
         return
 
-    messages = battle_embed.build_action_log_messages(
-        state,
-        state.logs,
-        player_names=player_names(bot, state),
-        guild_names=guild_names(state),
-        bet_coin=battle_bet_coin(state.battle_id),
-    )
+    labels = player_names(bot, state)
+    names = guild_names(state)
+    bet_coin = battle_bet_coin(state.battle_id)
 
-    for message in messages:
-        for channel in channels.values():
+    per_guild = {
+        guild_id: battle_embed.build_action_log_messages(
+            state,
+            state.logs,
+            player_names=labels,
+            guild_names=names,
+            bet_coin=bet_coin,
+            viewer_guild_id=guild_id,
+        )
+        for guild_id in channels
+    }
+
+    # 同じ行動は両ギルドへ同じ順番で並べる
+    count = max((len(messages) for messages in per_guild.values()), default=0)
+
+    for index in range(count):
+        for guild_id, channel in channels.items():
+            messages = per_guild[guild_id]
+            if index >= len(messages):
+                continue
+
+            message = messages[index]
             embed = message.embed.copy()
             attachment = (
                 battle_embed.thumbnail_file(message.familiar_id)
@@ -932,6 +966,7 @@ async def refresh_status_embeds(
             highlight_guild_id=highlight_guild_id,
             turn_remaining_seconds=turn_remaining,
             bet_coin=battle_bet_coin(state.battle_id),
+            viewer_guild_id=guild_id,
         )
 
         message_id = battle_row.get(_side_key(state, guild_id, "status_message_id"))
@@ -1086,13 +1121,6 @@ def _no_reward_reason(state: BattleState) -> str | None:
 OUTCOME_LABELS = {"win": "勝利", "lose": "敗北", "draw": "引き分け"}
 
 
-DEFAULT_BET_LABEL = "既定"
-
-# 自由入力で受け付けるベット額の範囲
-MIN_BET_COIN = 0
-MAX_BET_COIN = 10_000_000
-
-
 def default_bet_coin() -> int:
     """ベット額の初期値（マスターデータの値）を返す。"""
 
@@ -1108,24 +1136,50 @@ def battle_bet_coin(battle_id: int) -> int:
     return int(saved) if saved is not None else default_bet_coin()
 
 
-def parse_bet_coin(text: str) -> tuple[int | None, str | None]:
-    """自由入力のベット額を読み取る。``(値, エラー文)`` を返す。"""
+# ==================================================
+# バトルレート（12節）
+# ==================================================
+def bet_rates() -> tuple:
+    """選べるレートの一覧を、マスターデータの並び順で返す。
 
-    cleaned = (text or "").strip().replace(",", "").replace("，", "")
-    if not cleaned:
-        return default_bet_coin(), None
+    レートを定義していないマスターデータでも動くよう、その場合は既定額
+    1段階だけのレートを組み立てて返します。
+    """
 
-    if not cleaned.isdigit():
-        return None, "ベット額は半角数字で入力してください（例：20000）。"
+    bet = load_master_data().battle.bet
+    if bet.rates:
+        return bet.rates
 
-    value = int(cleaned)
-    if not MIN_BET_COIN <= value <= MAX_BET_COIN:
-        return None, (
-            f"ベット額は{MIN_BET_COIN:,}〜{MAX_BET_COIN:,} coinの範囲で"
-            "入力してください。"
-        )
+    from game.master_data import BetRate
 
-    return value, None
+    return (BetRate(rate_id="default", name="標準レート", coin=bet.coin),)
+
+
+def bet_rate(rate_id: str):
+    """``rate_id`` に対応するレートを返す。見つからなければ ``None``。"""
+
+    for rate in bet_rates():
+        if rate.rate_id == rate_id:
+            return rate
+
+    return None
+
+
+def bet_rate_label(bet_coin: int | None) -> str:
+    """ベット額に対応するレート名を返す。一致するものが無ければ空文字。
+
+    募集Embedを組み立て直すときに使います。募集にはベット額だけを保存して
+    いるため、レート名は額から引き直します。
+    """
+
+    if bet_coin is None:
+        return ""
+
+    for rate in bet_rates():
+        if rate.coin == int(bet_coin):
+            return rate.name
+
+    return ""
 
 
 def bet_notice(bet_coin: int | None = None) -> str:

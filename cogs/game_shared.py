@@ -34,6 +34,15 @@ DISABLED_MESSAGE = "現在この機能はご利用いただけません。"
 CHANNEL_ERROR_MESSAGE = "チャンネル情報を取得できませんでした。"
 UNEXPECTED_ERROR_MESSAGE = "処理に失敗しました。時間をおいて試してください。"
 
+# 利用資格（4節）。本メンバー（騎士）・七聖・運営だけが遊べます。
+MEMBER_ONLY_MESSAGE = (
+    "ラグナオンラインは本メンバー（騎士）から利用できます。\n"
+    "-# 仮メンバー・準メンバーの方は、本メンバーになってからご利用ください。"
+)
+RANK_UNSYNCED_MESSAGE = (
+    "プレイヤー情報を確認できませんでした。運営へ連絡してください。"
+)
+
 # ギルド名にメンション表現が含まれていても通知が飛ばないようにする（5.2節）
 NO_MENTIONS = discord.AllowedMentions.none()
 
@@ -202,6 +211,78 @@ def can_found_guild_member(member: discord.Member) -> bool:
     return any(role_id in role_ids for role_id in config.GUILD_FOUNDER_ROLES)
 
 
+def is_game_member(member: discord.Member) -> bool:
+    """ラグナオンラインを利用できるロールを持つか（4節）。
+
+    本メンバー（騎士）・七聖・運営が対象です。仮メンバー・準メンバー・
+    評価落ちは含みません。
+    """
+
+    role_ids = {role.id for role in member.roles}
+    return any(role_id in role_ids for role_id in config.ROLE_GROUP_MEMBER)
+
+
+def has_game_access(user_id: int) -> bool | None:
+    """保存済みのロール情報から利用資格を判定する（27節）。
+
+    Discordのメンバー情報が手元に無い場面で使います。同期できていない場合は
+    ``None`` を返すので、呼び出し側は推測で通さず操作を止めてください。
+    """
+
+    info = get_player_rank_info(user_id)
+    if info is None:
+        return None
+
+    return bool(info["is_member"] or info["is_sub_manager"] or info["is_manager"])
+
+
+def _roles_are_readable(member: discord.Member) -> bool:
+    """そのメンバーのロールを正しく読める状態かを確かめる。
+
+    再接続直後など、そのサーバーのロールがまだ届いていない状態では
+    ``member.roles`` が空になります（discord.pyが解決できないロールIDを
+    黙って捨てるため）。これを本物の「ロール無し」と取り違えると、
+    保存済みのロール情報まで消してしまいます。サーバーには必ず
+    ``@everyone`` があるため、空なら未受信と判断します。
+    """
+
+    return bool(getattr(getattr(member, "guild", None), "roles", None))
+
+
+def game_block_reason(
+    user: discord.abc.User | discord.Member | None,
+    *,
+    user_id: int | None = None,
+) -> str | None:
+    """ラグナオンラインを利用できない理由を返す。利用できる場合は ``None``。
+
+    公開スイッチ（34.1節）と利用資格（4節）をまとめて確認します。ロールは
+    Discord側を正とし、ついでに ``player_roles`` も合わせておきます。ボタンが
+    表示されていても、資格を失ったプレイヤーの操作は拒否します（29節）。
+
+    ``user`` を解決できなかった場合、またはロールをまだ受信できていない場合は
+    ``user_id`` から保存済みのロール情報で判定します。どちらも無い場合は、
+    推測で通さず操作を止めます（27節）。
+    """
+
+    if not is_game_enabled():
+        return DISABLED_MESSAGE
+
+    if isinstance(user, discord.Member) and _roles_are_readable(user):
+        sync_member_rank(user)
+        return None if is_game_member(user) else MEMBER_ONLY_MESSAGE
+
+    target_id = user.id if user is not None else user_id
+    if target_id is None:
+        return RANK_UNSYNCED_MESSAGE
+
+    allowed = has_game_access(target_id)
+    if allowed is None:
+        return RANK_UNSYNCED_MESSAGE
+
+    return None if allowed else MEMBER_ONLY_MESSAGE
+
+
 def is_manager(member: discord.Member) -> bool:
     role_ids = {role.id for role in member.roles}
     return config.ROLE_MANAGER in role_ids or member.guild_permissions.administrator
@@ -214,12 +295,13 @@ CHANNEL_LABELS = {
     "guild_text": "ギルドtc",
     "guild_voice": "ギルドvc",
     "master_text": "ギルドマスター専用tc",
-    "battle_member": "使い魔セット",
+    "battle_member": "使い魔バトル",
+    "guild_info": "ギルド情報",
 }
 
 # 改名前のチャンネル名。既存ギルドを新しい名前へ寄せるために参照する。
 LEGACY_CHANNEL_NAMES = {
-    "battle_member": ("バトル出場者専用tc",),
+    "battle_member": ("バトル出場者専用tc", "使い魔セット"),
 }
 
 # 対戦成立時に作るバトル専用チャンネルの名前（34.14節）
@@ -280,7 +362,7 @@ def member_overwrites(
 async def create_guild_channels(
     guild: discord.Guild, *, guild_name: str, master_id: int
 ) -> dict | None:
-    """ギルド専用カテゴリーと4つの常設チャンネルを作る（5.3節）。
+    """ギルド専用カテゴリーと5つの常設チャンネルを作る（5.3節）。
 
     バトル用チャンネルは常設せず、対戦成立時に ``create_battle_channel`` で
     作ります（34.14節）。途中で失敗した場合は作成済みのチャンネルを削除し、
@@ -335,6 +417,14 @@ async def create_guild_channels(
         )
         created.append(battle_member)
 
+        guild_info = await guild.create_text_channel(
+            CHANNEL_LABELS["guild_info"],
+            category=category,
+            overwrites=member_perms,
+            reason=reason,
+        )
+        created.append(guild_info)
+
     except Exception:
         # 通信断やタイムアウトなど、Discordの例外以外で失敗しても途中状態を残さない。
         # ここで必ずNoneを返し、呼び出し側が確実に返金できるようにする（5.2節）。
@@ -354,7 +444,48 @@ async def create_guild_channels(
         "guild_voice_channel_id": guild_voice.id,
         "master_text_channel_id": master_text.id,
         "battle_member_channel_id": battle_member.id,
+        "info_channel_id": guild_info.id,
     }
+
+
+async def ensure_guild_info_channel(
+    guild: discord.Guild, guild_row: dict, *, member_ids: list[int]
+) -> int | None:
+    """ギルド情報チャンネルが無ければ、ギルドカテゴリー内へ作る（5.3節）。
+
+    このチャンネルを増やす前に設立されたギルドにも、あとから用意します。
+    既にある場合はそのIDを返すだけで、何も作りません。
+    """
+
+    channel_id = guild_row.get("info_channel_id")
+    if channel_id and guild.get_channel(int(channel_id)) is not None:
+        return int(channel_id)
+
+    category_id = guild_row.get("category_id")
+    category = guild.get_channel(int(category_id)) if category_id else None
+
+    if not isinstance(category, discord.CategoryChannel):
+        logger.warning(
+            "ギルドカテゴリーが無いためギルド情報チャンネルを作れません: guild_id=%s",
+            guild_row.get("guild_id"),
+        )
+        return None
+
+    try:
+        channel = await guild.create_text_channel(
+            CHANNEL_LABELS["guild_info"],
+            category=category,
+            overwrites=member_overwrites(guild, member_ids),
+            reason="RAGNA Onlineギルド情報チャンネルの追加",
+        )
+    except Exception:
+        logger.exception(
+            "ギルド情報チャンネルの作成に失敗しました: guild_id=%s",
+            guild_row.get("guild_id"),
+        )
+        return None
+
+    return channel.id
 
 
 async def create_battle_channel(
@@ -492,7 +623,7 @@ async def apply_guild_permissions(
 ) -> None:
     """所属メンバーの変更をチャンネル権限へ反映する。
 
-    使い魔セットは、出場者に選ばれていないメンバーも事前登録に使うため、
+    使い魔バトルは、出場者に選ばれていないメンバーも事前登録に使うため、
     所属メンバー全員へ開放します（9.1節）。出場者だけの制限はチャンネル権限では
     行わず、ボタンを押した時点で判定します。
     """
@@ -507,6 +638,7 @@ async def apply_guild_permissions(
         (guild_row.get("guild_voice_channel_id"), member_ids, True),
         (guild_row.get("master_text_channel_id"), [master_id], True),
         (guild_row.get("battle_member_channel_id"), member_ids, True),
+        (guild_row.get("info_channel_id"), member_ids, True),
     )
 
     for channel_id, allowed_ids, can_send in targets:
@@ -543,6 +675,7 @@ async def revoke_guild_permissions(guild: discord.Guild, guild_row: dict) -> boo
         guild_row.get("guild_voice_channel_id"),
         guild_row.get("master_text_channel_id"),
         guild_row.get("battle_member_channel_id"),
+        guild_row.get("info_channel_id"),
     ]
 
     succeeded = True
@@ -906,18 +1039,23 @@ async def respond(
 # get_player_rank は他Cogからも直接使うため再公開する
 __all__ = [
     "ERROR_MESSAGES",
+    "MEMBER_ONLY_MESSAGE",
     "apply_guild_permissions",
     "archive_guild_channels",
     "can_found_guild_member",
     "create_guild_channels",
     "delete_guild_channels",
     "ensure_channel_name",
+    "ensure_guild_info_channel",
     "error_message",
     "format_coin",
     "game_admin_log",
+    "game_block_reason",
     "get_player_rank",
     "get_player_rank_info",
+    "has_game_access",
     "is_game_enabled",
+    "is_game_member",
     "is_manager",
     "item_line",
     "member_overwrites",

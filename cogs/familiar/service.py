@@ -522,43 +522,6 @@ def build_instance_options(rows: list[dict[str, Any]]) -> list[discord.SelectOpt
     return options
 
 
-def codex_pages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """図鑑のページ一覧を作る。同じ使い魔は1ページにまとめる。
-
-    ページの能力値は所有している中で最も高いレベルのものを使い、``count``
-    はその使い魔の所有合計です。
-    """
-
-    master = load_master_data()
-    rank_order = list(master.familiar.rank_order)
-
-    pages: dict[str, dict[str, Any]] = {}
-
-    for row in rows:
-        familiar_id = str(row["familiar_id"])
-        level = int(row["level"])
-
-        page = pages.get(familiar_id)
-        if page is None:
-            pages[familiar_id] = {
-                "familiar_id": familiar_id,
-                "level": level,
-                "count": 1,
-            }
-            continue
-
-        page["count"] += 1
-        page["level"] = max(int(page["level"]), level)
-
-    return sorted(
-        pages.values(),
-        key=lambda page: (
-            -_rank_strength(rank_order, familiar_rank(page["familiar_id"])),
-            page["familiar_id"],
-        ),
-    )
-
-
 def build_fusion_count_options(
     base: dict[str, Any],
     maximum: int,
@@ -1054,10 +1017,11 @@ def build_familiar_detail_embed(
     *,
     count: int = 1,
 ) -> tuple[discord.Embed, discord.File | None]:
-    """所有使い魔1体の詳細Embedと、アイコン用の画像ファイルを作る。
+    """所有使い魔1体の詳細Embedと、添付する画像ファイルを作る。
 
-    画像はサムネイルではなく著者アイコンとして添えます。``discord.File`` は
-    使い回せないため、表示のたびに開き直します。
+    能力値だけでなく使い魔の姿も確認できるよう、画像は小さなアイコンではなく
+    Embedの大きな画像として添えます。``discord.File`` は使い回せないため、
+    表示のたびに開き直します。
     """
 
     master = load_master_data()
@@ -1089,57 +1053,10 @@ def build_familiar_detail_embed(
         lines.extend(["", f"-# {familiar.description}"])
 
     embed = discord.Embed(
+        title=f"{familiar.name} Lv.{level}",
         description="\n".join(lines),
         color=rank_color(familiar.rank),
     )
-
-    icon = thumbnail_file(familiar_id)
-    title = f"{familiar.name} Lv.{level}"
-
-    if icon is not None:
-        embed.set_author(name=title, icon_url=f"attachment://{icon.filename}")
-    else:
-        embed.set_author(name=title)
-
-    return embed, icon
-
-
-def build_codex_embed(
-    groups: list[dict[str, Any]],
-    index: int,
-) -> tuple[discord.Embed, discord.File | None]:
-    """図鑑の1ページを作る。画像を大きく見せ、能力値とスキルも並べる。"""
-
-    master = load_master_data()
-
-    total = len(groups)
-    group = groups[index]
-
-    familiar_id = str(group["familiar_id"])
-    level = int(group["level"])
-    familiar = master.get_familiar(familiar_id)
-    rank = familiar_rank(familiar_id)
-
-    lines = [
-        item_line("ランク", game_shared.rank_label(rank)),
-        item_line("レベル", f"Lv.{level}／Lv.{master.familiar.max_level}"),
-        item_line("性別", gender_label(familiar.gender if familiar else None)),
-        *stat_lines(familiar_id, level),
-        item_line("COST", familiar.cost if familiar else "—"),
-        item_line("所有数", f"{group['count']}体"),
-        "",
-        *skill_lines(familiar_id),
-    ]
-
-    if familiar is not None and familiar.description:
-        lines.extend(["", f"-# {familiar.description}"])
-
-    embed = discord.Embed(
-        title=f"{familiar_name(familiar_id)} Lv.{level}",
-        description="\n".join(lines),
-        color=rank_color(rank),
-    )
-    embed.set_footer(text=f"図鑑 {index + 1}／{total}")
 
     image = thumbnail_file(familiar_id)
     if image is not None:
@@ -1271,11 +1188,9 @@ __all__ = [
     "SLOT_GUARANTEED",
     "SLOT_NORMAL",
     "build_celebration_embeds",
-    "build_codex_embed",
     "celebrated_instances",
     "build_complete_reward_embed",
     "check_complete_rewards",
-    "codex_pages",
     "build_count_options",
     "build_familiar_detail_embed",
     "build_fusion_count_options",

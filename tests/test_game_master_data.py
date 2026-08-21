@@ -325,6 +325,27 @@ class BetTests(unittest.TestCase):
         self.assertEqual(bet.lose_xp, 20)
         self.assertEqual(bet.draw_xp, 20)
 
+    def test_battle_rates_match_the_spec(self) -> None:
+        # 12節：申請・募集で選ぶレートの5段階
+        rates = MASTER.battle.bet.rates
+
+        self.assertEqual(
+            [(rate.name, rate.coin) for rate in rates],
+            [
+                ("低レート", 5_000),
+                ("中レート", 20_000),
+                ("高レート", 50_000),
+                ("超レート", 200_000),
+                ("超越レート", 1_000_000),
+            ],
+        )
+
+        # rate_id は重複させない（セレクトの値として使う）
+        self.assertEqual(len({rate.rate_id for rate in rates}), len(rates))
+
+        # Discordのセレクトは1つ25件まで
+        self.assertLessEqual(len(rates), 25)
+
 
 class FusionCostTests(unittest.TestCase):
     def test_cost_scales_with_rank_and_material_count(self) -> None:

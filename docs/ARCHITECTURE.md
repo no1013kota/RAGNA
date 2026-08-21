@@ -29,7 +29,7 @@ RAGNA/
 │   ├── ticket/               # 同じ3層構成
 │   ├── trial_member/         # 同じ3層構成
 │   ├── guild/                # RAGNA Online：ギルド（cog/views/service）
-│   ├── familiar/             # RAGNA Online：ガチャ／使い魔管理（一覧・合成・売却・図鑑）
+│   ├── familiar/             # RAGNA Online：ガチャ／使い魔管理（一覧・合成・売却）
 │   ├── guild_battle/         # RAGNA Online：ギルドバトル
 │   ├── game_shared.py        # ゲーム3Cogの共通Discord処理（Cogではない）
 │   ├── xp.py                 # 比較的小さい単独Cog
@@ -110,7 +110,7 @@ Cog側を変更せずに済みます。
 | 問い合わせの作成・管理 | `cogs/ticket/` | `database.ticket` |
 | 自己紹介テンプレート | `cogs/introduction.py` | なし |
 | ギルド設立・募集・参加・管理 | `cogs/guild/` | `database.guild`、`database.player_rank` |
-| ガチャ・排出確認・一覧・合成・売却・図鑑 | `cogs/familiar/` | `database.familiar` |
+| ガチャ・排出確認・一覧・合成・売却 | `cogs/familiar/` | `database.familiar` |
 | 事前登録・出場者セット・対戦・バトル進行 | `cogs/guild_battle/` | `database.battle`、`game/` |
 
 ## RAGNA Onlineの構成
@@ -130,16 +130,21 @@ database/battle.py           状態の保存と楽観ロック
 バトルで使う使い魔は、次の2段階で決まります。
 
 ```text
-player_battle_familiars      本人が優先順を付けて事前登録（ギルド・進行状況と無関係）
-        ↓ メンバーセット時に自動採用
+player_battle_familiars      本人が優先順を付けて事前登録（登録そのものはギルド・進行状況と無関係）
+        ↕ メンバーセット時に自動採用／変更のたびに双方向へ同期
 guild_battle_members         マスターが出場者と「1人あたりの体数」を割り当て
-        ↓
+        ↕
 guild_battle_entries         実際に出場する使い魔（本人が枠内で差し替え可能）
 ```
 
+出場者に選ばれている間は、どちらを変更してももう片方へ反映します（GAME_SPEC 9.1節・9.3節）。
+同期するのは編成ロックされていないギルドの出場者だけで、無所属・非出場者・編成ロック中は
+事前登録だけを更新します。
+
 ギルドのDiscordチャンネルは次のように分かれます。
 
-- 設立時に作る常設4チャンネル（ギルドTC・VC、マスター専用TC、使い魔セット）
+- 設立時に作る常設5チャンネル（ギルドTC・VC、マスター専用TC、使い魔バトル、ギルド情報）
+  ※すべてそのギルドのカテゴリー内に作ります
 - 対戦成立時に作るバトル専用チャンネル `バトル-<バトルID>`
   （`guild_battles.guild_a_channel_id` / `guild_b_channel_id` に保存し、
   終了から `battle_channel_retention_days` 日後に自動削除）

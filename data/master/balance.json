@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "ゲームバランスの数値。コードへ直接書かず、必ずこのファイルから読み込む。battle.bet はギルドバトルのベット額とXP。負けた側のcoinが勝った側へ移る。familiar.fusion_cost_rate_per_material は合成1体あたりの費用（ランク基準価格に対する割合）。0にすると合成は無料になる。battle.max_total_cost は編成の合計COST上限。0なら無制限。",
+  "note": "ゲームバランスの数値。コードへ直接書かず、必ずこのファイルから読み込む。battle.bet はギルドバトルのベット額とXP。負けた側のcoinが勝った側へ移る。battle.bet.rates はバトル申請・募集で選ぶレートの一覧で、上から順にセレクトへ並ぶ。familiar.fusion_cost_rate_per_material は合成1体あたりの費用（ランク基準価格に対する割合）。0にすると合成は無料になる。battle.max_total_cost は編成の合計COST上限。0なら無制限。",
   "guild": {
     "create_cost": 1000000,
     "rename_cost": 50000,
@@ -61,15 +61,22 @@
     "atk_buff_cap": 10,
     "atk_debuff_cap": 10,
     "same_skill_stack_limit": 3,
-    "guild_time_seconds": 3600,
-    "turn_time_seconds": 120,
+    "guild_time_seconds": 1800,
+    "turn_time_seconds": 300,
     "battle_channel_retention_days": 7,
     "surrender_reward_from_round": 3,
     "bet": {
       "coin": 20000,
       "win_xp": 40,
       "lose_xp": 20,
-      "draw_xp": 20
+      "draw_xp": 20,
+      "rates": [
+        { "rate_id": "low", "name": "低レート", "coin": 5000 },
+        { "rate_id": "middle", "name": "中レート", "coin": 20000 },
+        { "rate_id": "high", "name": "高レート", "coin": 50000 },
+        { "rate_id": "super", "name": "超レート", "coin": 200000 },
+        { "rate_id": "transcendent", "name": "超越レート", "coin": 1000000 }
+      ]
     },
     "reward_daily_limit_per_player": 3,
     "ranking": {

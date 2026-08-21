@@ -61,7 +61,6 @@ EXPECTED_PERSISTENT_CUSTOM_IDS = {
     "evaluation_panel:evaluate",
     "evaluation_panel:target_list",
     "evaluation_user_select",
-    "familiar:codex",
     "familiar:fuse",
     "familiar:gacha_multi",
     "familiar:gacha_rates",

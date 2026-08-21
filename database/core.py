@@ -108,6 +108,7 @@ ADDED_COLUMNS = (
     ("guild_battles", "bet_coin", "INTEGER"),
     ("guild_battle_requests", "bet_coin", "INTEGER"),
     ("guild_battle_recruitments", "bet_coin", "INTEGER"),
+    ("guilds", "info_channel_id", "INTEGER"),
 )
 
 

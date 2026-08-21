@@ -36,6 +36,20 @@ COLOR_DAMAGE = 0xFFB7B7
 COLOR_INFO = 0x2B2D31
 COLOR_RESULT = 0xFFFFF0
 
+# 自ギルドと相手ギルドを、Embed左端の色帯で見分けるための色。
+# バトル専用チャンネルはギルドごとに分かれているため、同じ出来事でも
+# 見ているギルドに合わせて色を変えられます（17節）。
+COLOR_ALLY = 0xBEDBFF
+COLOR_ENEMY = 0xFFB7B7
+
+# 行動順や編成で「どちらのギルドか」を示す記号
+MARK_ALLY = "🔵"
+MARK_ENEMY = "🔴"
+MARK_GUILD_A = "🟦"
+MARK_GUILD_B = "🟥"
+
+SIDE_LEGEND = f"{MARK_ALLY}自ギルド {MARK_ENEMY}相手ギルド"
+
 HP_BAR_LENGTH = 10
 HP_BAR_FILLED = "█"
 HP_BAR_EMPTY = "░"
@@ -108,12 +122,48 @@ def survivor_text(state: BattleState, guild_id: int) -> str:
     return f"{alive}/{len(units)}体"
 
 
-def turn_queue_text(state: BattleState, *, limit: int = 6) -> str:
+def side_mark(
+    state: BattleState, guild_id: int, viewer_guild_id: int | None = None
+) -> str:
+    """使い魔がどちらのギルドのものかを示す記号を返す。
+
+    見ているギルドが分かる場合は「自分＝🔵／相手＝🔴」で示します。
+    バトル専用チャンネルはギルドごとに分かれているため、同じ出来事でも
+    見る側に合わせた表示にできます。分からない場合はA側・B側で示します。
+    """
+
+    if viewer_guild_id is None:
+        return MARK_GUILD_A if guild_id == state.guild_a_id else MARK_GUILD_B
+
+    return MARK_ALLY if guild_id == viewer_guild_id else MARK_ENEMY
+
+
+def side_color(
+    state: BattleState, guild_id: int | None, viewer_guild_id: int | None
+) -> int | None:
+    """自ギルド・相手ギルドで色分けしたEmbedの色を返す。
+
+    どちらのギルドの出来事か分からない場合は ``None`` を返し、
+    呼び出し側の色をそのまま使わせます。
+    """
+
+    if guild_id is None or viewer_guild_id is None:
+        return None
+
+    return COLOR_ALLY if guild_id == viewer_guild_id else COLOR_ENEMY
+
+
+def turn_queue_text(
+    state: BattleState,
+    *,
+    limit: int = 6,
+    viewer_guild_id: int | None = None,
+) -> str:
     """このラウンドの残り行動順を「▶いま → 次 → …」の形で返す（1節）。
 
     戦闘不能の使い魔は行動しないため飛ばします。次に誰が動くかが分かると、
     スキルを使うタイミングを判断できます。長くなりすぎないよう、名前は
-    ランク記号＋使い魔名だけにします。
+    所属を示す記号＋ランク記号＋使い魔名だけにします。
     """
 
     if not state.turn_order:
@@ -126,7 +176,8 @@ def turn_queue_text(state: BattleState, *, limit: int = 6) -> str:
         if unit is None or not unit.alive:
             continue
 
-        label = f"{rank_mark(unit.familiar_id)}{familiar_name(unit.familiar_id)}"
+        mark = side_mark(state, unit.guild_id, viewer_guild_id)
+        label = f"{mark}{rank_mark(unit.familiar_id)}{familiar_name(unit.familiar_id)}"
         if state.current_unit_id == unit.battle_unit_id:
             label = f"▶**{label}**"
 
@@ -266,6 +317,8 @@ class _Group:
     title: str
     color: int
     familiar_id: str | None = None
+    # 行動した使い魔の所属ギルド。自ギルド・相手ギルドの色分けに使う
+    guild_id: int | None = None
     lines: list[str] = field(default_factory=list)
     # 「【項目】結果」で本文の末尾へ並べる項目
     items: list[tuple[str, str]] = field(default_factory=list)
@@ -273,6 +326,65 @@ class _Group:
     passive_count: int = 0
     # パッシブだけで始まったグループか
     passive_only: bool = False
+    # 両ギルドの使い魔がまとまったグループか（色をどちらかへ寄せられない）
+    mixed_guilds: bool = False
+    # このグループの中で戦闘不能になった使い魔。グループを出したあとに
+    # 1体ずつ専用Embedを続けるため、ここへ溜めておく
+    defeats: list[int] = field(default_factory=list)
+
+
+def _revived_defeat_positions(logs: list[BattleLogEntry]) -> set[int]:
+    """復活で取り消された戦闘不能ログの位置を返す。
+
+    最後の状態だけを見ると「倒れて復活し、また倒れた」を1回の戦闘不能と
+    区別できず、取り消されたはずの表示まで出てしまいます。ログの並びで
+    「戦闘不能のあとに同じ使い魔の復活が来たか」を見て判定します。
+    """
+
+    pending: dict[int, int] = {}
+    revived: set[int] = set()
+
+    for position, log in enumerate(logs):
+        if log.target_unit_id is None:
+            continue
+
+        if log.event_type == BattleEvent.DEFEAT_CHECK.value:
+            pending[log.target_unit_id] = position
+        elif log.event_type == BattleEvent.REVIVE.value:
+            defeat_position = pending.pop(log.target_unit_id, None)
+            if defeat_position is not None:
+                revived.add(defeat_position)
+
+    return revived
+
+
+def _build_defeat_message(
+    state: BattleState, unit_id: int | None, viewer_guild_id: int | None
+) -> LogMessage | None:
+    """戦闘不能になった使い魔の専用Embedを作る（23節）。
+
+    誰が倒れたのかを取り違えないよう、サムネイルにはその使い魔の画像を使います
+    （行動ログのサムネイルは行動した側の画像なので、倒れた側は分かりません）。
+    """
+
+    unit = state.unit(unit_id)
+    if unit is None:
+        return None
+
+    lines = [
+        f"{side_mark(state, unit.guild_id, viewer_guild_id)}"
+        f"**{unit_label(state, unit)}** は倒れた",
+        f"`{HP_BAR_EMPTY * HP_BAR_LENGTH}` 0/{unit.max_hp}",
+        item_line("残り", survivor_text(state, unit.guild_id)),
+    ]
+
+    embed = discord.Embed(
+        title=f"💀 {familiar_name(unit.familiar_id)} 戦闘不能",
+        description="\n".join(lines),
+        color=side_color(state, unit.guild_id, viewer_guild_id) or COLOR_DAMAGE,
+    )
+
+    return LogMessage(embed=embed, familiar_id=unit.familiar_id)
 
 
 def _skill_description(skill_id: str | None) -> str:
@@ -293,23 +405,38 @@ def _player_label(player_names: dict[int, str] | None, player_id: int | None) ->
     return f"<@{player_id}>"
 
 
-def _hp_change_line(
-    unit: BattleUnit | None, before: object, after: object
-) -> str:
-    """「HP 51 → 38」とHPバーを1行で返す。"""
+def _hp_change_text(before: object, after: object) -> str:
+    """「HP 51 → **38**」とHPの増減だけを返す。"""
 
-    text = f"HP {before if before is not None else '?'} → **{after if after is not None else '?'}**"
+    return (
+        f"HP {before if before is not None else '?'}"
+        f" → **{after if after is not None else '?'}**"
+    )
+
+
+def _hp_bar_line(unit: BattleUnit | None, after: object) -> str | None:
+    """変動後のHPバーの行を返す。使い魔が分からなければ ``None``。"""
 
     if unit is None:
-        return text
+        return None
 
     try:
         current = int(after)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         current = unit.current_hp
 
-    bar = hp_bar(current, unit.max_hp)
-    return f"{text}\n`{bar}` {current}/{unit.max_hp}"
+    return f"`{hp_bar(current, unit.max_hp)}` {current}/{unit.max_hp}"
+
+
+def _hp_change_line(
+    unit: BattleUnit | None, before: object, after: object
+) -> str:
+    """「HP 51 → 38」とHPバーを1行で返す。"""
+
+    text = _hp_change_text(before, after)
+
+    bar = _hp_bar_line(unit, after)
+    return text if bar is None else f"{text}\n{bar}"
 
 
 def _describe_log(
@@ -326,21 +453,22 @@ def _describe_log(
         if detail.get("nullified"):
             return f"🛡 {target} へのダメージを無効化"
 
-        kind = {
-            "skill": "スキルダメージ",
-            "poison": "継続ダメージ",
-        }.get(str(detail.get("attack_type")), "攻撃ダメージ")
-
         lines = []
         if detail.get("critical"):
             lines.append("⚡ **CRITICAL**")
 
-        lines.append(f"💥 **{amount}** ダメージ → {target}（{kind}）")
+        # 括弧の中はHPの変動。何によるダメージかは、この行動ログの
+        # 表題（⚔攻撃／✦SKILL／☠毒）が示すため繰り返しません。
+        hp_after = detail.get("hp_after")
         lines.append(
-            _hp_change_line(
-                unit, detail.get("hp_before"), detail.get("hp_after")
-            )
+            f"💥 **{amount}** ダメージ → {target}"
+            f"（{_hp_change_text(detail.get('hp_before'), hp_after)}）"
         )
+
+        bar = _hp_bar_line(unit, hp_after)
+        if bar is not None:
+            lines.append(bar)
+
         return "\n".join(lines)
 
     if event == BattleEvent.HEAL.value:
@@ -407,15 +535,22 @@ def build_action_log_messages(
     player_names: dict[int, str] | None = None,
     guild_names: dict[int, str] | None = None,
     bet_coin: int | None = None,
+    viewer_guild_id: int | None = None,
 ) -> list[LogMessage]:
     """行動ログを、投稿単位のEmbedへまとめる（23節）。
 
     攻撃やスキルの途中で発動したパッシブは、その流れと同じEmbedへ入れます。
     別のEmbedへ分けると、ダメージ表示がパッシブ側へ移ってしまうためです。
+
+    ``viewer_guild_id`` を渡すと、そのギルドのバトル専用チャンネル向けに
+    自ギルド・相手ギルドで色分けした表示になります（17節）。
     """
 
     messages: list[LogMessage] = []
     group: _Group | None = None
+
+    # 復活で取り消された戦闘不能は、専用Embedを出さない
+    revived_positions = _revived_defeat_positions(logs)
 
     def flush() -> None:
         nonlocal group
@@ -427,6 +562,12 @@ def build_action_log_messages(
             group.title = f"✦ PASSIVE SKILL（{group.passive_count}件）"
             group.items.clear()
 
+            # 両ギルドのパッシブが1件のEmbedへ入っている場合、どちらかの色で
+            # 塗ると自ギルドのパッシブが相手のものに見えてしまう。中立色に戻す。
+            if group.mixed_guilds:
+                group.guild_id = None
+                group.familiar_id = None
+
         body = list(group.lines)
         if group.items:
             if body:
@@ -436,13 +577,22 @@ def build_action_log_messages(
         embed = discord.Embed(
             title=group.title,
             description="\n".join(body) if body else None,
-            color=group.color,
+            color=side_color(state, group.guild_id, viewer_guild_id) or group.color,
         )
 
         messages.append(LogMessage(embed=embed, familiar_id=group.familiar_id))
+
+        # 戦闘不能は、その流れを出したあとに1体ずつ専用Embedで続ける。
+        # 途中でグループを切り替えると、同じ攻撃の残りのダメージ表示が
+        # そちらへ移ってしまうため、ここまで溜めてから出す。
+        for unit_id in group.defeats:
+            defeat = _build_defeat_message(state, unit_id, viewer_guild_id)
+            if defeat is not None:
+                messages.append(defeat)
+
         group = None
 
-    for log in logs:
+    for position, log in enumerate(logs):
         event = log.event_type
         detail = log.detail or {}
 
@@ -463,46 +613,39 @@ def build_action_log_messages(
             group = _Group(
                 title=f"── ラウンド {log.round} ──", color=COLOR_INFO
             )
-            group.items.append(("行動順", turn_queue_text(state, limit=10)))
-            flush()
-
-            # ラウンドごとに戦況を1件残す。あとから見返したときに、
-            # そのラウンドが始まった時点の状況が分かるようにする（24節）。
-            messages.append(
-                LogMessage(
-                    embed=build_status_embed(
-                        state,
-                        guild_names=guild_names or {},
-                        bet_coin=bet_coin,
-                    )
+            group.items.append(
+                (
+                    "行動順",
+                    turn_queue_text(state, limit=10, viewer_guild_id=viewer_guild_id),
                 )
             )
+            flush()
+
+            # 2巡目以降は、ラウンドごとに戦況を1件残す。あとから見返したときに、
+            # そのラウンドが始まった時点の状況が分かるようにする（24節）。
+            # 1巡目はバトル開始の編成表と最初の戦況Embedがあるため出しません。
+            if int(log.round or 0) > 1:
+                messages.append(
+                    LogMessage(
+                        embed=build_status_embed(
+                            state,
+                            guild_names=guild_names or {},
+                            bet_coin=bet_coin,
+                            viewer_guild_id=viewer_guild_id,
+                        )
+                    )
+                )
             continue
 
         if event == BattleEvent.ATTACK.value:
-            target = state.unit(log.target_unit_id)
+            # 使用者と対象のステータスは並べない。誰が誰を攻撃したかは表題と
+            # ダメージ行が示し、結果のHPはダメージ行の括弧内で分かるため。
             group = _Group(
                 title=f"⚔ {unit_name(state, log.actor_unit_id)}の攻撃",
                 color=COLOR_ATTACK,
                 familiar_id=actor.familiar_id if actor else None,
+                guild_id=actor.guild_id if actor else None,
             )
-            if actor is not None:
-                owner = _player_label(player_names, actor.player_id)
-                group.items.append(
-                    (
-                        f"{familiar_name(actor.familiar_id)}（{owner}）",
-                        " ／ ".join(unit_status_lines(state, actor)),
-                    )
-                )
-            if target is not None:
-                group.items.append(
-                    (
-                        f"{familiar_name(target.familiar_id)}（対象）",
-                        " ／ ".join(unit_status_lines(state, target)),
-                    )
-                )
-            else:
-                group.items.append(("対象", unit_name(state, log.target_unit_id)))
             continue
 
         if event == BattleEvent.SKILL.value:
@@ -510,6 +653,7 @@ def build_action_log_messages(
                 title=f"✦ SKILL「{detail.get('skill_name', '')}」",
                 color=COLOR_SKILL,
                 familiar_id=actor.familiar_id if actor else None,
+                guild_id=actor.guild_id if actor else None,
             )
             group.lines.append(detail.get("description", ""))
             if actor is not None:
@@ -544,6 +688,7 @@ def build_action_log_messages(
                     title=f"✦ PASSIVE「{skill_name}」",
                     color=COLOR_PASSIVE,
                     familiar_id=actor.familiar_id if actor else None,
+                    guild_id=actor.guild_id if actor else None,
                     passive_only=True,
                 )
                 group.lines.append(f"**{owner}** の「{skill_name}」が発動")
@@ -559,6 +704,15 @@ def build_action_log_messages(
                 # 攻撃やスキルの途中で発動したパッシブは、その流れの中へ差し込む
                 group.lines.append(f"◇ **PASSIVE** {owner}「{skill_name}」")
 
+                # バトル開始時パッシブのように、両ギルド分がまとまることがある
+                if (
+                    group.passive_only
+                    and actor is not None
+                    and group.guild_id is not None
+                    and actor.guild_id != group.guild_id
+                ):
+                    group.mixed_guilds = True
+
             if description:
                 group.lines.append(f"-# {description}")
 
@@ -571,6 +725,7 @@ def build_action_log_messages(
                 title=f"⏭ {unit_name(state, log.actor_unit_id)}は行動できない",
                 color=COLOR_INFO,
                 familiar_id=actor.familiar_id if actor else None,
+                guild_id=actor.guild_id if actor else None,
             )
             group.lines.append(f"{status}のため行動をスキップしました。")
             flush()
@@ -581,6 +736,7 @@ def build_action_log_messages(
                 title="⏱ 時間切れ",
                 color=COLOR_INFO,
                 familiar_id=actor.familiar_id if actor else None,
+                guild_id=actor.guild_id if actor else None,
             )
             group.lines.append(detail.get("text", "自動攻撃を実行しました。"))
             continue
@@ -602,6 +758,15 @@ def build_action_log_messages(
             group.color = COLOR_CRITICAL
 
         group.lines.append(text)
+
+        # 専用Embedはこの流れを出し切ってから続ける（flush の中で作る）
+        if (
+            event == BattleEvent.DEFEAT_CHECK.value
+            and log.target_unit_id is not None
+            and position not in revived_positions
+            and log.target_unit_id not in group.defeats
+        ):
+            group.defeats.append(log.target_unit_id)
 
     flush()
     return messages
@@ -664,6 +829,42 @@ def _skill_usage(unit: BattleUnit) -> str:
     return " / ".join(parts)
 
 
+def _active_uses_text(unit: BattleUnit, skill) -> str:
+    """アクティブスキルの残り使用回数を短く返す。"""
+
+    limit = skill.max_uses_per_battle
+    if limit is None:
+        return "回数制限なし"
+
+    used = int(unit.active_skill_uses.get(skill.skill_id, 0))
+    return "使用済" if used >= limit else f"あと{limit - used}回"
+
+
+def skill_lines(unit: BattleUnit) -> list[str]:
+    """行動中の使い魔が持つアクティブ・パッシブスキルを並べる（19節）。
+
+    自分の順番のときに「何を使えるのか」「何が自動で発動するのか」を
+    その場で確認できるようにします。
+    """
+
+    skills = load_master_data().skills_of(unit.familiar_id)
+    if not skills:
+        return [item_line("スキル", "なし")]
+
+    lines = ["**スキル**"]
+
+    for skill in skills:
+        if skill.is_active:
+            lines.append(f"ACTIVE「{skill.name}」（{_active_uses_text(unit, skill)}）")
+        else:
+            lines.append(f"PASSIVE「{skill.name}」")
+
+        if skill.description:
+            lines.append(f"-# {skill.description}")
+
+    return lines
+
+
 def build_lineup_embed(
     state: BattleState,
     *,
@@ -687,8 +888,8 @@ def build_lineup_embed(
         lines.extend([bet_notice, ""])
 
     for side, target_guild_id, show_effects in (
-        ("自ギルド", guild_id, True),
-        ("相手ギルド", enemy_guild_id, False),
+        (f"{MARK_ALLY}自ギルド", guild_id, True),
+        (f"{MARK_ENEMY}相手ギルド", enemy_guild_id, False),
     ):
         name = guild_names.get(target_guild_id, f"ギルド{target_guild_id}")
         units = sorted(
@@ -759,9 +960,14 @@ def build_opponent_turn_embed(
     """相手ギルドのターンが始まったことを知らせるEmbed（17節）。"""
 
     name = guild_names.get(unit.guild_id, f"ギルド{unit.guild_id}")
+    viewer_guild_id = state.enemy_guild_id(unit.guild_id)
 
     lines = [
-        item_line("行動する使い魔", f"**{unit_label(state, unit)}**"),
+        item_line(
+            "行動する使い魔",
+            f"{side_mark(state, unit.guild_id, viewer_guild_id)}"
+            f"**{unit_label(state, unit)}**",
+        ),
         item_line("所属", name),
         item_line("操作するプレイヤー", _player_label(player_names, unit.player_id)),
         item_line("ステータス", stat_line(state, unit)),
@@ -780,8 +986,12 @@ def build_opponent_turn_embed(
 
     lines.extend(
         [
-            item_line("次の順番", turn_queue_text(state, limit=4)),
+            item_line(
+                "次の順番",
+                turn_queue_text(state, limit=4, viewer_guild_id=viewer_guild_id),
+            ),
             "",
+            f"-# {SIDE_LEGEND}",
             "-# 相手の行動が終わるまでお待ちください。",
         ]
     )
@@ -789,7 +999,7 @@ def build_opponent_turn_embed(
     return discord.Embed(
         title="⏳ 相手のターンです",
         description="\n".join(lines),
-        color=COLOR_INFO,
+        color=COLOR_ENEMY,
     )
 
 
@@ -800,16 +1010,22 @@ def build_status_embed(
     highlight_guild_id: int | None = None,
     turn_remaining_seconds: int | None = None,
     bet_coin: int | None = None,
+    viewer_guild_id: int | None = None,
 ) -> discord.Embed:
-    """その時点の戦況をまとめたEmbedを作る（17節・24節）。"""
+    """その時点の戦況をまとめたEmbedを作る（17節・24節）。
+
+    ``viewer_guild_id`` を渡すと、そのギルドから見た自ギルド・相手ギルドを
+    記号で示します。バトル専用チャンネルはギルドごとに分かれているためです。
+    """
 
     header = [item_line("ラウンド", state.current_round)]
 
     current = state.current_unit()
     if current is not None:
         owner = guild_names.get(current.guild_id, f"ギルド{current.guild_id}")
+        mark = side_mark(state, current.guild_id, viewer_guild_id)
         header.append(
-            item_line("行動中", f"{unit_label(state, current)}（{owner}）")
+            item_line("行動中", f"{mark}{unit_label(state, current)}（{owner}）")
         )
 
         if turn_remaining_seconds is not None:
@@ -819,7 +1035,9 @@ def build_status_embed(
                 )
             )
 
-    header.append(item_line("行動順", turn_queue_text(state)))
+    header.append(
+        item_line("行動順", turn_queue_text(state, viewer_guild_id=viewer_guild_id))
+    )
 
     sections: list[str] = []
 
@@ -827,6 +1045,7 @@ def build_status_embed(
         name = guild_names.get(guild_id, f"ギルド{guild_id}")
         remaining = format_remaining_time(state.remaining_seconds.get(guild_id, 0))
         prefix = "▶ " if guild_id == highlight_guild_id else ""
+        mark = side_mark(state, guild_id, viewer_guild_id)
 
         blocks = [
             _unit_line(state, unit, index)
@@ -839,7 +1058,7 @@ def build_status_embed(
 
         sections.append(
             item_line(
-                f"{prefix}{name}",
+                f"{prefix}{mark}{name}",
                 f"{survivor_text(state, guild_id)}　残り持ち時間 {remaining}",
             )
             + "\n"
@@ -854,10 +1073,11 @@ def build_status_embed(
         color=COLOR_INFO,
     )
     amount = master.battle.bet.coin if bet_coin is None else int(bet_coin)
+    legend = SIDE_LEGEND if viewer_guild_id is not None else ""
     embed.set_footer(
         text=(
             f"ベット ギルドごと {amount:,} coin（出場者で均等に分担）　"
-            f"🔺バフ 🔻デバフ ☠状態異常 ◆その他"
+            f"{legend}　🔺バフ 🔻デバフ ☠状態異常 ◆その他"
         )
     )
     return embed
@@ -901,6 +1121,8 @@ def build_turn_embed(
     lines.extend(
         [
             "",
+            *skill_lines(unit),
+            "",
             item_line("行動順", turn_position_text(state, unit)),
             item_line(
                 "生存",
@@ -914,14 +1136,18 @@ def build_turn_embed(
                 format_remaining_time(state.remaining_seconds.get(unit.guild_id, 0)),
             ),
             "",
-            item_line("次の順番", turn_queue_text(state, limit=4)),
+            item_line(
+                "次の順番",
+                turn_queue_text(state, limit=4, viewer_guild_id=unit.guild_id),
+            ),
+            f"-# {SIDE_LEGEND}",
         ]
     )
 
     embed = discord.Embed(
         title=f"▶ {unit_label(state, unit)} の行動順です",
-        description="\n".join(lines),
-        color=COLOR_ATTACK,
+        description="\n".join(lines)[:4000],
+        color=COLOR_ALLY,
     )
     amount = master.battle.bet.coin if bet_coin is None else int(bet_coin)
     embed.set_footer(

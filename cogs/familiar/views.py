@@ -35,11 +35,10 @@ logger = logging.getLogger(__name__)
 # ==================================================
 # 共通メッセージ
 # ==================================================
-GAME_DISABLED_MESSAGE = game_shared.DISABLED_MESSAGE
 MASTER_ERROR_MESSAGE = "使い魔データを読み込めませんでした。運営へお問い合わせください。"
 UNEXPECTED_ERROR_MESSAGE = game_shared.UNEXPECTED_ERROR_MESSAGE
 NO_FAMILIAR_MESSAGE = "所有している使い魔がありません。ガチャで入手してください。"
-LOCKED_NOTICE = "-# 編成ロック中・進行中バトルで使用中の使い魔は表示されません。"
+LOCKED_NOTICE = "-# バトルで使用中の使い魔は表示されません。"
 
 # セレクトの上限（Discordの仕様）
 PAGE_SIZE = 25
@@ -48,8 +47,9 @@ PAGE_SIZE = 25
 async def _guard(interaction: discord.Interaction) -> bool:
     """公開状態を確認する。利用できない場合は理由を返して中断する。"""
 
-    if not game_shared.is_game_enabled():
-        await game_shared.respond(interaction, GAME_DISABLED_MESSAGE)
+    blocked = game_shared.game_block_reason(interaction.user)
+    if blocked is not None:
+        await game_shared.respond(interaction, blocked)
         return False
 
     return True
@@ -372,8 +372,9 @@ class GachaConfirmView(discord.ui.View):
             logger.warning("ガチャ確認画面の更新に失敗しました")
 
         try:
-            if not game_shared.is_game_enabled():
-                await game_shared.respond(interaction, GAME_DISABLED_MESSAGE)
+            blocked = game_shared.game_block_reason(interaction.user)
+            if blocked is not None:
+                await game_shared.respond(interaction, blocked)
                 return
 
             pool = service.get_pool(self.pool_id)
@@ -481,10 +482,10 @@ class GachaConfirmView(discord.ui.View):
 
 # ==================================================
 # 使い魔管理（10.2節）
-# 一覧・合成・売却・図鑑を1つのパネルにまとめる
+# 一覧・合成・売却を1つのパネルにまとめる
 # ==================================================
 class FamiliarManagePanelView(discord.ui.View):
-    """使い魔の一覧・合成・売却・図鑑をまとめた常設View。"""
+    """使い魔の一覧・合成・売却をまとめた常設View。"""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -543,16 +544,6 @@ class FamiliarManagePanelView(discord.ui.View):
     ):
         await _open_sell(interaction)
 
-    @discord.ui.button(
-        label="図鑑",
-        style=discord.ButtonStyle.secondary,
-        custom_id="familiar:codex",
-    )
-    async def open_codex(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        await _open_codex(interaction)
-
 
 class FamiliarListView(GroupPageView):
     """所有使い魔を選んで詳細を表示する。"""
@@ -584,104 +575,6 @@ class FamiliarListView(GroupPageView):
             await interaction.followup.send(embed=embed, file=icon, ephemeral=True)
         else:
             await interaction.followup.send(embed=embed, ephemeral=True)
-
-
-# ==================================================
-# 図鑑（10.2節）
-# 所有している使い魔の画像をめくって眺める
-# ==================================================
-async def _open_codex(interaction: discord.Interaction) -> None:
-    """図鑑の1ページ目を開く。"""
-
-    if not await _guard(interaction):
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        owned = get_owned_familiars(interaction.user.id)
-        pages = service.codex_pages(owned)
-    except Exception:
-        logger.exception("図鑑の作成に失敗しました: user_id=%s", interaction.user.id)
-        await interaction.followup.send(UNEXPECTED_ERROR_MESSAGE, ephemeral=True)
-        return
-
-    if not pages:
-        await interaction.followup.send(NO_FAMILIAR_MESSAGE, ephemeral=True)
-        return
-
-    view = CodexView(user_id=interaction.user.id, pages=pages)
-    embed, image = view.current()
-
-    if image is not None:
-        await interaction.followup.send(
-            embed=embed, file=image, view=view, ephemeral=True
-        )
-    else:
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-
-
-class _CodexPageButton(discord.ui.Button):
-    """図鑑をめくるボタン。"""
-
-    def __init__(self, *, label: str, delta: int):
-        super().__init__(label=label, style=discord.ButtonStyle.secondary)
-        self.delta = delta
-
-    async def callback(self, interaction: discord.Interaction):
-        view: CodexView = self.view  # type: ignore[assignment]
-        await view.turn(interaction, self.delta)
-
-
-class CodexView(discord.ui.View):
-    """図鑑をめくる一時View。前後のページへ循環して移動できる。"""
-
-    def __init__(
-        self,
-        *,
-        user_id: int,
-        pages: list[dict[str, Any]],
-        timeout: float = 300,
-    ):
-        super().__init__(timeout=timeout)
-
-        self.user_id = user_id
-        self.pages = pages
-        self.index = 0
-
-        if len(pages) > 1:
-            self.add_item(_CodexPageButton(label="◀ 前の使い魔", delta=-1))
-            self.add_item(_CodexPageButton(label="次の使い魔 ▶", delta=1))
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await game_shared.respond(interaction, "この操作は実行者だけが使用できます。")
-            return False
-
-        return True
-
-    def current(self) -> tuple[discord.Embed, discord.File | None]:
-        return service.build_codex_embed(self.pages, self.index)
-
-    async def turn(self, interaction: discord.Interaction, delta: int) -> None:
-        self.index = (self.index + delta) % len(self.pages)
-
-        try:
-            embed, image = self.current()
-        except Exception:
-            logger.exception("図鑑ページの作成に失敗しました: index=%s", self.index)
-            await game_shared.respond(interaction, UNEXPECTED_ERROR_MESSAGE)
-            return
-
-        # 画像を差し替えるため、添付ファイルごと入れ替える。
-        try:
-            await interaction.response.edit_message(
-                embed=embed,
-                attachments=[image] if image is not None else [],
-                view=self,
-            )
-        except discord.HTTPException:
-            logger.warning("図鑑ページの更新に失敗しました")
 
 
 # ==================================================
@@ -1046,8 +939,9 @@ class SellConfirmView(discord.ui.View):
             logger.warning("売却確認画面の更新に失敗しました")
 
         try:
-            if not game_shared.is_game_enabled():
-                await game_shared.respond(interaction, GAME_DISABLED_MESSAGE)
+            blocked = game_shared.game_block_reason(interaction.user)
+            if blocked is not None:
+                await game_shared.respond(interaction, blocked)
                 return
 
             # 確認画面を開いてからレベルが変わっている場合があるため、価格を再計算する。
@@ -1166,7 +1060,7 @@ def build_gacha_panel_embed() -> discord.Embed:
 
 
 def build_manage_panel_embed() -> discord.Embed:
-    """使い魔管理パネルのEmbedを作る（一覧・合成・売却・図鑑を1枚にまとめる）。"""
+    """使い魔管理パネルのEmbedを作る（一覧・合成・売却を1枚にまとめる）。"""
 
     master = load_master_data()
 
@@ -1187,7 +1081,7 @@ def build_manage_panel_embed() -> discord.Embed:
         description=(
             "​\n"
             "**一覧**\n"
-            "-# 所有している使い魔の能力・スキル・画像を確認できます。\n\n"
+            "-# 所有している使い魔を選ぶと、能力・スキル・画像を確認できます。\n\n"
             "**合成**\n"
             "-# 同じ種類の使い魔を素材にしてレベルアップします。"
             f"（上限はLv.{master.familiar.max_level}）\n"
@@ -1199,9 +1093,6 @@ def build_manage_panel_embed() -> discord.Embed:
             "-# ※取り消しできません。\n"
             f"-# 基準価格：{prices}\n"
             "-# 売却額は「基準価格 × レベル」です。\n\n"
-            "**図鑑**\n"
-            "-# 所有している使い魔の画像をめくって眺められます。\n"
-            "-# 能力値とスキルも一緒に確認できます。\n\n"
             f"{LOCKED_NOTICE}"
         ),
         color=game_shared.RANK_COLORS.get("B", 0xBEDBFF),

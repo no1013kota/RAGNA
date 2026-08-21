@@ -648,8 +648,11 @@ class DisplayTests(unittest.TestCase):
 
         self.assertEqual(battle_embed.speed_text(loki), "96（+12）")
 
-    def test_turn_time_is_two_minutes(self) -> None:
-        self.assertEqual(MASTER.battle.turn_time_seconds, 120)
+    def test_turn_time_is_five_minutes(self) -> None:
+        self.assertEqual(MASTER.battle.turn_time_seconds, 300)
+
+    def test_guild_time_is_thirty_minutes(self) -> None:
+        self.assertEqual(MASTER.battle.guild_time_seconds, 1800)
 
     def test_a_passive_during_an_attack_stays_in_the_attack_log(self) -> None:
         # 被弾時パッシブを別Embedへ分けると、ダメージ表示がそちらへ移ってしまう
@@ -720,8 +723,214 @@ class DisplayTests(unittest.TestCase):
         surtr = unit_of(state, "surtr", GUILD_A)
         self.assertIn("被ダメージ-2", effects.buff_summary(state, surtr)["others"])
 
-    def test_each_round_posts_a_status_log(self) -> None:
-        # ラウンドが始まるたびに戦況を1件残す
+    def test_a_defeat_gets_its_own_embed_with_the_fallen_familiar(self) -> None:
+        # 誰が倒れたのかを取り違えないよう、倒れた側の画像を付けた専用Embedを出す
+        from game import battle_embed
+
+        state = build_state([("surtr", 5)], [("garm", 1), ("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        actor = state.current_unit()
+        target = battle_engine.attack_target_choices(state, actor)[0]
+        target.current_hp = 1
+
+        start = len(state.logs)
+        battle_engine.submit_action(
+            state,
+            BattleAction(
+                action_type=ACTION_ATTACK,
+                actor_unit_id=actor.battle_unit_id,
+                target_unit_id=target.battle_unit_id,
+            ),
+            elapsed_seconds=5,
+        )
+
+        messages = battle_embed.build_action_log_messages(
+            state, state.logs[start:], guild_names={GUILD_A: "A", GUILD_B: "B"}
+        )
+
+        defeats = [
+            message
+            for message in messages
+            if (message.embed.title or "").startswith("💀 ")
+        ]
+        self.assertEqual(len(defeats), 1, [m.embed.title for m in messages])
+        # サムネイルは行動した側ではなく、倒れた側の使い魔
+        self.assertEqual(defeats[0].familiar_id, target.familiar_id)
+        self.assertNotEqual(defeats[0].familiar_id, actor.familiar_id)
+        # 攻撃Embedの直後に出す
+        self.assertEqual(messages.index(defeats[0]), 1, [m.embed.title for m in messages])
+
+    def test_defeats_do_not_split_the_damage_of_one_skill(self) -> None:
+        # 全体攻撃で複数体倒れても、ダメージ行はスキルEmbedへ残す
+        from game import battle_embed
+
+        state = build_state(
+            [("jormungandr", 5)], [("garm", 1), ("behemoth", 1), ("minotaur", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        caster = unit_of(state, "jormungandr", GUILD_A)
+        for unit in state.guild_units(GUILD_B):
+            unit.current_hp = 1
+
+        start = len(state.logs)
+        use_skill(state, caster, "jormungandr_active")
+
+        messages = battle_embed.build_action_log_messages(
+            state, state.logs[start:], guild_names={GUILD_A: "A", GUILD_B: "B"}
+        )
+
+        skill = messages[0]
+        self.assertTrue((skill.embed.title or "").startswith("✦ SKILL"), skill.embed.title)
+        self.assertEqual((skill.embed.description or "").count("ダメージ →"), 3)
+
+        defeats = [
+            message
+            for message in messages
+            if (message.embed.title or "").startswith("💀 ")
+        ]
+        self.assertEqual(len(defeats), 3, [m.embed.title for m in messages])
+        self.assertEqual(
+            [message.familiar_id for message in defeats],
+            ["garm", "behemoth", "minotaur"],
+        )
+
+    def test_a_revived_familiar_gets_no_defeat_embed(self) -> None:
+        # 同じ行動の中で復活した使い魔は、戦闘不能Embedを出さない
+        from game import battle_embed
+
+        state = build_state([("hel", 1), ("cyclops", 1)], [("surtr", 5)])
+        battle_engine.start_battle(state)
+
+        surtr = unit_of(state, "surtr", GUILD_B)
+        cyclops = unit_of(state, "cyclops", GUILD_A)
+        cyclops.current_hp = 1
+
+        start = len(state.logs)
+        battle_engine.deal_damage(state, surtr, cyclops, 99, attack_type="normal")
+        self.assertTrue(cyclops.alive)
+
+        messages = battle_embed.build_action_log_messages(
+            state, state.logs[start:], guild_names={GUILD_A: "A", GUILD_B: "B"}
+        )
+
+        self.assertFalse(
+            [m for m in messages if (m.embed.title or "").startswith("💀 ")],
+            [m.embed.title for m in messages],
+        )
+        # 戦闘不能になった事実そのものは本文へ残す
+        self.assertIn("戦闘不能", messages[0].embed.description or "")
+
+    def test_dying_twice_in_one_action_shows_one_defeat_embed(self) -> None:
+        # 倒れて復活し、また倒れた場合。取り消された1回目は出さない
+        from game import battle_embed
+        from game.models import BattleEvent
+
+        state = build_state([("garm", 1)], [("surtr", 5)])
+        battle_engine.start_battle(state)
+
+        garm = unit_of(state, "garm", GUILD_A)
+        start = len(state.logs)
+
+        # 毒が複数かかっていると、1回目の毒で倒れ、蘇生パッシブで復活し、
+        # 続く毒でまた倒れる。毒ダメージごとにEmbedが分かれる並びを作る。
+        def poison(before: int, after: int) -> None:
+            state.add_log(
+                BattleEvent.DAMAGE,
+                target_unit_id=garm.battle_unit_id,
+                amount=before - after,
+                attack_type="poison",
+                hp_before=before,
+                hp_after=after,
+            )
+
+        poison(4, 0)
+        state.add_log(
+            BattleEvent.DEFEAT_CHECK,
+            target_unit_id=garm.battle_unit_id,
+            text="戦闘不能",
+        )
+        state.add_log(
+            BattleEvent.REVIVE,
+            target_unit_id=garm.battle_unit_id,
+            amount=10,
+            text="HP10で復活",
+        )
+        poison(10, 0)
+        state.add_log(
+            BattleEvent.DEFEAT_CHECK,
+            target_unit_id=garm.battle_unit_id,
+            text="戦闘不能",
+        )
+
+        garm.current_hp = 0
+        garm.alive = False
+
+        messages = battle_embed.build_action_log_messages(
+            state, state.logs[start:], guild_names={GUILD_A: "A", GUILD_B: "B"}
+        )
+        defeats = [
+            message
+            for message in messages
+            if (message.embed.title or "").startswith("💀 ")
+        ]
+
+        self.assertEqual(len(defeats), 1, [m.embed.title for m in messages])
+
+    def test_merged_passives_from_both_guilds_use_a_neutral_color(self) -> None:
+        # 両ギルドのパッシブが1件のEmbedへまとまる場合、片方の色で塗らない
+        from game import battle_embed
+
+        state = build_state(
+            [("surtr", 1), ("jormungandr", 1)], [("hydra", 1), ("fenrir", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        for viewer in (GUILD_A, GUILD_B):
+            merged = [
+                message
+                for message in battle_embed.build_action_log_messages(
+                    state,
+                    state.logs,
+                    guild_names={GUILD_A: "A", GUILD_B: "B"},
+                    viewer_guild_id=viewer,
+                )
+                if (message.embed.title or "").startswith("✦ PASSIVE SKILL（")
+            ]
+
+            self.assertTrue(merged, viewer)
+            for message in merged:
+                self.assertEqual(
+                    message.embed.color.value, battle_embed.COLOR_PASSIVE, viewer
+                )
+                self.assertIsNone(message.familiar_id, viewer)
+
+    def test_passives_from_one_guild_keep_the_side_color(self) -> None:
+        # 片ギルドだけのパッシブなら、自ギルド・相手ギルドの色分けを保つ
+        from game import battle_embed
+
+        state = build_state(
+            [("surtr", 1), ("jormungandr", 1)], [("garm", 1), ("behemoth", 1)]
+        )
+        battle_engine.start_battle(state)
+
+        def passive_color(viewer: int) -> int | None:
+            for message in battle_embed.build_action_log_messages(
+                state,
+                state.logs,
+                guild_names={GUILD_A: "A", GUILD_B: "B"},
+                viewer_guild_id=viewer,
+            ):
+                if (message.embed.title or "").startswith("✦ PASSIVE"):
+                    return message.embed.color.value
+            return None
+
+        self.assertEqual(passive_color(GUILD_A), battle_embed.COLOR_ALLY)
+        self.assertEqual(passive_color(GUILD_B), battle_embed.COLOR_ENEMY)
+
+    def test_the_first_round_skips_the_status_log(self) -> None:
+        # 1巡目はバトル開始の編成表と最初の戦況Embedがあるため、重ねて出さない
         from game import battle_embed
 
         state = build_state([("garm", 1)], [("behemoth", 1)])
@@ -733,10 +942,37 @@ class DisplayTests(unittest.TestCase):
         titles = [m.embed.title for m in messages]
 
         self.assertIn("── ラウンド 1 ──", titles)
+        self.assertEqual(titles.count("【戦況】"), 0, titles)
+
+    def test_later_rounds_post_one_status_log(self) -> None:
+        # 2巡目以降は、ラウンドの区切りで戦況を1件だけ残す
+        from game import battle_embed
+
+        state = build_state([("garm", 1)], [("behemoth", 1)])
+        battle_engine.start_battle(state)
+
+        # 決着させずにラウンドを1つ進める
+        for unit in state.units.values():
+            unit.max_hp = 9999
+            unit.current_hp = 9999
+
+        start = len(state.logs)
+        for _ in range(10):
+            if state.current_round >= 2:
+                break
+            battle_engine.auto_action(state, elapsed_seconds=0)
+
+        self.assertEqual(state.current_round, 2)
+
+        messages = battle_embed.build_action_log_messages(
+            state, state.logs[start:], guild_names={GUILD_A: "A", GUILD_B: "B"}
+        )
+        titles = [m.embed.title for m in messages]
+
         self.assertEqual(titles.count("【戦況】"), 1, titles)
         # 見出しの直後に戦況が来る
         self.assertEqual(
-            titles[titles.index("── ラウンド 1 ──") + 1], "【戦況】", titles
+            titles[titles.index("── ラウンド 2 ──") + 1], "【戦況】", titles
         )
 
     def test_target_groups_show_a_readable_label(self) -> None:

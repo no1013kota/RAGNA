@@ -17,8 +17,7 @@ from database.coin import (
     set_monthly_reward_state,
     grant_monthly_reward,
 )
-from utils import ensure_panel_message
-from .views import ATMView
+from .views import ATMView, ensure_atm_panel
 
 JST = timezone(timedelta(hours=9))
 logger = logging.getLogger(__name__)
@@ -310,19 +309,9 @@ class Coin(commands.Cog):
         if guild is None:
             return
 
-        for channel_id in config.ATM_PANEL_CHANNELS:
-            embed = discord.Embed(
-                title="ATM",
-                color=config.COLOR_GREY
-            )
-            await ensure_panel_message(
-                self.bot,
-                guild,
-                channel_id,
-                panel_title="ATM",
-                embed=embed,
-                view=ATMView(),
-                panel_name="ATMパネル",
+        for channel_id, movable_titles in config.ATM_PANEL_CHANNELS.items():
+            await ensure_atm_panel(
+                self.bot, guild, channel_id, movable_titles=movable_titles
             )
 
     @create_atm_panel.before_loop

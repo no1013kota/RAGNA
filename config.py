@@ -201,12 +201,16 @@ CHANNEL_TICKET_PANEL = 1523188012429869176  # お問い合わせパネル
 # ==================================================
 # ATMパネル
 # ==================================================
-ATM_PANEL_CHANNELS = [
-    CHANNEL_EVALUATION_PANEL,
-    CHANNEL_HOTEL_PANEL,
-    CHANNEL_INVITE_POINT_PANEL,
-    CHANNEL_TICKET_PANEL,
-]
+# coinを使うパネルがあるチャンネルと、そこで貼り直してよい常設パネルの表題。
+# ATMパネルはここの一番上へ置きます。値に挙げた表題のパネルだけが並べ替えの
+# ために削除されるので、貼り直せない投稿（申請Embedなど）は挙げません。
+# ゲーム機能のチャンネルは環境変数で決まるため、各Cogが自分で設置します。
+ATM_PANEL_CHANNELS = {
+    CHANNEL_EVALUATION_PANEL: ("評価シート",),
+    CHANNEL_HOTEL_PANEL: ("入室プラン",),
+    CHANNEL_INVITE_POINT_PANEL: ("招待リスト",),
+    CHANNEL_TICKET_PANEL: ("窓口",),
+}
 
 # ==================================================
 # 月間報酬
@@ -294,8 +298,11 @@ GUILD_MEMBER_RECRUITMENT_CHANNEL_ID = _optional_channel_env(
     "GUILD_MEMBER_RECRUITMENT_CHANNEL_ID"
 )
 
-# 使い魔の4パネルを置くチャンネル
+# 使い魔管理パネル（一覧・合成・売却）を置くチャンネル
 FAMILIAR_PANEL_CHANNEL_ID = _optional_channel_env("FAMILIAR_PANEL_CHANNEL_ID")
+
+# ガチャパネルを置くチャンネル。未設定なら使い魔チャンネルへ置きます。
+GACHA_PANEL_CHANNEL_ID = _optional_channel_env("GACHA_PANEL_CHANNEL_ID")
 
 # 公開バトル募集チャンネル（バトル募集Embed）
 GUILD_BATTLE_RECRUITMENT_CHANNEL_ID = _optional_channel_env(
@@ -325,3 +332,6 @@ PLAYER_RANK_ROLES = {
 # 使い魔画像の配置先（正式画像がない個体は default.png を使用）
 FAMILIAR_IMAGE_DIRECTORY = "assets/familiars"
 FAMILIAR_DEFAULT_IMAGE = "default.png"
+
+
+

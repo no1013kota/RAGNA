@@ -75,17 +75,30 @@ class FamiliarBalance:
 
 
 @dataclass(frozen=True)
+class BetRate:
+    """バトル申請・募集で選ぶレート（12節）。"""
+
+    rate_id: str
+    name: str
+    coin: int
+
+
+@dataclass(frozen=True)
 class BetBalance:
     """ギルドバトルのベット設定（26.2節）。
 
-    ``coin`` は1人あたりのベット額です。負けた側から集めたcoinを勝った側へ
+    ``coin`` はギルド1つあたりのベット額です。負けた側から集めたcoinを勝った側へ
     分配するため、coinの総量は増えません。XPは新しく付与します。
+
+    ``rates`` はギルドマスターが選べるレートの一覧です。空の場合は ``coin`` の
+    1段階だけを使います。
     """
 
     coin: int
     win_xp: int
     lose_xp: int
     draw_xp: int
+    rates: tuple[BetRate, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -348,6 +361,46 @@ def _require(data: dict[str, Any], key: str, path: Path) -> Any:
     return data[key]
 
 
+def _load_bet_rates(raw: Any) -> tuple[BetRate, ...]:
+    """バトル申請・募集で選ぶレート一覧を読み込む（12節）。
+
+    未設定・空のときは空のタプルを返し、呼び出し側は ``battle.bet.coin`` の
+    1段階だけを使います（改修前のマスターデータでも動かすため）。
+    並び順はそのままセレクトの並び順になります。
+    """
+
+    if not raw:
+        return ()
+
+    if not isinstance(raw, list):
+        raise MasterDataError("battle.bet.rates は配列にしてください")
+
+    rates: list[BetRate] = []
+    seen: set[str] = set()
+
+    for entry in raw:
+        for key in ("rate_id", "name", "coin"):
+            if key not in entry:
+                raise MasterDataError(f"battle.bet.rates の要素に {key} がありません")
+
+        rate_id = str(entry["rate_id"])
+        if rate_id in seen:
+            raise MasterDataError(f"battle.bet.rates の rate_id が重複しています: {rate_id}")
+
+        coin = int(entry["coin"])
+        if coin < 0:
+            raise MasterDataError(f"battle.bet.rates.{rate_id}.coin は0以上にしてください")
+
+        seen.add(rate_id)
+        rates.append(BetRate(rate_id=rate_id, name=str(entry["name"]), coin=coin))
+
+    # Discordのセレクトは1つ25件までのため、それを超える定義は受け付けない
+    if len(rates) > 25:
+        raise MasterDataError("battle.bet.rates は25件までにしてください")
+
+    return tuple(rates)
+
+
 def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, BattleBalance]:
     path = MASTER_DIRECTORY / "balance.json"
     raw = _read_json(path)
@@ -418,6 +471,7 @@ def _load_balance(warnings: list[str]) -> tuple[GuildBalance, FamiliarBalance, B
         win_xp=int(bet_raw["win_xp"]),
         lose_xp=int(bet_raw["lose_xp"]),
         draw_xp=int(bet_raw["draw_xp"]),
+        rates=_load_bet_rates(bet_raw.get("rates")),
     )
     if bet.coin < 0:
         raise MasterDataError("battle.bet.coin は0以上にしてください")

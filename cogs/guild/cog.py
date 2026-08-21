@@ -21,6 +21,7 @@ import discord
 import config
 
 from discord.ext import commands, tasks
+from cogs.coin.views import ensure_atm_panel
 from utils import ensure_panel_message, remove_legacy_panels
 
 from cogs import game_shared
@@ -93,6 +94,14 @@ class Guild(commands.Cog):
             config.GUILD_INTRO_CHANNEL_ID,
             titles=service.LEGACY_PANEL_TITLES,
             history_limit=100,
+        )
+
+        # ギルド設立にcoinを使うため、ATMパネルを一番上へ置く
+        await ensure_atm_panel(
+            self.bot,
+            guild,
+            config.GUILD_INTRO_CHANNEL_ID,
+            movable_titles=(service.PANEL_TITLE,),
         )
 
         await ensure_panel_message(

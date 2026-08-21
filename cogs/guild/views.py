@@ -54,22 +54,43 @@ logger = logging.getLogger(__name__)
 # ==================================================
 # 共通メッセージと再確認ヘルパー（29節）
 # ==================================================
-DISABLED_MESSAGE = game_shared.DISABLED_MESSAGE
 CHANNEL_ERROR_MESSAGE = game_shared.CHANNEL_ERROR_MESSAGE
 NOT_GUILD_CHANNEL_MESSAGE = "このチャンネルはギルド専用チャンネルとして登録されていません。"
 ARCHIVED_MESSAGE = "このギルドは既に解散しています。"
 
 
+def _game_block_reason(
+    interaction: discord.Interaction, *, require_member: bool = True
+) -> str | None:
+    """ゲーム操作を受け付けられない理由を返す（4節・34.1.1節）。
+
+    ``require_member`` が偽のときは公開スイッチだけを確認します。ギルドから
+    抜ける操作は、利用資格を失ったあとでも実行できる必要があるためです。
+    """
+
+    if require_member:
+        return game_shared.game_block_reason(interaction.user)
+
+    return None if game_shared.is_game_enabled() else game_shared.DISABLED_MESSAGE
+
+
 async def _resolve_master_guild(
-    interaction: discord.Interaction, *, guild_id: int | None = None
+    interaction: discord.Interaction,
+    *,
+    guild_id: int | None = None,
+    require_member: bool = True,
 ) -> dict[str, Any] | None:
     """操作者が対象ギルドの「現在のマスター」かをDBから再確認する。
 
     条件を満たさない場合は理由をephemeralで返し ``None`` を返します。
+    ``require_member`` を偽にすると利用資格（4節）を求めません。譲渡・解散の
+    ような「抜けるための操作」まで止めると、本メンバーでなくなったマスターの
+    ギルドが誰にも動かせなくなるためです。
     """
 
-    if not game_shared.is_game_enabled():
-        await game_shared.respond(interaction, DISABLED_MESSAGE)
+    blocked = _game_block_reason(interaction, require_member=require_member)
+    if blocked is not None:
+        await game_shared.respond(interaction, blocked)
         return None
 
     if guild_id is not None:
@@ -97,12 +118,13 @@ async def _resolve_master_guild(
 
 
 async def _resolve_member_guild(
-    interaction: discord.Interaction,
+    interaction: discord.Interaction, *, require_member: bool = True
 ) -> dict[str, Any] | None:
     """操作者がそのチャンネルのギルドへ所属しているかをDBから再確認する。"""
 
-    if not game_shared.is_game_enabled():
-        await game_shared.respond(interaction, DISABLED_MESSAGE)
+    blocked = _game_block_reason(interaction, require_member=require_member)
+    if blocked is not None:
+        await game_shared.respond(interaction, blocked)
         return None
 
     channel = interaction.channel
@@ -226,8 +248,9 @@ class GuildPanelView(discord.ui.View):
     async def create(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        if not game_shared.is_game_enabled():
-            await game_shared.respond(interaction, DISABLED_MESSAGE)
+        blocked = game_shared.game_block_reason(interaction.user)
+        if blocked is not None:
+            await game_shared.respond(interaction, blocked)
             return
 
         if not isinstance(interaction.user, discord.Member):
@@ -262,8 +285,9 @@ class GuildPanelView(discord.ui.View):
     async def my_requests(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        if not game_shared.is_game_enabled():
-            await game_shared.respond(interaction, DISABLED_MESSAGE)
+        blocked = game_shared.game_block_reason(interaction.user)
+        if blocked is not None:
+            await game_shared.respond(interaction, blocked)
             return
 
         requests = get_pending_join_requests_by_user(interaction.user.id)
@@ -363,8 +387,9 @@ class GuildRecruitmentView(discord.ui.View):
     async def join_request(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        if not game_shared.is_game_enabled():
-            await game_shared.respond(interaction, DISABLED_MESSAGE)
+        blocked = game_shared.game_block_reason(interaction.user)
+        if blocked is not None:
+            await game_shared.respond(interaction, blocked)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -459,6 +484,21 @@ class JoinRequestView(discord.ui.View):
         guild_id = int(request_row["guild_id"])
         applicant_id = int(request_row["user_id"])
 
+        # 申請してから承認までの間に本メンバーでなくなることがある（4節）
+        applicant = await _resolve_user(interaction, applicant_id)
+        blocked = game_shared.game_block_reason(applicant, user_id=applicant_id)
+        if blocked is not None:
+            await game_shared.respond(
+                interaction,
+                (
+                    f"<@{applicant_id}> は現在ラグナオンラインを利用できないため、"
+                    "参加を承認できません。\n"
+                    f"-# {blocked.splitlines()[0]}"
+                ),
+                allowed_mentions=game_shared.NO_MENTIONS,
+            )
+            return
+
         result = approve_join_request(request_id, approver_id=interaction.user.id)
         if not result["ok"]:
             if result["error"] == "not_pending":
@@ -482,7 +522,6 @@ class JoinRequestView(discord.ui.View):
         await service.refresh_recruitment_embed(interaction.client, guild_id)
 
         guild_name = str(guild_row["name"]) if guild_row else f"ID:{guild_id}"
-        applicant = await _resolve_user(interaction, applicant_id)
         await game_shared.send_dm(
             applicant,
             embed=discord.Embed(
@@ -551,8 +590,9 @@ class JoinRequestView(discord.ui.View):
     ) -> dict[str, Any] | None:
         """押されたEmbedから申請を特定し、現在のマスターかを再確認する。"""
 
-        if not game_shared.is_game_enabled():
-            await game_shared.respond(interaction, DISABLED_MESSAGE)
+        blocked = game_shared.game_block_reason(interaction.user)
+        if blocked is not None:
+            await game_shared.respond(interaction, blocked)
             return None
 
         await interaction.response.defer(ephemeral=True)
@@ -644,7 +684,8 @@ class GuildManageView(discord.ui.View):
     async def transfer(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        guild_row = await _resolve_master_guild(interaction)
+        # 譲渡は「抜けるための操作」。利用資格を失っても実行できる（34.1.1節）
+        guild_row = await _resolve_master_guild(interaction, require_member=False)
         if guild_row is None:
             return
 
@@ -814,7 +855,8 @@ class GuildManageView(discord.ui.View):
     async def disband(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        guild_row = await _resolve_master_guild(interaction)
+        # 解散も「抜けるための操作」。利用資格を失っても実行できる（34.1.1節）
+        guild_row = await _resolve_master_guild(interaction, require_member=False)
         if guild_row is None:
             return
 
@@ -822,14 +864,18 @@ class GuildManageView(discord.ui.View):
         balance = load_master_data().guild
 
         async def _final(final_interaction: discord.Interaction) -> None:
-            row = await _resolve_master_guild(final_interaction, guild_id=guild_id)
+            row = await _resolve_master_guild(
+                final_interaction, guild_id=guild_id, require_member=False
+            )
             if row is None:
                 return
 
             await service.disband_guild(final_interaction, row)
 
         async def _first(first_interaction: discord.Interaction) -> None:
-            row = await _resolve_master_guild(first_interaction, guild_id=guild_id)
+            row = await _resolve_master_guild(
+                first_interaction, guild_id=guild_id, require_member=False
+            )
             if row is None:
                 return
 
@@ -964,7 +1010,9 @@ class TransferMemberSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        guild_row = await _resolve_master_guild(interaction, guild_id=self.guild_id)
+        guild_row = await _resolve_master_guild(
+            interaction, guild_id=self.guild_id, require_member=False
+        )
         if guild_row is None:
             return
 
@@ -972,7 +1020,9 @@ class TransferMemberSelect(discord.ui.Select):
         guild_id = self.guild_id
 
         async def _run(confirm_interaction: discord.Interaction) -> None:
-            row = await _resolve_master_guild(confirm_interaction, guild_id=guild_id)
+            row = await _resolve_master_guild(
+                confirm_interaction, guild_id=guild_id, require_member=False
+            )
             if row is None:
                 return
 
@@ -1227,7 +1277,7 @@ class RecruitControlView(discord.ui.View):
 # ギルドメンバー用パネル（ギルドTC・8.3節）
 # ==================================================
 class GuildMemberPanelView(discord.ui.View):
-    """使い魔セットチャンネルへ常設する、所属メンバー向けのパネル（8.3節）。"""
+    """ギルド情報チャンネルへ常設する、所属メンバー向けのパネル（8.3節）。"""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -1263,7 +1313,8 @@ class GuildMemberPanelView(discord.ui.View):
     async def leave(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        guild_row = await _resolve_member_guild(interaction)
+        # 脱退も「抜けるための操作」。利用資格を失っても実行できる（34.1.1節）
+        guild_row = await _resolve_member_guild(interaction, require_member=False)
         if guild_row is None:
             return
 

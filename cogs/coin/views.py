@@ -9,8 +9,62 @@ from database.coin import (
     get_balance,
 )
 
+from utils import ensure_panel_message, ensure_top_panel
+
 JST = timezone(timedelta(hours=9))
 logger = logging.getLogger(__name__)
+
+# ATMパネルの表題。coinを使うパネルがあるチャンネルの一番上へ置く。
+ATM_PANEL_TITLE = "ATM"
+
+
+def build_atm_panel_embed() -> discord.Embed:
+    """ATMパネルのEmbedを作る。"""
+
+    return discord.Embed(title=ATM_PANEL_TITLE, color=config.COLOR_GREY)
+
+
+async def ensure_atm_panel(
+    bot: discord.Client,
+    guild: discord.Guild,
+    channel_id: int,
+    *,
+    movable_titles: tuple[str, ...] = (),
+) -> str | None:
+    """coinを使うチャンネルへATMパネルを設置する。
+
+    残高照会と送金は、coinを使う操作の直前にいちばん必要になるため、できるだけ
+    一番上へ置きます。``movable_titles`` には、そのチャンネルで貼り直せる常設
+    パネルの表題を渡します。渡さない場合は並び順を直さず、設置だけを保証します。
+    参加申請Embedのように貼り直せない投稿を消さないための仕組みです。
+
+    ``channel_id`` が未設定（0）の場合は何もしません。
+    """
+
+    if not channel_id:
+        return None
+
+    if not movable_titles:
+        return await ensure_panel_message(
+            bot,
+            guild,
+            int(channel_id),
+            panel_title=ATM_PANEL_TITLE,
+            embed=build_atm_panel_embed(),
+            view=ATMView(),
+            panel_name="ATMパネル",
+        )
+
+    return await ensure_top_panel(
+        bot,
+        guild,
+        int(channel_id),
+        panel_title=ATM_PANEL_TITLE,
+        embed=build_atm_panel_embed(),
+        view=ATMView(),
+        panel_name="ATMパネル",
+        movable_titles=movable_titles,
+    )
 
 class ATMView(discord.ui.View):
     def __init__(self):

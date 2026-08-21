@@ -215,6 +215,192 @@ def get_player_battle_familiars(user_id: int) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+# ==================================================
+# 事前登録と出場する使い魔の同期（9節）
+# ==================================================
+# 「事前登録＝優先順の本体、出場する使い魔＝その上位を実際に出す枠」という
+# 関係を、どちらから変更しても保てるようにします。片方だけ変えても
+# もう片方が古いままだと、どちらが本当の編成なのか分からなくなるためです。
+#
+# 同期するのは「編成ロックされていないギルドの出場者」だけです。事前登録
+# そのものは、無所属でも編成ロック中でもいつでも変更できます（34.18節）。
+def _write_registration(
+    conn: sqlite3.Connection,
+    user_id: int,
+    ordered: list[int],
+    timestamp: str,
+) -> None:
+    """事前登録を、渡された順番のまま1番から書き直す。
+
+    ``PRIMARY KEY (user_id, priority)`` と個体の一意制約があるため、
+    途中を差し替えるのではなく、いったん消してから並べ直します。
+    """
+
+    conn.execute(
+        "DELETE FROM player_battle_familiars WHERE user_id = ?", (user_id,)
+    )
+
+    for priority, instance_id in enumerate(ordered, start=1):
+        conn.execute(
+            """
+            INSERT INTO player_battle_familiars
+                (user_id, priority, instance_id, updated_at)
+            VALUES
+                (?, ?, ?, ?)
+            """,
+            (user_id, priority, instance_id, timestamp),
+        )
+
+
+def _registered_instance_ids(conn: sqlite3.Connection, user_id: int) -> list[int]:
+    """事前登録している所有使い魔IDを優先順で返す。"""
+
+    rows = conn.execute(
+        """
+        SELECT instance_id
+        FROM player_battle_familiars
+        WHERE user_id = ?
+        ORDER BY priority
+        """,
+        (user_id,),
+    ).fetchall()
+
+    return [int(row["instance_id"]) for row in rows]
+
+
+def _entry_instance_ids(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> list[int]:
+    """その人が出場させる使い魔IDを枠順で返す。"""
+
+    rows = conn.execute(
+        """
+        SELECT instance_id
+        FROM guild_battle_entries
+        WHERE guild_id = ?
+          AND user_id = ?
+        ORDER BY entry_slot
+        """,
+        (guild_id, user_id),
+    ).fetchall()
+
+    return [int(row["instance_id"]) for row in rows]
+
+
+def _syncable_assignment(
+    conn: sqlite3.Connection, user_id: int
+) -> tuple[int, int] | None:
+    """同期対象のギルドと、その人の割り当て体数を返す。
+
+    次のいずれかに当てはまる場合は ``None`` を返し、事前登録だけを更新します。
+
+    - どのギルドにも所属していない
+    - そのギルドの出場者に選ばれていない
+    - そのギルドが編成ロック中（バトル成立後は編成を凍結する）
+    """
+
+    row = conn.execute(
+        """
+        SELECT member.guild_id, roster.familiar_count
+        FROM guild_members AS member
+        JOIN guilds AS guild
+          ON guild.guild_id = member.guild_id
+        JOIN guild_battle_members AS roster
+          ON roster.guild_id = member.guild_id
+         AND roster.user_id = member.user_id
+        WHERE member.user_id = ?
+          AND guild.roster_locked = 0
+        """,
+        (user_id,),
+    ).fetchone()
+
+    if row is None:
+        return None
+
+    return int(row["guild_id"]), int(row["familiar_count"] or 0)
+
+
+def _sync_entries_from_registration(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    limit: int,
+    timestamp: str,
+    *,
+    max_total_cost: int,
+) -> dict[str, list[int]]:
+    """事前登録の上位から、その人の出場する使い魔を作り直す（9.1節）。
+
+    いったん本人の枠をすべて空けてから、事前登録の優先順で埋め直します。
+    ギルドの合計COST上限を超える候補は飛ばすため、採用できた分だけが枠へ
+    入ります。飛ばした個体は ``cost_skipped`` で返し、呼び出し側が
+    「上限のためセットできなかった」と伝えられるようにします。
+    """
+
+    released = _entry_instance_ids(conn, guild_id, user_id)
+
+    conn.execute(
+        """
+        DELETE FROM guild_battle_entries
+        WHERE guild_id = ?
+          AND user_id = ?
+        """,
+        (guild_id, user_id),
+    )
+    _renumber_entries(conn, guild_id, timestamp)
+
+    cost_skipped: list[int] = []
+    adopted = _adopt_registered_familiars(
+        conn,
+        guild_id,
+        [(user_id, limit)],
+        timestamp,
+        max_total_cost=max_total_cost,
+        cost_skipped=cost_skipped,
+    )
+
+    return {
+        "adopted": adopted,
+        "released": [
+            instance_id for instance_id in released if instance_id not in adopted
+        ],
+        "cost_skipped": cost_skipped,
+    }
+
+
+def _sync_registration_from_entries(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    timestamp: str,
+    *,
+    max_units: int,
+) -> bool:
+    """出場する使い魔の並びを、事前登録の先頭へ写す（9.3節）。
+
+    出場している使い魔をそのまま優先順の先頭に置き、出場していない登録は
+    その後ろへ残します。次にメンバーセットをやり直したときも、いま出して
+    いる編成がそのまま選ばれます。変更した場合だけ ``True`` を返します。
+    """
+
+    entries = _entry_instance_ids(conn, guild_id, user_id)
+    registered = _registered_instance_ids(conn, user_id)
+
+    chosen = set(entries)
+    ordered = entries + [
+        instance_id for instance_id in registered if instance_id not in chosen
+    ]
+
+    if max_units > 0:
+        ordered = ordered[:max_units]
+
+    if ordered == registered:
+        return False
+
+    _write_registration(conn, user_id, ordered, timestamp)
+    return True
+
+
 def set_player_battle_familiars(
     user_id: int, instance_ids: list[int]
 ) -> dict[str, Any]:
@@ -222,13 +408,26 @@ def set_player_battle_familiars(
 
     所有していない個体が混ざっていた場合は ``not_owned`` を返し、登録内容は
     変えません。編成ロックやバトルの進行状況とは無関係にいつでも変更できます。
+
+    出場者に選ばれていて、そのギルドが編成ロック中でない場合は、出場する
+    使い魔も新しい優先順から作り直します。戻り値の ``adopted`` と
+    ``released`` が入れ替わった使い魔、``cost_skipped`` がギルドの合計COST
+    上限のためにセットできなかった使い魔です。
     """
 
     ordered = [int(instance_id) for instance_id in instance_ids]
     if len(set(ordered)) != len(ordered):
         return _failure("duplicate_familiar")
 
+    from game.master_data import load_master_data
+
+    master = load_master_data()
     timestamp = _now()
+    synced: dict[str, list[int]] = {
+        "adopted": [],
+        "released": [],
+        "cost_skipped": [],
+    }
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -252,22 +451,26 @@ def set_player_battle_familiars(
                     conn.rollback()
                     return _failure("not_owned")
 
-            conn.execute(
-                "DELETE FROM player_battle_familiars WHERE user_id = ?", (user_id,)
-            )
+            _write_registration(conn, user_id, ordered, timestamp)
 
-            for priority, instance_id in enumerate(ordered, start=1):
-                conn.execute(
-                    """
-                    INSERT INTO player_battle_familiars
-                        (user_id, priority, instance_id, updated_at)
-                    VALUES
-                        (?, ?, ?, ?)
-                    """,
-                    (user_id, priority, instance_id, timestamp),
+            assignment = _syncable_assignment(conn, user_id)
+            if assignment is not None:
+                guild_id, limit = assignment
+                synced = _sync_entries_from_registration(
+                    conn,
+                    guild_id,
+                    user_id,
+                    limit,
+                    timestamp,
+                    max_total_cost=master.battle.max_total_cost,
                 )
 
-    return _success(count=len(ordered))
+    return _success(
+        count=len(ordered),
+        adopted=synced["adopted"],
+        released=synced["released"],
+        cost_skipped=synced["cost_skipped"],
+    )
 
 
 def get_battle_roster(guild_id: int) -> list[dict[str, Any]]:
@@ -504,11 +707,13 @@ def _adopt_registered_familiars(
     assignments: list[tuple[int, int]],
     timestamp: str,
     max_total_cost: int = 0,
+    cost_skipped: list[int] | None = None,
 ) -> list[int]:
     """割り当て体数に足りない分を、事前登録の優先順から自動で埋める（9節）。
 
     ``max_total_cost`` が0より大きい場合は、合計COSTがその値を超える使い魔を
-    飛ばして次の候補へ進みます。戻り値は自動採用した所有使い魔IDです。
+    飛ばして次の候補へ進みます。``cost_skipped`` を渡すと、そのとき飛ばした
+    所有使い魔IDを追記します。戻り値は自動採用した所有使い魔IDです。
     トランザクション内から呼びます。
     """
 
@@ -566,6 +771,8 @@ def _adopt_registered_familiars(
                 adding = _familiar_cost(conn, instance_id)
                 if cost_total + adding > max_total_cost:
                     # COST上限を超える候補は飛ばし、次の登録へ進む
+                    if cost_skipped is not None:
+                        cost_skipped.append(instance_id)
                     continue
                 cost_total += adding
 
@@ -648,7 +855,8 @@ def add_battle_entry(
     体数の上限は、マスターがその出場者へ割り当てた ``familiar_count`` です。
     自動採用された使い魔を差し替えたい場合は、先に外してから追加します。
     ``max_total_cost`` が0より大きい場合は、ギルドの合計COSTがその値を超える
-    セットを拒否します（10.6節）。
+    セットを拒否します（10.6節）。セットした使い魔は本人の事前登録の先頭へも
+    反映し、両方の並びを一致させます（9.3節）。
     error: "roster_locked" / "not_selected" / "entries_full" /
            "member_limit" / "already_set" / "not_owned" / "cost_over"
     """
@@ -752,6 +960,10 @@ def add_battle_entry(
                 (guild_id, next_slot, user_id, instance_id, timestamp),
             )
 
+            _sync_registration_from_entries(
+                conn, guild_id, user_id, timestamp, max_units=max_units
+            )
+
     return _success(entry_slot=next_slot)
 
 
@@ -760,9 +972,15 @@ def remove_battle_entry(
 ) -> dict[str, Any]:
     """自分がセットした使い魔を1体解除する。
 
+    解除した使い魔は本人の事前登録からも外します。片方だけ残ると、次に
+    メンバーセットをやり直したときに解除したはずの使い魔が戻るためです（9.3節）。
+
     error: "roster_locked" / "not_set"
     """
 
+    from game.master_data import load_master_data
+
+    max_units = load_master_data().battle.max_units
     timestamp = _now()
 
     with closing(get_connection()) as conn:
@@ -794,7 +1012,155 @@ def remove_battle_entry(
 
             _renumber_entries(conn, guild_id, timestamp)
 
+            registered = _registered_instance_ids(conn, user_id)
+            if instance_id in registered:
+                registered.remove(instance_id)
+                _write_registration(conn, user_id, registered, timestamp)
+
+            _sync_registration_from_entries(
+                conn, guild_id, user_id, timestamp, max_units=max_units
+            )
+
     return _success()
+
+
+def swap_battle_entry(
+    guild_id: int,
+    user_id: int,
+    removed_instance_id: int,
+    new_instance_id: int,
+    *,
+    max_units: int,
+    max_total_cost: int = 0,
+) -> dict[str, Any]:
+    """セット済みの1体を、同じ枠のまま別の使い魔へ入れ替える（9.3節）。
+
+    外してから入れ直すと枠順と事前登録の優先順が末尾へ動いてしまううえ、
+    途中で失敗すると元へ戻す処理が必要になります。1つの処理としてまとめ、
+    同じ枠・同じ優先順のまま差し替えます。
+
+    error: "roster_locked" / "not_set" / "already_set" / "not_owned" / "cost_over"
+    """
+
+    removed_instance_id = int(removed_instance_id)
+    new_instance_id = int(new_instance_id)
+
+    if removed_instance_id == new_instance_id:
+        return _failure("already_set")
+
+    timestamp = _now()
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            guild_row = conn.execute(
+                "SELECT roster_locked FROM guilds WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+
+            if guild_row is not None and guild_row["roster_locked"]:
+                conn.rollback()
+                return _failure("roster_locked")
+
+            current = conn.execute(
+                """
+                SELECT entry_slot
+                FROM guild_battle_entries
+                WHERE guild_id = ?
+                  AND user_id = ?
+                  AND instance_id = ?
+                """,
+                (guild_id, user_id, removed_instance_id),
+            ).fetchone()
+
+            if current is None:
+                conn.rollback()
+                return _failure("not_set")
+
+            entry_slot = int(current["entry_slot"])
+
+            duplicated = conn.execute(
+                """
+                SELECT 1
+                FROM guild_battle_entries
+                WHERE guild_id = ?
+                  AND instance_id = ?
+                """,
+                (guild_id, new_instance_id),
+            ).fetchone()
+
+            if duplicated is not None:
+                conn.rollback()
+                return _failure("already_set")
+
+            owned = conn.execute(
+                """
+                SELECT user_id, status
+                FROM player_familiars
+                WHERE instance_id = ?
+                """,
+                (new_instance_id,),
+            ).fetchone()
+
+            if (
+                owned is None
+                or int(owned["user_id"]) != int(user_id)
+                or owned["status"] != "owned"
+            ):
+                conn.rollback()
+                return _failure("not_owned")
+
+            if max_total_cost > 0:
+                current_cost = _entry_cost_total(conn, guild_id)
+                leaving = _familiar_cost(conn, removed_instance_id)
+                adding = _familiar_cost(conn, new_instance_id)
+
+                if current_cost - leaving + adding > max_total_cost:
+                    conn.rollback()
+                    return _failure(
+                        "cost_over",
+                        current_cost=current_cost - leaving,
+                        adding_cost=adding,
+                        max_total_cost=max_total_cost,
+                    )
+
+            conn.execute(
+                """
+                UPDATE guild_battle_entries
+                SET instance_id = ?,
+                    updated_at = ?
+                WHERE guild_id = ?
+                  AND entry_slot = ?
+                """,
+                (new_instance_id, timestamp, guild_id, entry_slot),
+            )
+
+            # 事前登録も同じ位置で差し替える。外した方は1つ下げて控えに残し、
+            # 登録から消えてしまわないようにする。
+            registered = _registered_instance_ids(conn, user_id)
+            if new_instance_id in registered:
+                registered.remove(new_instance_id)
+
+            if removed_instance_id in registered:
+                position = registered.index(removed_instance_id)
+                registered[position] = new_instance_id
+
+                # 上限に余裕があるときだけ、外した方を1つ下の控えへ残す。
+                # 余裕が無いのに押し込むと、末尾の登録が黙って消えてしまう。
+                if max_units <= 0 or len(registered) < max_units:
+                    registered.insert(position + 1, removed_instance_id)
+            else:
+                registered.append(new_instance_id)
+                if max_units > 0:
+                    del registered[max_units:]
+
+            _write_registration(conn, user_id, registered, timestamp)
+            _sync_registration_from_entries(
+                conn, guild_id, user_id, timestamp, max_units=max_units
+            )
+
+    return _success(entry_slot=entry_slot)
 
 
 def clear_roster_familiars(guild_id: int) -> None:
