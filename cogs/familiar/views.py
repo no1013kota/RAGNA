@@ -1024,13 +1024,13 @@ def build_gacha_panel_embed() -> discord.Embed:
     if pool is None:
         return discord.Embed(
             title=GACHA_PANEL_TITLE,
-            description="​\nガチャ設定が読み込めていません。",
+            description=familiar_texts.GACHA_SETTINGS_ERROR,
             color=game_shared.RANK_COLORS.get("S", 0xFEE75C),
         )
 
     lines = [
         "​",
-        "**使い魔を入手できます。**",
+        familiar_texts.GACHA_PANEL_HEADING,
         service.item_line("単発", game_shared.format_coin(pool.single_cost)),
         service.item_line(
             f"{pool.multi_count}連", game_shared.format_coin(pool.multi_cost)
@@ -1039,7 +1039,7 @@ def build_gacha_panel_embed() -> discord.Embed:
 
     rates = service.rate_lines(pool, service.SLOT_NORMAL)
     if rates:
-        lines.extend(["", "**排出率**", *rates])
+        lines.extend(["", familiar_texts.GACHA_RATES_HEADING, *rates])
 
     if pool.guaranteed_slot:
         guaranteed = service.rate_lines(pool, service.SLOT_GUARANTEED)
@@ -1048,9 +1048,13 @@ def build_gacha_panel_embed() -> discord.Embed:
             lines.extend(
                 [
                     "",
-                    f"**{pool.multi_count}連の{pool.guaranteed_slot}枠目（保証枠）**",
+                    familiar_texts.GACHA_GUARANTEED_HEADING.format(
+                        count=pool.multi_count, slot=pool.guaranteed_slot
+                    ),
                     *guaranteed,
-                    f"-# ※{pool.guaranteed_slot}枠目は{top}ランク以上が確定します。",
+                    familiar_texts.GACHA_GUARANTEED_NOTE.format(
+                        slot=pool.guaranteed_slot, rank=top
+                    ),
                 ]
             )
 
@@ -1072,15 +1076,7 @@ def build_manage_panel_embed() -> discord.Embed:
 
     return discord.Embed(
         title=MANAGE_PANEL_TITLE,
-        description=(
-            "​\n"
-            "**一覧**\n"
-            "-# 所有している使い魔の能力・スキル・画像を確認できます。\n\n"
-            "**合成**\n"
-            "-# 同じ使い魔を合成してレベルアップできます。\n\n"
-            "**売却**\n"
-            "-# 不要な使い魔をcoinへ換金します。\n"
-        ),
+        description=familiar_texts.MANAGE_PANEL_BODY,
         color=game_shared.RANK_COLORS.get("B", 0xBEDBFF),
     )
 
