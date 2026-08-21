@@ -616,9 +616,8 @@ async def _open_fusion(interaction: discord.Interaction) -> None:
     view = FuseBaseView(user_id=interaction.user.id, rows=bases)
     await interaction.followup.send(
         content=(
-            "レベルアップさせる使い魔を選択してください。\n"
-            "-# ※素材にした使い魔は消費されます。\n"
-            f"{LOCKED_NOTICE}"
+            "合成する使い魔を選択してください。\n"
+            "-# ※素材にした使い魔は消費されます。"
         ),
         view=view,
         ephemeral=True,
@@ -628,7 +627,7 @@ async def _open_fusion(interaction: discord.Interaction) -> None:
 class FuseBaseView(GroupPageView):
     """レベルアップさせるベース個体を選ぶ。"""
 
-    placeholder = "レベルアップさせる使い魔を選択してください"
+    placeholder = "合成する使い魔を選択してください"
 
     async def on_select(self, interaction: discord.Interaction, instance_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -679,9 +678,8 @@ class FuseBaseView(GroupPageView):
         await interaction.followup.send(
             content=(
                 f"**{service.instance_title(base)}** を何体合成しますか？\n"
-                f"-# 一度に{max_count}体まで合成できます。\n"
-                f"-# 費用は素材1体につき {game_shared.format_coin(unit_cost)} です。\n"
-                "-# ※素材にした使い魔は消費されます。"
+                f"-# 1度に{max_count}体まで合成できます。\n"
+                f"-# 費用は素材1体につき {game_shared.format_coin(unit_cost)} です。"
             ),
             view=view,
             ephemeral=True,
@@ -793,11 +791,7 @@ async def _open_sell(interaction: discord.Interaction) -> None:
 
     view = SellSelectView(user_id=interaction.user.id, rows=candidates)
     await interaction.followup.send(
-        content=(
-            "売却する使い魔を選択してください。\n"
-            "-# ※取り消しできません。\n"
-            f"{LOCKED_NOTICE}"
-        ),
+        content="売却する使い魔を選択してください",
         view=view,
         ephemeral=True,
     )
@@ -856,8 +850,7 @@ class SellSelectView(GroupPageView):
         await interaction.followup.send(
             content=(
                 f"**{service.instance_title(row)}** を何体売却しますか？\n"
-                f"-# 1体あたり {game_shared.format_coin(unit_price)}／所有 {len(sellable)}体\n"
-                "-# ※取り消しできません。"
+                f"-# 1体あたり {game_shared.format_coin(unit_price)}／所有 {len(sellable)}体"
             ),
             view=view,
             ephemeral=True,
@@ -1062,38 +1055,16 @@ def build_gacha_panel_embed() -> discord.Embed:
 def build_manage_panel_embed() -> discord.Embed:
     """使い魔管理パネルのEmbedを作る（一覧・合成・売却を1枚にまとめる）。"""
 
-    master = load_master_data()
-
-    prices = "／".join(
-        f"{rank} {master.familiar.sell_base_prices[rank]:,}"
-        for rank in reversed(master.familiar.rank_order)
-        if rank in master.familiar.sell_base_prices
-    )
-
-    fusion_prices = "／".join(
-        f"{rank} {master.fusion_cost(rank, 1):,}"
-        for rank in reversed(master.familiar.rank_order)
-        if rank in master.familiar.sell_base_prices
-    )
-
     return discord.Embed(
         title=MANAGE_PANEL_TITLE,
         description=(
             "​\n"
             "**一覧**\n"
-            "-# 所有している使い魔を選ぶと、能力・スキル・画像を確認できます。\n\n"
+            "-# 所有している使い魔の能力・スキル・画像を確認できます。\n\n"
             "**合成**\n"
-            "-# 同じ種類の使い魔を素材にしてレベルアップします。"
-            f"（上限はLv.{master.familiar.max_level}）\n"
-            f"-# 費用：{fusion_prices}\n"
-            "-# 素材1体につき上記のcoinがかかります。体数を選ぶ画面で合計額を確認できます。\n"
-            "-# ※素材にした使い魔は消費されます。\n\n"
+            "-# 同じ使い魔を合成してレベルアップできます。\n\n"
             "**売却**\n"
             "-# 不要な使い魔をcoinへ換金します。\n"
-            "-# ※取り消しできません。\n"
-            f"-# 基準価格：{prices}\n"
-            "-# 売却額は「基準価格 × レベル」です。\n\n"
-            f"{LOCKED_NOTICE}"
         ),
         color=game_shared.RANK_COLORS.get("B", 0xBEDBFF),
     )
