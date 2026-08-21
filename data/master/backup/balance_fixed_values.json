@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "note": "ゲームバランスの数値。コードへ直接書かず、必ずこのファイルから読み込む。battle.bet はギルドバトルのベット額とXP。負けた側のcoinが勝った側へ移る。battle.bet.rates はバトル申請・募集で選ぶレートの一覧で、上から順にセレクトへ並ぶ。familiar.fusion_cost_rate_per_material は合成1体あたりの費用（ランク基準価格に対する割合）。0にすると合成は無料になる。battle.max_total_cost は編成の合計COST上限。0なら無制限。",
+  "guild": {
+    "create_cost": 1000000,
+    "rename_cost": 50000,
+    "member_slot_cost": 100000,
+    "initial_capacity": 5,
+    "max_capacity": 10,
+    "name_min_length": 1,
+    "name_max_length": 30,
+    "description_min_length": 1,
+    "description_max_length": 300,
+    "archive_days": 30,
+    "archive_name_prefix": "【解散済】"
+  },
+  "familiar": {
+    "rank_order": [
+      "C",
+      "B",
+      "A",
+      "S"
+    ],
+    "usable_rank_offset": 1,
+    "min_level": 1,
+    "max_level": 10,
+    "hp_growth_rate_per_level": 0.05,
+    "atk_growth_rate_per_level": 0.05,
+    "speed_growth_levels": [
+      1,
+      3,
+      5,
+      7,
+      9
+    ],
+    "speed_growth_value": 1,
+    "speed_max": 100,
+    "sell_base_prices": {
+      "C": 2000,
+      "B": 5000,
+      "A": 15000,
+      "S": 50000
+    },
+    "sell_price_multiplier": 1.0,
+    "fusion_cost_rate_per_material": 0.5
+  },
+  "battle": {
+    "max_units": 5,
+    "max_total_cost": 20,
+    "max_members": 5,
+    "min_members": 1,
+    "familiars_per_member": {
+      "1": 5,
+      "2": 3,
+      "3": 2,
+      "4": 2,
+      "5": 1
+    },
+    "critical_chance_permille": 100,
+    "critical_multiplier": 1.5,
+    "atk_buff_cap": 10,
+    "atk_debuff_cap": 10,
+    "same_skill_stack_limit": 3,
+    "guild_time_seconds": 1800,
+    "turn_time_seconds": 300,
+    "battle_channel_retention_days": 7,
+    "surrender_reward_from_round": 3,
+    "bet": {
+      "coin": 20000,
+      "win_xp": 40,
+      "lose_xp": 20,
+      "draw_xp": 20,
+      "rates": [
+        { "rate_id": "low", "name": "低レート", "coin": 5000 },
+        { "rate_id": "middle", "name": "中レート", "coin": 20000 },
+        { "rate_id": "high", "name": "高レート", "coin": 50000 },
+        { "rate_id": "super", "name": "超レート", "coin": 200000 },
+        { "rate_id": "transcendent", "name": "超越レート", "coin": 1000000 }
+      ]
+    },
+    "reward_daily_limit_per_player": 3,
+    "ranking": {
+      "win_points": 3,
+      "draw_points": 1,
+      "lose_points": 0,
+      "display_limit": 20
+    },
+    "battle_log_retention_days": 365,
+    "admin_log_retention_days": 180
+  }
+}

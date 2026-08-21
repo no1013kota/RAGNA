@@ -1249,8 +1249,6 @@ def build_settlement_embed(
 
         lines.append("")
 
-    lines.append(f"-# {bet_notice(bet_coin)}")
-
     return discord.Embed(
         title="バトル清算",
         description="\n".join(lines)[:4000],

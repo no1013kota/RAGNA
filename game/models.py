@@ -264,6 +264,24 @@ TARGET_EVENT_UNIT = "event_unit"
 TARGET_EVENT_SOURCE = "event_source"
 TARGET_SELECTION_PREFIX = "selection:"
 
+# 効果量を割合で決めるときの基準（19.1節）。
+# レベルが上がって能力値が伸びれば、スキルの効果量も一緒に伸びる。
+PERCENT_OF_ACTOR_ATK = "actor_atk"  # スキルを使った側の現在ATK
+PERCENT_OF_ACTOR_MAX_HP = "actor_max_hp"  # スキルを使った側の最大HP
+PERCENT_OF_TARGET_ATK = "target_atk"  # 効果を受ける側の現在ATK
+PERCENT_OF_TARGET_MAX_HP = "target_max_hp"  # 効果を受ける側の最大HP
+PERCENT_OF_SPEED_CAP = "speed_cap"  # SPDの上限値（balance.json の speed_max）
+
+PERCENT_BASES = frozenset(
+    {
+        PERCENT_OF_ACTOR_ATK,
+        PERCENT_OF_ACTOR_MAX_HP,
+        PERCENT_OF_TARGET_ATK,
+        PERCENT_OF_TARGET_MAX_HP,
+        PERCENT_OF_SPEED_CAP,
+    }
+)
+
 
 # ==================================================
 # 共通の計算処理
@@ -334,6 +352,11 @@ class SkillEffect:
     # 複数のタイミングを持つスキルで、この効果を出すタイミングを限定する。
     # None のときはスキルのどのタイミングでも出す。
     on_trigger: str | None = None
+    # 効果量を割合で決める場合の指定（19.1節）。``percent`` は符号付きの百分率、
+    # ``percent_of`` はその基準（``PERCENT_BASES``）。``percent`` が None のときは
+    # ``value`` の固定値をそのまま使う。
+    percent: int | None = None
+    percent_of: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -345,6 +368,8 @@ class SkillEffect:
             "duration_type": self.duration_type,
             "params": dict(self.params),
             "on_trigger": self.on_trigger,
+            "percent": self.percent,
+            "percent_of": self.percent_of,
         }
 
     @classmethod
@@ -358,6 +383,8 @@ class SkillEffect:
             duration_type=data.get("duration_type") or DURATION_INSTANT,
             params=dict(data.get("params") or {}),
             on_trigger=data.get("on_trigger"),
+            percent=data.get("percent"),
+            percent_of=data.get("percent_of"),
         )
 
 

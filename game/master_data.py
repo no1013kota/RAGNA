@@ -17,6 +17,7 @@ from typing import Any
 from .models import (
     DURATION_TYPES,
     EFFECT_TYPES,
+    PERCENT_BASES,
     GENDER_VALUES,
     SKILL_TYPES,
     TRIGGERS,
@@ -605,6 +606,33 @@ def _load_skills() -> dict[str, Skill]:
                 raise MasterDataError(f"{skill_id}: duration_turns は1以上にしてください")
             if effect.chance is not None and not 0 <= effect.chance <= 1000:
                 raise MasterDataError(f"{skill_id}: chance は0～1000で設定してください")
+
+            if effect.percent is not None:
+                if effect.percent_of not in PERCENT_BASES:
+                    raise MasterDataError(
+                        f"{skill_id}: 未対応のpercent_ofです: {effect.percent_of}"
+                    )
+                if effect.value is not None:
+                    raise MasterDataError(
+                        f"{skill_id}: percent と value は同時に設定できません"
+                    )
+            elif effect.percent_of is not None:
+                raise MasterDataError(
+                    f"{skill_id}: percent_of には percent も設定してください"
+                )
+
+            damage_percent = effect.params.get("damage_percent")
+            if damage_percent is not None:
+                if effect.params.get("damage_percent_of") not in PERCENT_BASES:
+                    raise MasterDataError(
+                        f"{skill_id}: 未対応のparams.damage_percent_ofです: "
+                        f"{effect.params.get('damage_percent_of')}"
+                    )
+                if effect.params.get("damage") is not None:
+                    raise MasterDataError(
+                        f"{skill_id}: params.damage_percent と params.damage は"
+                        "同時に設定できません"
+                    )
 
             if effect.target_type.startswith("selection:"):
                 key = effect.target_type.split(":", 1)[1]

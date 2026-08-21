@@ -101,6 +101,15 @@ def unit_of(state: BattleState, familiar_id: str, guild_id: int) -> BattleUnit:
     raise AssertionError(f"{familiar_id} が見つかりません")
 
 
+def percent_of(basis: int, percent: int) -> int:
+    """割合指定スキルの効果量を求める（``skill_engine.effect_amount`` と同じ丸め）。
+
+    スキルの効果量は能力値に対する割合で決まるため、期待値も同じ式で書きます。
+    """
+
+    return max(1, int(basis * abs(percent) / 100 + 0.5))
+
+
 def force_turn(state: BattleState, unit: BattleUnit) -> None:
     """指定した使い魔の行動順へ強制的に移す。"""
 
@@ -1154,10 +1163,11 @@ class DefeatTests(unittest.TestCase):
         battle_engine.perform_attack(state, attacker, ally)
 
         self.assertTrue(ally.alive)
-        self.assertEqual(ally.current_hp, 10)
+        # 冥府の呼び声：対象の最大HP30%で蘇生する
+        self.assertEqual(ally.current_hp, percent_of(ally.max_hp, 30))
 
     def test_banshee_adds_healing_on_revive(self) -> None:
-        # 13節：ヘルのHP10蘇生なら最終HP18で復帰する
+        # 13節：蘇生（最大HP30%）に、死者の慟哭の回復（最大HP25%）が上乗せされる
         state = build_state(
             [("hel", 1), ("banshee", 1), ("garm", 1)], [("cyclops", 1)]
         )
@@ -1170,7 +1180,10 @@ class DefeatTests(unittest.TestCase):
         battle_engine.perform_attack(state, attacker, ally)
 
         self.assertTrue(ally.alive)
-        self.assertEqual(ally.current_hp, 18)
+        self.assertEqual(
+            ally.current_hp,
+            percent_of(ally.max_hp, 30) + percent_of(ally.max_hp, 25),
+        )
 
     def test_a_defeated_familiar_stops_firing_its_passives(self) -> None:
         # 19.3節：戦闘不能の使い魔のパッシブは発動しない（全キャラ共通）
@@ -1202,7 +1215,7 @@ class DefeatTests(unittest.TestCase):
         battle_engine.deal_damage(state, surtr, cyclops, 99, attack_type="normal")
 
         self.assertTrue(cyclops.alive)
-        self.assertEqual(cyclops.current_hp, 10)
+        self.assertEqual(cyclops.current_hp, percent_of(cyclops.max_hp, 30))
 
     def test_surviving_passives_are_unaffected(self) -> None:
         # 「戦闘不能になる直前」に耐えるパッシブは、まだ生きているので発動する
@@ -1231,7 +1244,8 @@ class DefeatTests(unittest.TestCase):
         use_skill(state, caster, "phoenix_active", {"main": [ally.battle_unit_id]})
 
         self.assertTrue(ally.alive)
-        self.assertEqual(ally.current_hp, 16)
+        # 再誕の炎：対象の最大HP50%で蘇生する
+        self.assertEqual(ally.current_hp, percent_of(ally.max_hp, 50))
 
     def test_effects_survive_defeat_and_revive(self) -> None:
         state = build_state([("phoenix", 1), ("garm", 1)], [("cyclops", 1)])
@@ -1447,7 +1461,11 @@ class PassiveTests(unittest.TestCase):
         strongest = unit_of(state, "cyclops", GUILD_B)  # ATK10
         other = unit_of(state, "garm", GUILD_B)  # ATK9
 
-        self.assertEqual(effects.compute_atk(state, strongest), strongest.base_atk - 1)
+        # 惑わしの歌：対象のATK15%を下げる
+        self.assertEqual(
+            effects.compute_atk(state, strongest),
+            strongest.base_atk - percent_of(strongest.base_atk, 15),
+        )
         self.assertEqual(effects.compute_atk(state, other), other.base_atk)
 
     def test_cerberus_boosts_attacks_on_weakened_enemies(self) -> None:
@@ -1528,7 +1546,8 @@ class PassiveTests(unittest.TestCase):
             battle_engine.auto_action(state, elapsed_seconds=0)
 
         self.assertEqual(state.current_unit_id, paimon.battle_unit_id)
-        self.assertEqual(weakest.current_hp, 9)
+        # 王の施し：対象の最大HP12%を回復する
+        self.assertEqual(weakest.current_hp, 5 + percent_of(weakest.max_hp, 12))
         self.assertEqual(healthy.current_hp, healthy.max_hp)
 
     def test_sphinx_nullifies_only_the_first_status(self) -> None:

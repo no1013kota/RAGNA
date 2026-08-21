@@ -40,6 +40,11 @@ from .models import (
     EFFECT_STATUS_REFLECT,
     EFFECT_SURVIVE_WITH_HP,
     EFFECT_TAUNT,
+    PERCENT_OF_ACTOR_ATK,
+    PERCENT_OF_ACTOR_MAX_HP,
+    PERCENT_OF_SPEED_CAP,
+    PERCENT_OF_TARGET_ATK,
+    PERCENT_OF_TARGET_MAX_HP,
     STATUS_LABELS,
     STATUS_POISON,
     TARGET_ALLY_ALL,
@@ -67,6 +72,88 @@ def _engine():
     from . import battle_engine
 
     return battle_engine
+
+
+# ==================================================
+# 効果量（割合指定）
+# ==================================================
+def percent_basis(
+    owner: BattleUnit | None,
+    target: BattleUnit | None,
+    percent_of: str | None,
+) -> int:
+    """割合指定の基準値を返す（19.1節）。
+
+    ``owner`` はスキルを使った側、``target`` は効果を受ける側です。
+    片方しか分からない場面では、もう片方に同じ使い魔を渡してかまいません。
+    """
+
+    if percent_of == PERCENT_OF_ACTOR_ATK:
+        return owner.current_atk if owner else 0
+
+    if percent_of == PERCENT_OF_ACTOR_MAX_HP:
+        return owner.max_hp if owner else 0
+
+    if percent_of == PERCENT_OF_TARGET_ATK:
+        unit = target or owner
+        return unit.current_atk if unit else 0
+
+    if percent_of == PERCENT_OF_TARGET_MAX_HP:
+        unit = target or owner
+        return unit.max_hp if unit else 0
+
+    if percent_of == PERCENT_OF_SPEED_CAP:
+        return int(load_master_data().familiar.speed_max)
+
+    return 0
+
+
+def effect_amount(
+    effect: SkillEffect,
+    owner: BattleUnit | None = None,
+    target: BattleUnit | None = None,
+) -> int:
+    """効果1つの実際の数値を返す（19.1節）。
+
+    ``percent`` が設定されていれば基準値からの割合で計算し、なければ
+    ``value`` の固定値をそのまま使います。四捨五入したうえで、割合が0でない
+    限り最低でも1は動くようにします（低レベルで効果が消えないようにするため）。
+    符号は ``percent`` 側が持ちます。
+    """
+
+    if effect.percent is None:
+        return int(effect.value or 0)
+
+    percent = int(effect.percent)
+    if percent == 0:
+        return 0
+
+    basis = percent_basis(owner, target, effect.percent_of)
+    amount = max(1, int(abs(basis) * abs(percent) / 100 + 0.5))
+
+    return amount if percent > 0 else -amount
+
+
+def status_damage(
+    effect: SkillEffect,
+    owner: BattleUnit | None = None,
+    target: BattleUnit | None = None,
+) -> int:
+    """毒などの継続ダメージ量を返す。
+
+    ``params.damage_percent`` があれば ``params.damage_percent_of`` を基準に
+    割合で計算し、なければ ``params.damage`` の固定値を使います。
+    """
+
+    percent = effect.params.get("damage_percent")
+    if percent is None:
+        return int(effect.params.get("damage", 0))
+
+    basis = percent_basis(
+        owner, target, str(effect.params.get("damage_percent_of", ""))
+    )
+
+    return max(1, int(abs(basis) * abs(int(percent)) / 100 + 0.5))
 
 
 # ==================================================
@@ -592,7 +679,8 @@ def _apply_single_effect(
     engine = _engine()
     targets = resolve_targets(state, owner, effect, context, selections)
     effect_type = effect.effect_type
-    value = int(effect.value or 0)
+    # 割合指定の効果は対象ごとに数値が変わるため、対象が決まってから計算する。
+    value = effect_amount(effect, owner, owner)
 
     if effect_type == EFFECT_DAMAGE:
         # スキル本文の固定ダメージは「スキルダメージ」。クリティカルも
@@ -605,7 +693,7 @@ def _apply_single_effect(
                 state,
                 owner,
                 target,
-                value,
+                effect_amount(effect, owner, target),
                 attack_type=damage_kind,
                 skill_id=skill.skill_id,
                 can_critical=damage_kind in engine.ATTACK_DAMAGE_TYPES,
@@ -637,14 +725,20 @@ def _apply_single_effect(
 
     if effect_type == EFFECT_HEAL:
         for target in targets:
-            engine.heal_unit(state, owner, target, value, skill_id=skill.skill_id)
+            engine.heal_unit(
+                state,
+                owner,
+                target,
+                effect_amount(effect, owner, target),
+                skill_id=skill.skill_id,
+            )
         return
 
     if effect_type == EFFECT_HEAL_PER_DEFEAT:
         if context.defeats_caused <= 0:
             return
-        amount = value * context.defeats_caused
         for target in targets:
+            amount = effect_amount(effect, owner, target) * context.defeats_caused
             engine.heal_unit(state, owner, target, amount, skill_id=skill.skill_id)
         return
 
@@ -655,7 +749,13 @@ def _apply_single_effect(
 
     if effect_type == EFFECT_REVIVE:
         for target in targets:
-            engine.revive_unit(state, owner, target, value, skill_id=skill.skill_id)
+            engine.revive_unit(
+                state,
+                owner,
+                target,
+                effect_amount(effect, owner, target),
+                skill_id=skill.skill_id,
+            )
         return
 
     if effect_type == EFFECT_SURVIVE_WITH_HP:
@@ -713,7 +813,7 @@ def _apply_single_effect(
                 target,
                 status,
                 duration_turns=int(effect.duration_turns or 1),
-                damage=int(effect.params.get("damage", 0)),
+                damage=status_damage(effect, owner, target),
                 skill_id=skill.skill_id,
             )
         return
@@ -789,12 +889,14 @@ def _apply_single_effect(
             # 能力値の変化を「前 → 後」で見せるため、付与前の値を控える
             atk_before = target.current_atk
             speed_before = target.speed
+            # 割合指定はここで実数へ直す。以降は固定値と同じ扱いになる。
+            amount = effect_amount(effect, owner, target)
 
             applied = effects_module.apply_effect(
                 state,
                 target,
                 effect_type=effect_type,
-                value=effect.value,
+                value=amount,
                 duration_type=effect.duration_type,
                 duration_turns=effect.duration_turns,
                 source_unit=owner,
@@ -810,9 +912,9 @@ def _apply_single_effect(
                 actor_unit_id=owner.battle_unit_id,
                 target_unit_id=target.battle_unit_id,
                 skill_id=skill.skill_id,
-                amount=effect.value,
+                amount=amount,
                 effect_type=effect_type,
-                text=_effect_log_text(effect_type, effect),
+                text=_effect_log_text(effect_type, effect, amount),
                 atk_before=atk_before,
                 atk_after=target.current_atk,
                 speed_before=speed_before,
@@ -823,8 +925,10 @@ def _apply_single_effect(
         return
 
 
-def _effect_log_text(effect_type: str, effect: SkillEffect) -> str:
-    value = int(effect.value or 0)
+def _effect_log_text(effect_type: str, effect: SkillEffect, amount: int) -> str:
+    """効果ログの本文。``amount`` は割合指定を実数へ直したあとの数値。"""
+
+    value = int(amount)
 
     if effect_type in {
         EFFECT_ATK_MODIFIER,
@@ -1009,7 +1113,7 @@ def register_always_passives(state: BattleState) -> None:
                     state,
                     unit,
                     effect_type=effect.effect_type,
-                    value=effect.value,
+                    value=effect_amount(effect, unit, unit),
                     duration_type=DURATION_PERMANENT,
                     source_unit=unit,
                     source_skill_id=skill.skill_id,

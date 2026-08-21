@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "note": "docs/BATTLE_RULES.md のスキル文面をそのまま実装できる形にした定義。文面を変える場合は両方を同じ変更として更新すること。効果量はレベルに応じて伸びるよう、ATK・最大HP・SPD上限に対する割合（percent / percent_of）で指定する。",
+  "version": 2,
+  "note": "docs/BATTLE_RULES.md のスキル文面をそのまま実装できる形にした定義。文面を変える場合は両方を同じ変更として更新すること。",
   "skills": [
     {
       "skill_id": "loki_passive",
@@ -82,7 +82,7 @@
     {
       "skill_id": "surtr_passive",
       "name": "終末の巨人",
-      "description": "受ける攻撃ダメージを自身の最大HP5%分だけ軽減する。さらに、スルト以外の味方が戦闘不能になるたび、自身のATK+20%。",
+      "description": "受ける攻撃ダメージを-2する。さらに、スルト以外の味方が戦闘不能になるたび、自身のATK+2。",
       "skill_type": "passive",
       "trigger": "battle_start",
       "extra_triggers": [
@@ -106,19 +106,17 @@
       "effects": [
         {
           "effect_type": "attack_damage_reduction",
-          "value": null,
+          "value": -2,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
           "duration_type": "permanent",
           "params": {},
-          "on_trigger": "battle_start",
-          "percent": -5,
-          "percent_of": "target_max_hp"
+          "on_trigger": "battle_start"
         },
         {
           "effect_type": "atk_modifier",
-          "value": null,
+          "value": 2,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
@@ -126,18 +124,16 @@
           "params": {
             "stack": true
           },
-          "on_trigger": "on_defeat",
-          "percent": 20,
-          "percent_of": "target_atk"
+          "on_trigger": "on_defeat"
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "surtr_active",
       "name": "終末の進軍",
-      "description": "このACTIVEによる2回の攻撃時、自身のATK+30%。敵へ2回攻撃する。各攻撃の対象は個別に選択できる。このターンの攻撃を消費する。",
+      "description": "このACTIVEによる2回の攻撃時、自身のATK+3。敵へ2回攻撃する。各攻撃の対象は個別に選択できる。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -158,7 +154,7 @@
       "effects": [
         {
           "effect_type": "next_attack_atk_modifier",
-          "value": null,
+          "value": 3,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
@@ -166,9 +162,7 @@
           "params": {
             "attacks": 2
           },
-          "on_trigger": null,
-          "percent": 30,
-          "percent_of": "actor_atk"
+          "on_trigger": null
         },
         {
           "effect_type": "attack",
@@ -185,12 +179,12 @@
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "fenrir_passive",
       "name": "先駆の魔狼",
-      "description": "各ラウンドで初めて、まだ行動していない敵を攻撃する時、その攻撃のみATK+50%。",
+      "description": "各ラウンドで初めて、まだ行動していない敵を攻撃する時、その攻撃のみATK+6。",
       "skill_type": "passive",
       "trigger": "before_attack",
       "extra_triggers": [],
@@ -211,7 +205,7 @@
       "effects": [
         {
           "effect_type": "next_attack_atk_modifier",
-          "value": null,
+          "value": 6,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
@@ -219,13 +213,11 @@
           "params": {
             "attacks": 1
           },
-          "on_trigger": null,
-          "percent": 50,
-          "percent_of": "actor_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "fenrir_active",
@@ -267,7 +259,7 @@
     {
       "skill_id": "jormungandr_passive",
       "name": "世界を囲む蛇",
-      "description": "バトル開始時、敵全体のATK-15%。",
+      "description": "バトル開始時、敵全体のATK-1。",
       "skill_type": "passive",
       "trigger": "battle_start",
       "extra_triggers": [],
@@ -280,24 +272,22 @@
       "effects": [
         {
           "effect_type": "atk_modifier",
-          "value": null,
+          "value": -1,
           "duration_turns": null,
           "chance": null,
           "target_type": "enemy_all",
           "duration_type": "permanent",
           "params": {},
-          "on_trigger": null,
-          "percent": -15,
-          "percent_of": "target_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "jormungandr_active",
       "name": "世界毒",
-      "description": "生存している敵全体へ、自身のATK60%のスキルダメージ + 毒（自身のATK30%×2ターン）。このターンの攻撃を消費する。",
+      "description": "生存している敵全体へ、4スキルダメージ + 毒（2ダメージ×2ターン）。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -310,7 +300,7 @@
       "effects": [
         {
           "effect_type": "damage",
-          "value": null,
+          "value": 4,
           "duration_turns": null,
           "chance": null,
           "target_type": "enemy_all",
@@ -318,9 +308,7 @@
           "params": {
             "damage_kind": "skill"
           },
-          "on_trigger": null,
-          "percent": 60,
-          "percent_of": "actor_atk"
+          "on_trigger": null
         },
         {
           "effect_type": "status",
@@ -331,19 +319,18 @@
           "duration_type": "turns",
           "params": {
             "status": "poison",
-            "damage_percent": 30,
-            "damage_percent_of": "actor_atk"
+            "damage": 2
           },
           "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "hel_passive",
       "name": "冥府の呼び声",
-      "description": "味方がバトル中初めて戦闘不能になった時、その使い魔を最大HP30%で蘇生する。",
+      "description": "味方がバトル中初めて戦闘不能になった時、その使い魔をHP10で蘇生する。",
       "skill_type": "passive",
       "trigger": "on_defeat",
       "extra_triggers": [],
@@ -360,19 +347,17 @@
       "effects": [
         {
           "effect_type": "revive",
-          "value": null,
+          "value": 10,
           "duration_turns": null,
           "chance": null,
           "target_type": "event_unit",
           "duration_type": "instant",
           "params": {},
-          "on_trigger": null,
-          "percent": 30,
-          "percent_of": "target_max_hp"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "hel_active",
@@ -475,7 +460,7 @@
     {
       "skill_id": "beelzebub_passive",
       "name": "蠅王の瘴気",
-      "description": "バトル開始時、敵全体に毒（自身のATK40%×2ターン）を付与する。",
+      "description": "バトル開始時、敵全体に毒（3ダメージ×2ターン）を付与する。",
       "skill_type": "passive",
       "trigger": "battle_start",
       "extra_triggers": [],
@@ -495,19 +480,18 @@
           "duration_type": "turns",
           "params": {
             "status": "poison",
-            "damage_percent": 40,
-            "damage_percent_of": "actor_atk"
+            "damage": 3
           },
           "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "asmodeus_passive",
       "name": "色欲の権能",
-      "description": "バトル開始時、味方全員のATK+15%。",
+      "description": "バトル開始時、味方全員のATK+1。",
       "skill_type": "passive",
       "trigger": "battle_start",
       "extra_triggers": [],
@@ -520,19 +504,17 @@
       "effects": [
         {
           "effect_type": "atk_modifier",
-          "value": null,
+          "value": 1,
           "duration_turns": null,
           "chance": null,
           "target_type": "ally_all",
           "duration_type": "permanent",
           "params": {},
-          "on_trigger": null,
-          "percent": 15,
-          "percent_of": "target_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "belphegor_passive",
@@ -609,7 +591,7 @@
     {
       "skill_id": "mammon_active",
       "name": "強欲",
-      "description": "敵1体のATK-25%。さらに自身のATK+20%。両方ともラウンド終了まで継続する。",
+      "description": "敵1体のATK-2。さらに自身のATK+2。両方ともラウンド終了まで継続する。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -629,31 +611,27 @@
       "effects": [
         {
           "effect_type": "atk_modifier",
-          "value": null,
+          "value": -2,
           "duration_turns": null,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "round_end",
           "params": {},
-          "on_trigger": null,
-          "percent": -25,
-          "percent_of": "target_atk"
+          "on_trigger": null
         },
         {
           "effect_type": "atk_modifier",
-          "value": null,
+          "value": 2,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
           "duration_type": "round_end",
           "params": {},
-          "on_trigger": null,
-          "percent": 20,
-          "percent_of": "target_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "nidhogg_passive",
@@ -694,7 +672,7 @@
     {
       "skill_id": "fafnir_active",
       "name": "黄金の加護",
-      "description": "味方1体のHPを、その使い魔の最大HP65%分回復する。",
+      "description": "味方1体のHPを20回復する。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -714,24 +692,22 @@
       "effects": [
         {
           "effect_type": "heal",
-          "value": null,
+          "value": 20,
           "duration_turns": null,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "instant",
           "params": {},
-          "on_trigger": null,
-          "percent": 65,
-          "percent_of": "target_max_hp"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "abaddon_active",
       "name": "奈落崩壊",
-      "description": "生存している敵全体へ、自身のATK45%のスキルダメージ。このターンの攻撃を消費する。",
+      "description": "生存している敵全体へ5スキルダメージ。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -744,7 +720,7 @@
       "effects": [
         {
           "effect_type": "damage",
-          "value": null,
+          "value": 5,
           "duration_turns": null,
           "chance": null,
           "target_type": "enemy_all",
@@ -752,13 +728,11 @@
           "params": {
             "damage_kind": "skill"
           },
-          "on_trigger": null,
-          "percent": 45,
-          "percent_of": "actor_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "belial_passive",
@@ -827,7 +801,7 @@
     {
       "skill_id": "kyubi_active",
       "name": "妖狐幻術",
-      "description": "敵1体のSPD-20%（2ターン）。",
+      "description": "敵1体のSPD-20（2ターン）。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -847,24 +821,22 @@
       "effects": [
         {
           "effect_type": "speed_modifier",
-          "value": null,
+          "value": -20,
           "duration_turns": 2,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "turns",
           "params": {},
-          "on_trigger": null,
-          "percent": -20,
-          "percent_of": "speed_cap"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "lilith_passive",
       "name": "夜の誘惑",
-      "description": "バトル開始時、男性の敵全体のATK-25%。",
+      "description": "バトル開始時、男性の敵全体のATK-2。",
       "skill_type": "passive",
       "trigger": "battle_start",
       "extra_triggers": [],
@@ -877,7 +849,7 @@
       "effects": [
         {
           "effect_type": "atk_modifier",
-          "value": null,
+          "value": -2,
           "duration_turns": null,
           "chance": null,
           "target_type": "enemy_all",
@@ -885,18 +857,16 @@
           "params": {
             "gender": "male"
           },
-          "on_trigger": null,
-          "percent": -25,
-          "percent_of": "target_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "phoenix_active",
       "name": "再誕の炎",
-      "description": "戦闘不能の味方1体を最大HP50%で蘇生する。このターンの攻撃を消費する。",
+      "description": "戦闘不能の味方1体をHP16で蘇生する。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -920,24 +890,22 @@
       "effects": [
         {
           "effect_type": "revive",
-          "value": null,
+          "value": 16,
           "duration_turns": null,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "instant",
           "params": {},
-          "on_trigger": null,
-          "percent": 50,
-          "percent_of": "target_max_hp"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "hraesvelgr_passive",
       "name": "暴風の翼",
-      "description": "攻撃ダメージを与えた敵のSPD-5%（1ターン）。",
+      "description": "攻撃ダメージを与えた敵のSPD-5（1ターン）。",
       "skill_type": "passive",
       "trigger": "after_attack",
       "extra_triggers": [],
@@ -958,19 +926,17 @@
       "effects": [
         {
           "effect_type": "speed_modifier",
-          "value": null,
+          "value": -5,
           "duration_turns": 1,
           "chance": null,
           "target_type": "event_unit",
           "duration_type": "turns",
           "params": {},
-          "on_trigger": null,
-          "percent": -5,
-          "percent_of": "speed_cap"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "medusa_active",
@@ -1012,7 +978,7 @@
     {
       "skill_id": "cerberus_passive",
       "name": "三頭の狩り",
-      "description": "HP50%以下の敵を攻撃する時、その攻撃のみATK+25%。",
+      "description": "HP50%以下の敵を攻撃する時、その攻撃のみATK+2。",
       "skill_type": "passive",
       "trigger": "before_attack",
       "extra_triggers": [],
@@ -1030,7 +996,7 @@
       "effects": [
         {
           "effect_type": "next_attack_atk_modifier",
-          "value": null,
+          "value": 2,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
@@ -1038,13 +1004,11 @@
           "params": {
             "attacks": 1
           },
-          "on_trigger": null,
-          "percent": 25,
-          "percent_of": "actor_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "hydra_passive",
@@ -1080,7 +1044,7 @@
     {
       "skill_id": "chimera_passive",
       "name": "異形の狩り",
-      "description": "状態異常またはデバフを受けている敵を攻撃する時、その攻撃のみATK+30%。",
+      "description": "状態異常またはデバフを受けている敵を攻撃する時、その攻撃のみATK+2。",
       "skill_type": "passive",
       "trigger": "before_attack",
       "extra_triggers": [],
@@ -1097,7 +1061,7 @@
       "effects": [
         {
           "effect_type": "next_attack_atk_modifier",
-          "value": null,
+          "value": 2,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
@@ -1105,18 +1069,16 @@
           "params": {
             "attacks": 1
           },
-          "on_trigger": null,
-          "percent": 30,
-          "percent_of": "actor_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "yuki_onna_active",
       "name": "凍てつく風",
-      "description": "敵全体のSPD-5%（1ターン）。このターンの攻撃を消費する。",
+      "description": "敵全体のSPD-5（1ターン）。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -1129,24 +1091,22 @@
       "effects": [
         {
           "effect_type": "speed_modifier",
-          "value": null,
+          "value": -5,
           "duration_turns": 1,
           "chance": null,
           "target_type": "enemy_all",
           "duration_type": "turns",
           "params": {},
-          "on_trigger": null,
-          "percent": -5,
-          "percent_of": "speed_cap"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "azazel_active",
       "name": "堕天の鼓舞",
-      "description": "味方1体のATK+15%（2ターン）。",
+      "description": "味方1体のATK+1（2ターン）。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -1166,24 +1126,22 @@
       "effects": [
         {
           "effect_type": "atk_modifier",
-          "value": null,
+          "value": 1,
           "duration_turns": 2,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "turns",
           "params": {},
-          "on_trigger": null,
-          "percent": 15,
-          "percent_of": "target_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "paimon_passive",
       "name": "王の施し",
-      "description": "自分のターン開始時、生存している味方の中で現在HPが最も低い1体のHPを、その使い魔の最大HP12%分回復する。",
+      "description": "自分のターン開始時、生存している味方の中で現在HPが最も低い1体のHPを4回復する。",
       "skill_type": "passive",
       "trigger": "turn_start",
       "extra_triggers": [],
@@ -1200,7 +1158,7 @@
       "effects": [
         {
           "effect_type": "heal",
-          "value": null,
+          "value": 4,
           "duration_turns": null,
           "chance": null,
           "target_type": "ally_all",
@@ -1208,13 +1166,11 @@
           "params": {
             "pick": "lowest_hp"
           },
-          "on_trigger": null,
-          "percent": 12,
-          "percent_of": "target_max_hp"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "sphinx_passive",
@@ -1251,7 +1207,7 @@
     {
       "skill_id": "siren_passive",
       "name": "惑わしの歌",
-      "description": "バトル開始時、男性の敵の中で最もATKが高い1体のATK-15%。",
+      "description": "バトル開始時、男性の敵の中で最もATKが高い1体のATK-1。",
       "skill_type": "passive",
       "trigger": "battle_start",
       "extra_triggers": [],
@@ -1264,7 +1220,7 @@
       "effects": [
         {
           "effect_type": "atk_modifier",
-          "value": null,
+          "value": -1,
           "duration_turns": null,
           "chance": null,
           "target_type": "enemy_all",
@@ -1273,18 +1229,16 @@
             "gender": "male",
             "pick": "highest_atk"
           },
-          "on_trigger": null,
-          "percent": -15,
-          "percent_of": "target_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "kraken_passive",
       "name": "深海の拘束",
-      "description": "通常攻撃を受けた時、攻撃した敵のSPD-4%（1ターン）。",
+      "description": "通常攻撃を受けた時、攻撃した敵のSPD-4（1ターン）。",
       "skill_type": "passive",
       "trigger": "on_damage",
       "extra_triggers": [],
@@ -1301,24 +1255,22 @@
       "effects": [
         {
           "effect_type": "speed_modifier",
-          "value": null,
+          "value": -4,
           "duration_turns": 1,
           "chance": null,
           "target_type": "event_source",
           "duration_type": "turns",
           "params": {},
-          "on_trigger": null,
-          "percent": -4,
-          "percent_of": "speed_cap"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "dullahan_passive",
       "name": "首無し騎士",
-      "description": "攻撃ダメージによって戦闘不能になる時、最大HP4%で耐える。スキルダメージ・継続ダメージでは発動しない。",
+      "description": "攻撃ダメージによって戦闘不能になる時、HP1で耐える。スキルダメージ・継続ダメージでは発動しない。",
       "skill_type": "passive",
       "trigger": "before_defeat",
       "extra_triggers": [],
@@ -1338,24 +1290,22 @@
       "effects": [
         {
           "effect_type": "survive_with_hp",
-          "value": null,
+          "value": 1,
           "duration_turns": null,
           "chance": null,
           "target_type": "self",
           "duration_type": "instant",
           "params": {},
-          "on_trigger": null,
-          "percent": 4,
-          "percent_of": "target_max_hp"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "ifrit_active",
       "name": "灼熱",
-      "description": "敵1体へ、自身のATK75%のスキルダメージ。このターンの攻撃を消費する。",
+      "description": "敵1体へ6スキルダメージ。このターンの攻撃を消費する。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -1375,7 +1325,7 @@
       "effects": [
         {
           "effect_type": "damage",
-          "value": null,
+          "value": 6,
           "duration_turns": null,
           "chance": null,
           "target_type": "selection:main",
@@ -1383,18 +1333,16 @@
           "params": {
             "damage_kind": "skill"
           },
-          "on_trigger": null,
-          "percent": 75,
-          "percent_of": "actor_atk"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "banshee_passive",
       "name": "死者の慟哭",
-      "description": "味方が蘇生した時、その使い魔のHPを、さらに最大HP25%分回復する。",
+      "description": "味方が蘇生した時、その使い魔のHPをさらに8回復する。",
       "skill_type": "passive",
       "trigger": "on_revive",
       "extra_triggers": [],
@@ -1411,24 +1359,22 @@
       "effects": [
         {
           "effect_type": "heal",
-          "value": null,
+          "value": 8,
           "duration_turns": null,
           "chance": null,
           "target_type": "event_unit",
           "duration_type": "instant",
           "params": {},
-          "on_trigger": null,
-          "percent": 25,
-          "percent_of": "target_max_hp"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     },
     {
       "skill_id": "pegasus_active",
       "name": "天駆の加護",
-      "description": "味方1体のSPD+12%（2ターン）。",
+      "description": "味方1体のSPD+12（2ターン）。",
       "skill_type": "active",
       "trigger": null,
       "extra_triggers": [],
@@ -1448,19 +1394,17 @@
       "effects": [
         {
           "effect_type": "speed_modifier",
-          "value": null,
+          "value": 12,
           "duration_turns": 2,
           "chance": null,
           "target_type": "selection:main",
           "duration_type": "turns",
           "params": {},
-          "on_trigger": null,
-          "percent": 12,
-          "percent_of": "speed_cap"
+          "on_trigger": null
         }
       ],
       "enabled": true,
-      "version": 3
+      "version": 2
     }
   ]
 }

@@ -274,17 +274,29 @@ def stat_line(state: BattleState, unit: BattleUnit) -> str:
     )
 
 
+def effect_marks(state: BattleState, unit: BattleUnit) -> list[str]:
+    """かかっている効果の記号を返す。バフ・デバフは含めない。
+
+    ATKとSPDの増減は「9（+2）」の形で数値そのものに出ているため、記号で
+    重ねて出すと行末が埋まって読みにくくなります。数値では分からない
+    状態異常とその他の効果だけを残します。
+    """
+
+    summary = effects_module.buff_summary(state, unit)
+
+    marks: list[str] = []
+    marks.extend(f"☠{text}" for text in summary["statuses"])
+    marks.extend(f"◆{text}" for text in summary["others"])
+
+    return marks
+
+
 def unit_status_lines(state: BattleState, unit: BattleUnit) -> list[str]:
     """使い魔1体の状態を、名前・ステータス・効果の3行以内でまとめる。"""
 
     lines = [stat_line(state, unit)]
 
-    summary = effects_module.buff_summary(state, unit)
-    marks: list[str] = []
-    marks.extend(f"🔺{text}" for text in summary["buffs"])
-    marks.extend(f"🔻{text}" for text in summary["debuffs"])
-    marks.extend(f"☠{text}" for text in summary["statuses"])
-    marks.extend(f"◆{text}" for text in summary["others"])
+    marks = effect_marks(state, unit)
 
     if marks:
         lines.append(" ".join(marks))
@@ -682,7 +694,7 @@ def build_action_log_messages(
                     guild_id=actor.guild_id if actor else None,
                     passive_only=True,
                 )
-                group.lines.append(f"**{owner}** の「{skill_name}」が発動")
+                group.lines.append(f"◇ **PASSIVE** {owner}「{skill_name}」")
                 if actor is not None:
                     group.items.append(
                         (
@@ -785,12 +797,7 @@ def _unit_line(state: BattleState, unit: BattleUnit) -> str:
         f"　ATK {atk_text(unit)}　SPD {speed_text(unit)}"
     )
 
-    summary = effects_module.buff_summary(state, unit)
-    marks: list[str] = []
-    marks.extend(f"🔺{text}" for text in summary["buffs"])
-    marks.extend(f"🔻{text}" for text in summary["debuffs"])
-    marks.extend(f"☠{text}" for text in summary["statuses"])
-    marks.extend(f"◆{text}" for text in summary["others"])
+    marks = effect_marks(state, unit)
 
     lines = [f"**{name}** Lv.{unit.level}", stats]
     if marks:
@@ -952,12 +959,7 @@ def build_opponent_turn_embed(
         item_line("ステータス", stat_line(state, unit)),
     ]
 
-    summary = effects_module.buff_summary(state, unit)
-    marks: list[str] = []
-    marks.extend(f"🔺{text}" for text in summary["buffs"])
-    marks.extend(f"🔻{text}" for text in summary["debuffs"])
-    marks.extend(f"☠{text}" for text in summary["statuses"])
-    marks.extend(f"◆{text}" for text in summary["others"])
+    marks = effect_marks(state, unit)
 
     if marks:
         lines.append(item_line("かかっている効果", " ".join(marks)))
@@ -1017,14 +1019,8 @@ def build_status_embed(
         description="\n\n".join(sections)[:4000],
         color=COLOR_INFO,
     )
-    amount = master.battle.bet.coin if bet_coin is None else int(bet_coin)
     legend = SIDE_LEGEND if viewer_guild_id is not None else ""
-    embed.set_footer(
-        text=(
-            f"ベット ギルドごと {amount:,} coin（出場者で均等に分担）　"
-            f"{legend}　🔺バフ 🔻デバフ ☠状態異常 ◆その他"
-        )
-    )
+    embed.set_footer(text=f"{legend}　☠状態異常 ◆その他".strip())
     return embed
 
 
@@ -1056,12 +1052,7 @@ def build_turn_embed(
         item_line("現在SPD", speed_text(unit)),
     ]
 
-    summary = effects_module.buff_summary(state, unit)
-    marks: list[str] = []
-    marks.extend(f"🔺{text}" for text in summary["buffs"])
-    marks.extend(f"🔻{text}" for text in summary["debuffs"])
-    marks.extend(f"☠{text}" for text in summary["statuses"])
-    marks.extend(f"◆{text}" for text in summary["others"])
+    marks = effect_marks(state, unit)
     lines.append(item_line("かかっている効果", " ".join(marks) if marks else "なし"))
 
     enemy_guild_id = state.enemy_guild_id(unit.guild_id)

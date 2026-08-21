@@ -11,12 +11,16 @@ import unittest
 
 from pathlib import Path
 
+from game import skill_engine
 from game.master_data import load_master_data
 from game.models import (
     GENDER_VALUES,
+    PERCENT_BASES,
     SKILL_TYPE_ACTIVE,
     SKILL_TYPE_PASSIVE,
     TRIGGERS,
+    BattleUnit,
+    SkillEffect,
     compute_level_stats,
     is_opposite_gender,
     round_half_up,
@@ -24,6 +28,41 @@ from game.models import (
 
 
 MASTER = load_master_data()
+
+
+def _battle_unit(familiar_id: str, level: int) -> BattleUnit:
+    """指定レベルの戦闘用使い魔を1体つくる（効果量の計算を試すため）。"""
+
+    familiar = MASTER.familiars[familiar_id]
+    stats = compute_level_stats(
+        familiar.base_hp,
+        familiar.base_atk,
+        familiar.speed,
+        level,
+        hp_rate=MASTER.familiar.hp_growth_rate_per_level,
+        atk_rate=MASTER.familiar.atk_growth_rate_per_level,
+        speed_levels=MASTER.familiar.speed_growth_levels,
+        speed_value=MASTER.familiar.speed_growth_value,
+        speed_max=MASTER.familiar.speed_max,
+    )
+
+    return BattleUnit(
+        battle_unit_id=1,
+        battle_id=1,
+        guild_id=1,
+        player_id=1,
+        familiar_instance_id=1,
+        familiar_id=familiar_id,
+        level=level,
+        max_hp=stats.max_hp,
+        current_hp=stats.max_hp,
+        base_atk=stats.atk,
+        current_atk=stats.atk,
+        speed=stats.speed,
+        cost=familiar.cost,
+        slot=1,
+        base_speed=familiar.speed,
+    )
 
 ROOT = Path(__file__).resolve().parents[1]
 BATTLE_RULES_DOC = ROOT / "docs" / "BATTLE_RULES.md"
@@ -241,6 +280,91 @@ class SkillMasterTests(unittest.TestCase):
             for effect in skill.effects:
                 if effect.target_type.startswith("selection:"):
                     self.assertIn(effect.target_type.split(":", 1)[1], keys, skill.skill_id)
+
+
+class SkillPercentTests(unittest.TestCase):
+    """スキルの効果量が、能力値に対する割合で書かれているかを確認する（19.1節）。"""
+
+    # 数値を持つが割合にしない効果。ここに挙げたものだけ固定値を許す。
+    FIXED_VALUE_EFFECTS: frozenset[str] = frozenset()
+
+    def test_numeric_effects_are_written_as_percentages(self) -> None:
+        for skill in MASTER.skills.values():
+            for effect in skill.effects:
+                if effect.value is None:
+                    continue
+                self.assertIn(
+                    effect.effect_type,
+                    self.FIXED_VALUE_EFFECTS,
+                    f"{skill.skill_id}: 効果量は percent で書いてください",
+                )
+
+    def test_percentages_declare_a_known_basis(self) -> None:
+        for skill in MASTER.skills.values():
+            for effect in skill.effects:
+                if effect.percent is None:
+                    continue
+                self.assertIn(effect.percent_of, PERCENT_BASES, skill.skill_id)
+                self.assertIsNone(
+                    effect.value,
+                    f"{skill.skill_id}: percent と value は併用できません",
+                )
+
+    def test_continuous_damage_is_written_as_a_percentage(self) -> None:
+        for skill in MASTER.skills.values():
+            for effect in skill.effects:
+                if "damage_percent" not in effect.params:
+                    self.assertNotIn(
+                        "damage",
+                        effect.params,
+                        f"{skill.skill_id}: 継続ダメージは damage_percent で書いてください",
+                    )
+                    continue
+                self.assertIn(
+                    effect.params.get("damage_percent_of"),
+                    PERCENT_BASES,
+                    skill.skill_id,
+                )
+
+    def test_the_effect_grows_with_the_level(self) -> None:
+        """レベルを上げると効果量も伸びることを、代表的なスキルで確かめる。"""
+
+        for skill_id, effect_type, familiar_id in (
+            ("ifrit_active", "damage", "ifrit"),
+            ("fafnir_active", "heal", "fafnir"),
+            ("phoenix_active", "revive", "phoenix"),
+        ):
+            effect = next(
+                effect
+                for effect in MASTER.skills[skill_id].effects
+                if effect.effect_type == effect_type
+            )
+            low = _battle_unit(familiar_id, MASTER.familiar.min_level)
+            high = _battle_unit(familiar_id, MASTER.familiar.max_level)
+
+            self.assertGreater(
+                skill_engine.effect_amount(effect, high, high),
+                skill_engine.effect_amount(effect, low, low),
+                skill_id,
+            )
+
+    def test_a_tiny_percentage_still_moves_at_least_one_point(self) -> None:
+        effect = SkillEffect(effect_type="damage", percent=1, percent_of="actor_atk")
+        unit = _battle_unit("ifrit", MASTER.familiar.min_level)
+
+        self.assertEqual(skill_engine.effect_amount(effect, unit, unit), 1)
+
+    def test_the_sign_comes_from_the_percentage(self) -> None:
+        unit = _battle_unit("ifrit", MASTER.familiar.min_level)
+        minus = SkillEffect(
+            effect_type="atk_modifier", percent=-50, percent_of="target_atk"
+        )
+        plus = SkillEffect(
+            effect_type="atk_modifier", percent=50, percent_of="target_atk"
+        )
+
+        self.assertLess(skill_engine.effect_amount(minus, unit, unit), 0)
+        self.assertGreater(skill_engine.effect_amount(plus, unit, unit), 0)
 
 
 class GachaMasterTests(unittest.TestCase):
