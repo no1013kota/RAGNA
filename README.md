@@ -30,6 +30,7 @@ Discordに表示される日本語は `texts/` にまとめてあります。
 | お問い合わせ | `texts/ticket.py` |
 
 使い魔名・スキル名・スキル説明と、金額や確率などの数値は `data/master/*.json` にあります。
+どの値が何を意味するかは [`data/master/README.md`](data/master/README.md) にまとめました。
 
 書き換えたら `python scripts/check_project.py` で壊れていないか確認できます。
 
