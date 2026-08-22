@@ -32,6 +32,12 @@ Discordに表示される日本語は `texts/` にまとめてあります。
 使い魔名・スキル名・スキル説明と、金額や確率などの数値は `data/master/*.json` にあります。
 どの値が何を意味するかは [`data/master/README.md`](data/master/README.md) にまとめました。
 
+ゲームバランスを検討するときは
+[`docs/balance/バランス設計シート.xlsx`](docs/balance/) を使ってください。
+排出率や使い魔の数を書き換えると、最大レベルまでに必要なcoinと月数、
+各使い魔の最終能力値、スキル威力が自動で計算し直されます。
+（`python scripts/make_balance_sheet.py` で作り直せます）
+
 書き換えたら `python scripts/check_project.py` で壊れていないか確認できます。
 
 ## 必要な設定
