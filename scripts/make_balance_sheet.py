@@ -1,20 +1,19 @@
 """ゲームバランスを検討するためのExcelを作る。
 
-数式入りなので、③パラメータの数値を書き換えると、ガチャ試算・成長試算・
-デッキ試算・AIプロンプトがすべて自動で計算し直されます。
+数式入りなので、②のLv1能力値と③パラメータを書き換えると、
+ガチャ試算・成長試算・デッキ試算・AIプロンプトが自動で計算し直されます。
 
     pip install openpyxl        # 初回だけ。Bot本体には不要なライブラリです
     python scripts/make_balance_sheet.py
 
 出力先: docs/balance/バランス設計シート.xlsx
 
-使い魔・スキル・バランス値は ``data/master/*.json`` から読み込むため、
-マスターデータを更新したあとに実行し直せば、シートも最新になります。
+■ このシートが前提にしている成長のしかた
+    Lvn の能力値 = Lv1の能力値 ＋ 固定値 ×（n − 1）
+    SPDは成長しません（Lv1の値のまま）
 
-■ レベルの扱い
-ゲームで最初に手に入るのは Lv1 です（``min_level`` も ``initial_level`` も1）。
-``familiars.json`` の能力値は計算用の基準値で、Lv1の能力値は
-``基準値 ×（1 + 成長率 × 1）`` になります。シートは Lv1 から表示します。
+ゲームで最初に手に入るのは Lv1 です。②のLv1列には、いまのマスターデータから
+計算した Lv1 の能力値を初期値として入れてあります（手で書き換えられます）。
 """
 
 from __future__ import annotations
@@ -61,30 +60,40 @@ SH_PROMPT = "⑦ AIプロンプト"
 
 PARAM = f"'{SH_PARAM}'!"
 GROWTH = f"'{SH_GROWTH}'!"
+LIST = f"'{SH_LIST}'!"
+
+# 表示するレベル（Lv1は入力、それ以外は計算）
+SHOW_LEVELS = (1, 5, 10)
 
 # ==================================================
-# ③パラメータの行番号。数値はすべて B列。数式がここを参照する。
+# ③パラメータの行番号。数値はすべて B列（成長量だけ B=HP, C=ATK）。
 # ==================================================
 R_COUNT = 5  # C=5, B=6, A=7, S=8
 R_COUNT_SUM = 9
 R_RATE = 13  # C=13, B=14, A=15, S=16
 R_RATE_SUM = 17
 R_GACHA_COST = 21
-R_GROW = 25  # C=25..S=28（B=固定HP C=固定ATK D=成長率HP% E=成長率ATK%）
+R_GROW = 25  # C=25..S=28（B=固定値HP, C=固定値ATK）
 R_MAX_LEVEL = 32
 R_MATERIALS = 33
-R_MODE = 34
-R_SPD_VALUE = 35
-R_SPD_INTERVAL = 36
-R_FUSION_RATE = 40
-R_SELL = 44  # C=44, B=45, A=46, S=47
-R_DECK_COST = 51
-R_DECK_UNITS = 52
+R_FUSION_RATE = 37
+R_SELL = 41  # C=41, B=42, A=43, S=44
+R_DECK_COST = 48
+R_DECK_UNITS = 49
 
-# ⑤成長試算：ランクごとに HP/ATK/SPD の3行。Lv1がC列、Lv10がL列。
+# ②使い魔一覧：Lv1がE〜G、Lv5がH〜J、Lv10がK〜M
+LIST_START = 5
+LIST_LV1_COLS = ("E", "F", "G")
+
+# ⑤成長試算：ランクごとに HP/ATK/SPD の3行。Lv1がC列。
 G_START = 5
 G_ROWS = {rank: G_START + index * 3 for index, rank in enumerate(RANKS)}
-LV1_COL, LV10_COL = "C", "L"
+
+
+def level_column(level: int) -> str:
+    """⑤成長試算で、そのレベルが入る列名を返す（Lv1=C）。"""
+
+    return chr(ord("C") + level - 1)
 
 
 def load(name: str) -> dict:
@@ -152,28 +161,29 @@ def widths(ws, spec: dict[str, int]) -> None:
         ws.column_dimensions[column].width = width
 
 
-def stat_formula(base: float, rank_row: int, level_ref: str, stat: str) -> str:
-    """レベル ``level_ref`` での能力値を返す数式（先頭の "=" は付けない）。
+def grown(lv1_ref: str, rank_row: int, level_ref: str, stat: str) -> str:
+    """Lv1の値から成長させた能力値の数式（先頭の "=" は付けない）。
 
-    ``base`` は ``familiars.json`` の基準値。ゲーム本体と同じ
-    「基準値 ×（1 + 成長率 × レベル）」で計算します。
+    Lvn = Lv1 ＋ 固定値 ×（n − 1）
     """
 
-    fixed_col = "B" if stat == "hp" else "C"
-    rate_col = "D" if stat == "hp" else "E"
-
-    return (
-        f'ROUND(IF({PARAM}B{R_MODE}="固定",'
-        f"{base}+{PARAM}{fixed_col}{rank_row}*{level_ref},"
-        f"{base}*(1+{PARAM}{rate_col}{rank_row}/100*{level_ref})),0)"
-    )
+    column = "B" if stat == "hp" else "C"
+    return f"{lv1_ref}+{PARAM}{column}{rank_row}*({level_ref}-1)"
 
 
-def speed_formula(base: float, level_ref: str) -> str:
-    """レベル ``level_ref`` でのSPDを返す数式（上限100）。"""
+def lv1_stats(fam: dict, balance: dict) -> tuple[int, int, int]:
+    """いまのマスターデータでの Lv1 の能力値を返す（②の初期値に使う）。"""
 
-    bonus = f"(INT(({level_ref}-1)/{PARAM}B{R_SPD_INTERVAL})+1)*{PARAM}B{R_SPD_VALUE}"
-    return f"MIN(100,{base}+{bonus})"
+    from decimal import Decimal, ROUND_HALF_UP
+
+    def half_up(value: float) -> int:
+        return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    f = balance["familiar"]
+    hp = half_up(fam["base_hp"] * (1 + f["hp_growth_rate_per_level"]))
+    atk = half_up(fam["base_atk"] * (1 + f["atk_growth_rate_per_level"]))
+    speed = min(f["speed_max"], fam["speed"] + f["speed_growth_value"])
+    return hp, atk, speed
 
 
 # ==================================================
@@ -188,15 +198,24 @@ def build_guide(wb: Workbook) -> None:
     lines = [
         "",
         "■ 触ってよいのは黄色のセルだけです",
-        "　黄色 … あなたが書き換えるところ（③パラメータに集めてあります）",
+        "　黄色 … あなたが書き換えるところ",
         "　水色 … 自動計算。書き換えると数式が消えるので触らないでください",
         "",
+        "■ 書き換えるところは2か所です",
+        "　② 使い魔一覧のE〜G列 … 使い魔ごとの Lv1 の HP・ATK・SPD",
+        "　③ パラメータ　　　　 … 使い魔の数、排出率、成長量、費用など",
+        "",
+        "■ 成長のしかた",
+        "　　Lvn の能力値 ＝ Lv1の能力値 ＋ 固定値 ×（n − 1）",
+        "　　SPDは成長しません（Lv1の値のまま）",
+        "　固定値は③パラメータでランクごとに決めます。0にすると伸びません。",
+        "",
         "■ シートの並び",
-        "　② 使い魔一覧　… 全50体の能力値とスキル。Lv1とLv10を並べています",
-        "　③ パラメータ　… ここだけ書き換えます。ほかのシートはここを見て計算します",
+        "　② 使い魔一覧　… 全50体の能力値（Lv1・Lv5・Lv10）とスキル",
+        "　③ パラメータ　… 使い魔の数、排出率、成長量、ガチャ費用、合成費用、売却額",
         "　④ ガチャ試算　… 最大レベルにするまでに必要な単発回数とcoin",
         "　⑤ 成長試算　　… ランクごとの平均能力値を Lv1〜Lv10 で並べたもの",
-        "　⑥ デッキ試算　… 合計COST20以内の編成と、その合計・平均ステータス",
+        "　⑥ デッキ試算　… 合計COST20以内の編成と、Lv1・Lv5・Lv10のステータス",
         "　⑦ AIプロンプト … 生成AIに戦闘シミュレーションを頼むための文章",
         "",
         "■ 今回の前提",
@@ -204,25 +223,18 @@ def build_guide(wb: Workbook) -> None:
         "　・ガチャは単発だけで計算しています（10連・保証枠は考えていません）",
         "　・プレイヤーの収入は考えていません。必要coinだけを出しています",
         "",
-        "■ 成長のしかたは2通り書けます",
-        "　③パラメータの「成長のしかた」を『固定』か『率』に切り替えてください。",
-        "　　固定 … 合成1回ごとに決まった数だけ増える（例 HP+2）",
-        "　　率　 … 割合で増える（例 5% ずつ）",
-        "　どちらの数値も③に並べて書いてあるので、切り替えて見比べられます。",
-        "",
         "■ 覚えておくと便利なこと",
         "　・最大レベルにするには「同じ使い魔」が（最大レベル−1）×素材数＋1体 必要です",
-        "　・ATKは4〜11程度しかありません。固定で+1すると1回で10〜25%増える計算です",
+        "　・ATKは4〜12程度です。固定で+1すると1回で10〜25%増える計算になります",
         "　・SはAよりATKもSPDも低めです。Sの強みはHPとスキルとCOSTです",
         "　・スキルはATK・最大HPの割合で効くので、能力値を上げると威力も上がります",
-        "　・SPDは上限100で頭打ちになります",
         "",
         "■ 決まったら",
         "　数値が決まったら教えてください。data/master/*.json へ反映して",
         "　Discordへ配信します。手で書き換える必要はありません。",
         "",
         "※ このファイルは scripts/make_balance_sheet.py で作り直せます。",
-        "　 能力値やスキルは data/master/ の最新の内容を読み込んでいます。",
+        "　 ②のLv1の初期値とスキルは data/master/ の最新の内容から作っています。",
     ]
     for index, text in enumerate(lines, start=2):
         cell = ws.cell(row=index, column=2, value=text)
@@ -235,23 +247,24 @@ def build_guide(wb: Workbook) -> None:
 # ==================================================
 # ② 使い魔一覧
 # ==================================================
-def build_list(wb: Workbook, familiars: list[dict], skills: dict) -> None:
+def build_list(wb: Workbook, familiars: list[dict], skills: dict, balance: dict) -> int:
     ws = wb.create_sheet(SH_LIST)
     widths(ws, {
         "A": 15, "B": 7, "C": 7, "D": 7,
         "E": 8, "F": 8, "G": 8,
         "H": 8, "I": 8, "J": 8,
-        "K": 14, "L": 56, "M": 10,
-        "N": 14, "O": 56, "P": 16,
+        "K": 8, "L": 8, "M": 8,
+        "N": 14, "O": 54, "P": 10,
+        "Q": 14, "R": 54, "S": 16,
     })
 
-    title(ws, 1, "  ② 使い魔一覧　— 能力値とスキル", 16)
-    note(ws, 2, "　　Lv1・Lv10の能力値は③パラメータの成長設定で変わります。スキルは data/master/ の内容です。", 16)
+    title(ws, 1, "  ② 使い魔一覧　— 能力値とスキル", 19)
+    note(ws, 2, "　　黄色のLv1列（E〜G）が入力です。Lv5・Lv10は「Lv1＋固定値×(レベル−1)」で計算します。SPDは成長しません。", 19)
 
-    header(ws, 3, ["", "", "", "", "Lv1", "", "", "Lv10", "", "",
+    header(ws, 3, ["", "", "", "", "Lv1（入力）", "", "", "Lv5", "", "", "Lv10", "", "",
                    "ACTIVEスキル", "", "", "PASSIVEスキル", "", ""])
     header(ws, 4, ["名前", "ランク", "COST", "性別",
-                   "HP", "ATK", "SPD", "HP", "ATK", "SPD",
+                   "HP", "ATK", "SPD", "HP", "ATK", "SPD", "HP", "ATK", "SPD",
                    "名前", "内容", "使用回数",
                    "名前", "内容", "発動タイミング"])
 
@@ -268,24 +281,26 @@ def build_list(wb: Workbook, familiars: list[dict], skills: dict) -> None:
     rows = sorted(familiars, key=lambda f: (RANK_ORDER[f["rank"]], -f["base_atk"]))
 
     for index, fam in enumerate(rows):
-        row = 5 + index
+        row = LIST_START + index
         rank_row = R_GROW + RANKS.index(fam["rank"])
-        max_level = f"{PARAM}B{R_MAX_LEVEL}"
+        hp, atk, speed = lv1_stats(fam, balance)
 
         cell_flat(ws, row, 1, fam["name"])
         cell_flat(ws, row, 2, fam["rank"])
         cell_flat(ws, row, 3, fam["cost"])
         cell_flat(ws, row, 4, GENDER.get(fam.get("gender"), "—"))
 
-        # Lv1（ゲームで最初に手に入る状態）
-        cell_calc(ws, row, 5, "=" + stat_formula(fam["base_hp"], rank_row, "1", "hp"), "0")
-        cell_calc(ws, row, 6, "=" + stat_formula(fam["base_atk"], rank_row, "1", "atk"), "0")
-        cell_calc(ws, row, 7, "=" + speed_formula(fam["speed"], "1"), "0")
+        # Lv1（手動入力）
+        cell_in(ws, row, 5, hp)
+        cell_in(ws, row, 6, atk)
+        cell_in(ws, row, 7, speed)
 
-        # 最大レベル
-        cell_calc(ws, row, 8, "=" + stat_formula(fam["base_hp"], rank_row, max_level, "hp"), "0")
-        cell_calc(ws, row, 9, "=" + stat_formula(fam["base_atk"], rank_row, max_level, "atk"), "0")
-        cell_calc(ws, row, 10, "=" + speed_formula(fam["speed"], max_level), "0")
+        # Lv5（固定）と最大レベル（③の設定）
+        for offset, level_ref in ((0, "5"), (1, f"{PARAM}B{R_MAX_LEVEL}")):
+            base_col = 8 + offset * 3
+            cell_calc(ws, row, base_col, "=" + grown(f"E{row}", rank_row, level_ref, "hp"), "0")
+            cell_calc(ws, row, base_col + 1, "=" + grown(f"F{row}", rank_row, level_ref, "atk"), "0")
+            cell_calc(ws, row, base_col + 2, f"=G{row}", "0")  # SPDは成長しない
 
         active = next(
             (skills[s] for s in fam.get("skills", [])
@@ -295,24 +310,25 @@ def build_list(wb: Workbook, familiars: list[dict], skills: dict) -> None:
              if skills.get(s, {}).get("skill_type") == "passive"), None)
 
         if active:
-            cell_flat(ws, row, 11, active["name"])
-            cell_flat(ws, row, 12, active["description"]).alignment = Alignment(wrap_text=True, vertical="top")
+            cell_flat(ws, row, 14, active["name"])
+            cell_flat(ws, row, 15, active["description"]).alignment = Alignment(wrap_text=True, vertical="top")
             uses = active.get("max_uses_per_battle")
-            cell_flat(ws, row, 13, f"1バトル{uses}回" if uses else "制限なし")
-        else:
-            for col in (11, 12, 13):
-                cell_flat(ws, row, col, "—")
-
-        if passive:
-            cell_flat(ws, row, 14, passive["name"])
-            cell_flat(ws, row, 15, passive["description"]).alignment = Alignment(wrap_text=True, vertical="top")
-            cell_flat(ws, row, 16, trigger_label.get(passive.get("trigger"), passive.get("trigger") or "—"))
+            cell_flat(ws, row, 16, f"1バトル{uses}回" if uses else "制限なし")
         else:
             for col in (14, 15, 16):
                 cell_flat(ws, row, col, "—")
 
+        if passive:
+            cell_flat(ws, row, 17, passive["name"])
+            cell_flat(ws, row, 18, passive["description"]).alignment = Alignment(wrap_text=True, vertical="top")
+            cell_flat(ws, row, 19, trigger_label.get(passive.get("trigger"), passive.get("trigger") or "—"))
+        else:
+            for col in (17, 18, 19):
+                cell_flat(ws, row, col, "—")
+
     ws.freeze_panes = "E5"
-    ws.auto_filter.ref = f"A4:P{4 + len(rows)}"
+    ws.auto_filter.ref = f"A4:S{4 + len(rows)}"
+    return LIST_START + len(rows) - 1  # 最終行
 
 
 # ==================================================
@@ -320,14 +336,14 @@ def build_list(wb: Workbook, familiars: list[dict], skills: dict) -> None:
 # ==================================================
 def build_params(wb: Workbook, balance: dict, gacha: dict, counts: dict) -> None:
     ws = wb.create_sheet(SH_PARAM)
-    widths(ws, {"A": 26, "B": 15, "C": 15, "D": 17, "E": 17, "F": 52})
+    widths(ws, {"A": 26, "B": 16, "C": 16, "D": 12, "E": 12, "F": 54})
 
     pool = gacha["pools"][0]
     fam = balance["familiar"]
     battle = balance["battle"]
 
     title(ws, 1, "  ③ パラメータ　— 黄色のセルを書き換えてください", 6)
-    note(ws, 2, "　　ここの数値だけが計算の入り口です。ほかのシートは全部ここを見ています。", 6)
+    note(ws, 2, "　　使い魔ごとのLv1能力値は②使い魔一覧のE〜G列にあります。", 6)
 
     # --- 使い魔の数 ---
     section(ws, 3, "■ 各ランクの使い魔の数", 6)
@@ -362,8 +378,8 @@ def build_params(wb: Workbook, balance: dict, gacha: dict, counts: dict) -> None
     ws.cell(row=R_GACHA_COST, column=6, value="1回引くのにかかるcoin").font = NOTE_FONT
 
     # --- 成長量 ---
-    section(ws, 23, "■ 合成1回あたりの成長量（固定値・成長率の両方を書いておけます）", 6)
-    header(ws, 24, ["ランク", "固定値 HP", "固定値 ATK", "成長率 HP（%）", "成長率 ATK（%）", "説明"])
+    section(ws, 23, "■ 合成1回あたりの成長量（固定値）", 6)
+    header(ws, 24, ["ランク", "固定値 HP", "固定値 ATK", "", "", "説明"])
     fixed_hp = {"C": 0, "B": 1, "A": 2, "S": 3}
     fixed_atk = {"C": 0, "B": 0, "A": 1, "S": 1}
     for index, rank in enumerate(RANKS):
@@ -371,12 +387,12 @@ def build_params(wb: Workbook, balance: dict, gacha: dict, counts: dict) -> None
         cell_flat(ws, row, 1, f"{rank}ランク")
         cell_in(ws, row, 2, fixed_hp[rank])
         cell_in(ws, row, 3, fixed_atk[rank])
-        cell_in(ws, row, 4, fam["hp_growth_rate_per_level"] * 100, "0.0")
-        cell_in(ws, row, 5, fam["atk_growth_rate_per_level"] * 100, "0.0")
     ws.cell(row=R_GROW, column=6,
-            value="下の「成長のしかた」で、固定値と成長率のどちらを使うか選びます").font = NOTE_FONT
+            value="Lvn の能力値 ＝ Lv1の能力値 ＋ 固定値 ×（n − 1）").font = NOTE_FONT
     ws.cell(row=R_GROW + 1, column=6,
             value="0にすると、そのランクは合成しても伸びません").font = NOTE_FONT
+    ws.cell(row=R_GROW + 2, column=6,
+            value="SPDは成長しません（Lv1の値のまま）").font = NOTE_FONT
 
     # --- 成長の共通設定 ---
     section(ws, 30, "■ 成長の共通設定", 6)
@@ -384,25 +400,22 @@ def build_params(wb: Workbook, balance: dict, gacha: dict, counts: dict) -> None
     for row, label, value, memo in (
         (R_MAX_LEVEL, "最大レベル", fam["max_level"], "Lv1が最初です。下げると必要な体数が減ります"),
         (R_MATERIALS, "1レベルに必要な素材数", 1, "必要な体数 =（最大レベル−1）× この数 ＋ 1"),
-        (R_MODE, "成長のしかた", "率", "「固定」か「率」と入力してください"),
-        (R_SPD_VALUE, "SPD増加量（1回）", fam["speed_growth_value"], "SPDは上限100で頭打ちになります"),
-        (R_SPD_INTERVAL, "SPDが上がる間隔（Lv）", 2, "2なら Lv1,3,5,7,9 で上がります"),
     ):
         cell_flat(ws, row, 1, label)
         cell_in(ws, row, 2, value)
         ws.cell(row=row, column=6, value=memo).font = NOTE_FONT
 
     # --- 合成費用 ---
-    section(ws, 38, "■ 合成費用", 6)
-    header(ws, 39, ["項目", "値（%）", "", "", "", "説明"])
+    section(ws, 35, "■ 合成費用", 6)
+    header(ws, 36, ["項目", "値（%）", "", "", "", "説明"])
     cell_flat(ws, R_FUSION_RATE, 1, "素材1体あたり")
     cell_in(ws, R_FUSION_RATE, 2, fam["fusion_cost_rate_per_material"] * 100, "0.0")
     ws.cell(row=R_FUSION_RATE, column=6,
             value="売却額に対する割合。50なら売却額の半分。0にすると合成は無料").font = NOTE_FONT
 
     # --- 売却額 ---
-    section(ws, 42, "■ 売却額（Lv1）", 6)
-    header(ws, 43, ["ランク", "売却額（coin）", "", "", "", "説明"])
+    section(ws, 39, "■ 売却額（Lv1）", 6)
+    header(ws, 40, ["ランク", "売却額（coin）", "", "", "", "説明"])
     for index, rank in enumerate(RANKS):
         row = R_SELL + index
         cell_flat(ws, row, 1, f"{rank}ランク")
@@ -410,8 +423,8 @@ def build_params(wb: Workbook, balance: dict, gacha: dict, counts: dict) -> None
     ws.cell(row=R_SELL, column=6, value="合成費用もこの金額を基準に決まります").font = NOTE_FONT
 
     # --- バトルの枠 ---
-    section(ws, 49, "■ バトルの枠（⑥デッキ試算が使います）", 6)
-    header(ws, 50, ["項目", "値", "", "", "", "説明"])
+    section(ws, 46, "■ バトルの枠（⑥デッキ試算が使います）", 6)
+    header(ws, 47, ["項目", "値", "", "", "", "説明"])
     for row, label, value, memo in (
         (R_DECK_COST, "合計COST上限", battle["max_total_cost"], "編成できる合計COST"),
         (R_DECK_UNITS, "出場できる体数", battle["max_units"], "1ギルドが出せる使い魔の数"),
@@ -475,54 +488,61 @@ def build_gacha(wb: Workbook) -> None:
 # ==================================================
 # ⑤ 成長試算
 # ==================================================
-def build_growth(wb: Workbook, familiars: list[dict]) -> None:
+def build_growth(wb: Workbook, list_last_row: int) -> None:
     ws = wb.create_sheet(SH_GROWTH)
     widths(ws, {"A": 10, "B": 8, **{chr(ord("C") + i): 8 for i in range(10)}, "M": 15})
 
     title(ws, 1, "  ⑤ 成長試算　— ランクごとの平均能力値を Lv1〜Lv10 で並べたもの", 13)
-    note(ws, 2, "　　そのランクの平均です。Lv1が最初の状態で、③パラメータの成長設定で全部動きます。", 13)
+    note(ws, 2, "　　Lv1は②使い魔一覧の平均です。②やLv③の成長量を変えると全部動きます。", 13)
+    note(ws, 3, "　　Lvn ＝ Lv1 ＋ 固定値 ×（n − 1）。SPDは成長しません。", 13)
 
     header(ws, 4, ["ランク", "項目"] + [f"Lv{level}" for level in range(1, 11)]
                   + ["Lv1→Lv10（倍）"])
 
+    rank_range = f"{LIST}$B${LIST_START}:$B${list_last_row}"
+
     for index, rank in enumerate(RANKS):
-        fams = [f for f in familiars if f["rank"] == rank]
-        avg = {
-            "HP": round(sum(f["base_hp"] for f in fams) / len(fams), 2),
-            "ATK": round(sum(f["base_atk"] for f in fams) / len(fams), 2),
-            "SPD": round(sum(f["speed"] for f in fams) / len(fams), 2),
-        }
         rank_row = R_GROW + index
         base_row = G_ROWS[rank]
 
-        for offset, label in enumerate(("HP", "ATK", "SPD")):
+        for offset, (label, col) in enumerate(
+            (("HP", LIST_LV1_COLS[0]), ("ATK", LIST_LV1_COLS[1]), ("SPD", LIST_LV1_COLS[2]))
+        ):
             row = base_row + offset
             cell_flat(ws, row, 1, f"{rank}ランク" if offset == 0 else "")
             cell_flat(ws, row, 2, label)
 
-            for level in range(1, 11):
-                col = 2 + level  # Lv1 が C列(3)
+            # Lv1 は②の同ランクの平均
+            cell_calc(
+                ws, row, 3,
+                f'=AVERAGEIF({rank_range},"{rank}",'
+                f"{LIST}${col}${LIST_START}:${col}${list_last_row})",
+                "0.0",
+            )
+
+            for level in range(2, 11):
+                col_index = 2 + level
                 if label == "SPD":
-                    body = speed_formula(avg["SPD"], str(level))
+                    body = "$C" + str(row)  # SPDは成長しない
                 else:
-                    body = stat_formula(avg[label], rank_row, str(level), label.lower())
+                    body = grown("$C" + str(row), rank_row, str(level), label.lower())
                 cell_calc(
-                    ws, row, col,
+                    ws, row, col_index,
                     f'=IF({level}>{PARAM}B{R_MAX_LEVEL},"—",{body})',
                     "0" if label == "SPD" else "0.0",
                 )
             cell_calc(
                 ws, row, 13,
-                f'=IF({LV10_COL}{row}="—","—",{LV10_COL}{row}/{LV1_COL}{row})',
+                f'=IF(L{row}="—","—",L{row}/C{row})',
                 "0.00",
             )
 
     section(ws, 18, "■ 見るときのポイント", 13)
     points = [
         "　・Lv1がゲームで最初に手に入る状態です。そこから合成でLv10まで上げます。",
-        "　・ATKは4〜11程度しかありません。固定で+1すると1回で10〜25%増える計算になります。",
+        "　・ATKは4〜12程度です。固定で+1すると1回で10〜25%増える計算になります。",
         "　・SはAよりATKもSPDも低めです。SはHPとスキルとCOSTで差がついています。",
-        "　・SPDは上限100で頭打ちです。もともと速い使い魔ほど伸びしろが小さくなります。",
+        "　・SPDは成長しないので、行動順は最初から最後まで変わりません。",
         "　・スキルはATK・最大HPの割合で効くため、能力値を上げるとスキル威力も一緒に上がります。",
     ]
     for offset, text in enumerate(points):
@@ -539,20 +559,24 @@ def build_deck(wb: Workbook, balance: dict) -> None:
     ws = wb.create_sheet(SH_DECK)
     widths(ws, {
         "A": 7, "B": 7, "C": 7, "D": 7, "E": 8, "F": 8,
-        "G": 13, "H": 13, "I": 14, "J": 13, "K": 13, "L": 14, "M": 20,
+        "G": 12, "H": 12, "I": 13,
+        "J": 12, "K": 12, "L": 13,
+        "M": 13, "N": 13, "O": 14, "P": 20,
     })
 
     cost = {"C": 2, "B": 3, "A": 4, "S": 5}
     max_cost = balance["battle"]["max_total_cost"]
     max_units = balance["battle"]["max_units"]
 
-    title(ws, 1, f"  ⑥ デッキ試算　— 合計COST{max_cost}以内の編成と、その合計・平均ステータス", 13)
-    note(ws, 2, "　　ランクの組み合わせごとに、⑤成長試算の平均能力値を足し合わせています。", 13)
-    note(ws, 3, "　　HPとATKは編成ぶんの合計、SPDは1体あたりの平均です。", 13)
+    title(ws, 1, f"  ⑥ デッキ試算　— 合計COST{max_cost}以内の編成と、そのステータス", 16)
+    note(ws, 2, "　　ランクの組み合わせごとに、⑤成長試算の平均能力値を足し合わせています。", 16)
+    note(ws, 3, "　　HPとATKは編成ぶんの合計、SPDは1体あたりの平均です。", 16)
 
-    header(ws, 5, ["S", "A", "B", "C", "体数", "COST",
-                   "Lv1 HP合計", "Lv1 ATK合計", "Lv1 SPD平均",
-                   "Lv10 HP合計", "Lv10 ATK合計", "Lv10 SPD平均", "備考"])
+    labels = ["S", "A", "B", "C", "体数", "COST"]
+    for level in SHOW_LEVELS:
+        labels += [f"Lv{level} HP合計", f"Lv{level} ATK合計", f"Lv{level} SPD平均"]
+    labels.append("備考")
+    header(ws, 5, labels)
 
     decks = []
     for size in range(1, max_units + 1):
@@ -563,9 +587,11 @@ def build_deck(wb: Workbook, balance: dict) -> None:
 
     decks.sort(key=lambda d: (-d[1], -d[2], -d[0]["S"], -d[0]["A"]))
 
-    hp_rows = {rank: G_ROWS[rank] for rank in RANKS}
-    atk_rows = {rank: G_ROWS[rank] + 1 for rank in RANKS}
-    spd_rows = {rank: G_ROWS[rank] + 2 for rank in RANKS}
+    stat_rows = {
+        "HP": {rank: G_ROWS[rank] for rank in RANKS},
+        "ATK": {rank: G_ROWS[rank] + 1 for rank in RANKS},
+        "SPD": {rank: G_ROWS[rank] + 2 for rank in RANKS},
+    }
 
     def total_of(row_map: dict[str, int], col: str, deck_row: int) -> str:
         return "+".join(
@@ -580,13 +606,16 @@ def build_deck(wb: Workbook, balance: dict) -> None:
         cell_flat(ws, row, 5, size)
         cell_calc(ws, row, 6, total)
 
-        guard = f'{GROWTH}{LV10_COL}{hp_rows["S"]}="—"'
-        cell_calc(ws, row, 7, "=" + total_of(hp_rows, LV1_COL, row), "0")
-        cell_calc(ws, row, 8, "=" + total_of(atk_rows, LV1_COL, row), "0")
-        cell_calc(ws, row, 9, f"=({total_of(spd_rows, LV1_COL, row)})/E{row}", "0")
-        cell_calc(ws, row, 10, f'=IF({guard},"—",{total_of(hp_rows, LV10_COL, row)})', "0")
-        cell_calc(ws, row, 11, f'=IF({guard},"—",{total_of(atk_rows, LV10_COL, row)})', "0")
-        cell_calc(ws, row, 12, f'=IF({guard},"—",({total_of(spd_rows, LV10_COL, row)})/E{row})', "0")
+        for slot, level in enumerate(SHOW_LEVELS):
+            col = level_column(level)
+            base = 7 + slot * 3
+            guard = f'{GROWTH}{col}{stat_rows["HP"]["S"]}="—"'
+            cell_calc(ws, row, base,
+                      f'=IF({guard},"—",{total_of(stat_rows["HP"], col, row)})', "0")
+            cell_calc(ws, row, base + 1,
+                      f'=IF({guard},"—",{total_of(stat_rows["ATK"], col, row)})', "0")
+            cell_calc(ws, row, base + 2,
+                      f'=IF({guard},"—",({total_of(stat_rows["SPD"], col, row)})/E{row})', "0")
 
         if counts["S"] == size:
             memo = "S単一"
@@ -596,11 +625,11 @@ def build_deck(wb: Workbook, balance: dict) -> None:
             memo = "COST上限ぴったり"
         else:
             memo = ""
-        cell_flat(ws, row, 13, memo)
+        cell_flat(ws, row, 16, memo)
 
     last = 5 + len(decks)
-    ws.freeze_panes = "A6"
-    ws.auto_filter.ref = f"A5:M{last}"
+    ws.freeze_panes = "G6"
+    ws.auto_filter.ref = f"A5:P{last}"
 
     for offset, text in enumerate((
         f"　編成の組み合わせ: {len(decks)}通り（体数{max_units}以下・COST{max_cost}以内）",
@@ -608,7 +637,7 @@ def build_deck(wb: Workbook, balance: dict) -> None:
     )):
         ws.cell(row=last + 2 + offset, column=1, value=text).font = NOTE_FONT
         ws.merge_cells(start_row=last + 2 + offset, start_column=1,
-                       end_row=last + 2 + offset, end_column=13)
+                       end_row=last + 2 + offset, end_column=16)
 
 
 # ==================================================
@@ -630,15 +659,11 @@ def build_prompt(wb: Workbook) -> None:
         f'"・排出率(単発): C="&{PARAM}B{R_RATE}&"% B="&{PARAM}B{R_RATE+1}&"% '
         f'A="&{PARAM}B{R_RATE+2}&"% S="&{PARAM}B{R_RATE+3}&"%"&CHAR(10)&'
         f'"・レベル: Lv1〜Lv"&{PARAM}B{R_MAX_LEVEL}&"（1レベル上げるのに同じ使い魔"&{PARAM}B{R_MATERIALS}&"体）"&CHAR(10)&'
-        f'"・成長のしかた: "&{PARAM}B{R_MODE}&CHAR(10)&'
-        f'"・固定値の場合: C(HP+"&{PARAM}B{R_GROW}&"/ATK+"&{PARAM}C{R_GROW}&") '
+        f'"・合成1回あたりの成長量（固定値）: '
+        f'C(HP+"&{PARAM}B{R_GROW}&"/ATK+"&{PARAM}C{R_GROW}&") '
         f'B(HP+"&{PARAM}B{R_GROW+1}&"/ATK+"&{PARAM}C{R_GROW+1}&") '
         f'A(HP+"&{PARAM}B{R_GROW+2}&"/ATK+"&{PARAM}C{R_GROW+2}&") '
         f'S(HP+"&{PARAM}B{R_GROW+3}&"/ATK+"&{PARAM}C{R_GROW+3}&")"&CHAR(10)&'
-        f'"・成長率の場合: C(HP"&{PARAM}D{R_GROW}&"%/ATK"&{PARAM}E{R_GROW}&"%) '
-        f'B(HP"&{PARAM}D{R_GROW+1}&"%/ATK"&{PARAM}E{R_GROW+1}&"%) '
-        f'A(HP"&{PARAM}D{R_GROW+2}&"%/ATK"&{PARAM}E{R_GROW+2}&"%) '
-        f'S(HP"&{PARAM}D{R_GROW+3}&"%/ATK"&{PARAM}E{R_GROW+3}&"%)"&CHAR(10)&'
         f'"・ガチャ単発費用: "&TEXT({PARAM}B{R_GACHA_COST},"#,##0")&" coin"&CHAR(10)&'
         f'"・合計COST上限: "&{PARAM}B{R_DECK_COST}&"／出場"&{PARAM}B{R_DECK_UNITS}&"体"'
     )
@@ -650,8 +675,9 @@ def build_prompt(wb: Workbook) -> None:
         '"・ギルド同士が使い魔を出し合って戦うターン制バトルです。"&CHAR(10)&'
         '"・使い魔にはC/B/A/Sのランクがあり、COSTはC=2 B=3 A=4 S=5です。"&CHAR(10)&'
         '"・編成は合計COSTの上限内で組みます。SPDの高い順に行動します。"&CHAR(10)&'
-        '"・ガチャで手に入るのはLv1です。同じ使い魔を合成するとレベルが上がり、"&CHAR(10)&'
-        '"　HPとATKが伸びます。SPDは決まったレベルで少しずつ上がり、上限は100です。"&CHAR(10)&'
+        '"・ガチャで手に入るのはLv1です。同じ使い魔を合成するとレベルが上がります。"&CHAR(10)&'
+        '"・成長は次の式です: Lvn の能力値 ＝ Lv1の能力値 ＋ 固定値 ×（n − 1）"&CHAR(10)&'
+        '"・SPDは成長しません。行動順は最初から最後まで変わりません。"&CHAR(10)&'
         '"・スキルの効果量はATKや最大HPに対する割合で決まるため、"&CHAR(10)&'
         '"　能力値を上げるとスキルの威力も一緒に上がります。"&CHAR(10)&CHAR(10)&'
         + param_line +
@@ -680,7 +706,7 @@ def build_prompt(wb: Workbook) -> None:
         "　50体ぶんの能力値とスキルが渡るので、より細かく見てもらえます。",
         "",
         "■ 結果をシートに戻すとき",
-        "　AIの提案した数値を③パラメータに入れると、④⑤⑥がその場で計算し直されます。",
+        "　AIの提案した数値を②③に入れると、④⑤⑥がその場で計算し直されます。",
         "　見比べて良さそうなら教えてください。data/master/*.json へ反映します。",
     ], start=8):
         cell = ws.cell(row=offset, column=2, value=text)
@@ -699,10 +725,10 @@ def main() -> int:
     wb.remove(wb.active)
 
     build_guide(wb)
-    build_list(wb, familiars, skills)
+    list_last_row = build_list(wb, familiars, skills, balance)
     build_params(wb, balance, gacha, counts)
     build_gacha(wb)
-    build_growth(wb, familiars)
+    build_growth(wb, list_last_row)
     build_deck(wb, balance)
     build_prompt(wb)
 
@@ -711,7 +737,8 @@ def main() -> int:
 
     print(f"作成しました: {OUT_PATH.relative_to(ROOT)}")
     print(f"  シート: {' / '.join(wb.sheetnames)}")
-    print(f"  使い魔 {len(familiars)}体 / スキル {len(skills)}件")
+    print(f"  使い魔 {len(familiars)}体（②の{LIST_START}〜{list_last_row}行）/ スキル {len(skills)}件")
+    print(f"  表示レベル: {' / '.join(f'Lv{n}' for n in SHOW_LEVELS)}")
     return 0
 
 
