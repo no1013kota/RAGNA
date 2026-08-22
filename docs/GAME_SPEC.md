@@ -1266,7 +1266,14 @@ cogs/
 └── guild_battle/
     ├── __init__.py
     ├── cog.py
-    ├── views.py
+    ├── views.py                  # 入口（利用資格の確認・出場者セット・パネル設置）
+    ├── battle_common.py          # 定数・戦闘状態の読み出し・一時Viewの基底
+    ├── familiar_options.py       # 所有使い魔 → セレクトの選択肢
+    ├── entry_views.py            # 出場する使い魔の追加・入替・解除
+    ├── register_views.py         # バトル使い魔の事前登録
+    ├── battle_action_views.py    # バトル中の行動（攻撃・スキル・降参）
+    ├── matchmaking_views.py      # バトル申請・公開募集・レート
+    ├── battle_embeds.py          # 編成確認・ランキング・パネルのEmbed
     └── service.py
 
 database/
@@ -1287,6 +1294,8 @@ game/
 
 - `cog.py`：Slash Command、イベント、常設View登録
 - `views.py`：ボタン、選択画面、Modal、Embedへの入力受付
+- `<用途>_views.py`：`views.py` が大きくなった機能で、責務ごとに分けた画面部品
+  （`views.py` が入口となり、外部が使う名前を再公開します）
 - `service.py`：ギルド設立など複数処理をまとめる業務手順
 - `database/*.py`：SQLiteの読み書きとトランザクション
 - `game/*.py`：Discordに依存しない戦闘計算

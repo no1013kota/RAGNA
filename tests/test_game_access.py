@@ -24,11 +24,33 @@ from cogs import game_shared  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# ゲームの入口を持つDiscord UI層。ここでは共通ゲートだけを使う。
+# ゲームのDiscord UI層。ここでは公開スイッチを直接見ない（共通ゲートを使う）。
+# ギルドバトルは責務ごとに分かれているため、全モジュールを対象にする。
 VIEW_MODULES = (
     "cogs/familiar/views.py",
     "cogs/guild/views.py",
     "cogs/guild_battle/views.py",
+    "cogs/guild_battle/battle_common.py",
+    "cogs/guild_battle/familiar_options.py",
+    "cogs/guild_battle/entry_views.py",
+    "cogs/guild_battle/register_views.py",
+    "cogs/guild_battle/battle_action_views.py",
+    "cogs/guild_battle/matchmaking_views.py",
+    "cogs/guild_battle/battle_embeds.py",
+)
+
+# そのうち、利用資格を自分で確かめる入口を持つモジュール。
+#
+# 残りは次のどちらかなので、ゲートを自分では呼びません。
+#
+# - ``battle_common`` ``battle_action_views``：進行中バトルの行動。``load_actor``
+#   が「いま手番か」だけを見ます（下の ``allowed`` を参照）。
+# - それ以外：上のモジュールがゲートを通した後に開く一時View・整形・Embedのみ。
+GATE_MODULES = (
+    "cogs/familiar/views.py",
+    "cogs/guild/views.py",
+    "cogs/guild_battle/views.py",
+    "cogs/guild_battle/matchmaking_views.py",
 )
 
 
@@ -132,7 +154,7 @@ class GateUsageTests(unittest.TestCase):
         """
 
         allowed = {
-            ("cogs/guild_battle/views.py", "load_actor"),
+            ("cogs/guild_battle/battle_common.py", "load_actor"),
             ("cogs/guild/views.py", "_game_block_reason"),
         }
 
@@ -148,9 +170,14 @@ class GateUsageTests(unittest.TestCase):
                 )
 
     def test_every_view_module_uses_the_shared_gate(self) -> None:
-        for relative_path in VIEW_MODULES:
+        for relative_path in GATE_MODULES:
             source = (ROOT / relative_path).read_text(encoding="utf-8")
             self.assertIn("game_block_reason", source, relative_path)
+
+    def test_every_view_module_is_a_real_file(self) -> None:
+        # 分割で名前が変わったモジュールを検査対象から取りこぼさない
+        for relative_path in VIEW_MODULES + GATE_MODULES:
+            self.assertTrue((ROOT / relative_path).is_file(), relative_path)
 
     @staticmethod
     def _enclosing_function(source: str, position: int) -> str:

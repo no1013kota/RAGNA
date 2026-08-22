@@ -1,7 +1,12 @@
 """ギルドバトルCog本体。
 
 常設パネルの設置、進行中バトルの見張り（15秒ループ）、Bot再起動後の復旧を
-担当します。ボタン操作は ``views.py``、バトルの保存と投稿は ``service.py`` です。
+担当します。バトルの保存と投稿は ``service.py`` です。
+
+ボタン操作の入口は ``views.py`` です。画面部品そのものは責務ごとに兄弟モジュール
+（``battle_action_views`` ``matchmaking_views`` ``entry_views`` ``register_views``
+``battle_embeds`` ``familiar_options`` ``battle_common``）へ分かれていますが、
+``views.py`` が再公開しているため、ここからは従来どおり ``views.X`` で引けます。
 """
 
 from __future__ import annotations

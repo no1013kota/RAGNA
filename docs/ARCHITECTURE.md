@@ -31,6 +31,16 @@ RAGNA/
 │   ├── guild/                # RAGNA Online：ギルド（cog/views/service）
 │   ├── familiar/             # RAGNA Online：ガチャ／使い魔管理（一覧・合成・売却）
 │   ├── guild_battle/         # RAGNA Online：ギルドバトル
+│   │   ├── cog.py            # コマンド、定期処理、View登録、復旧
+│   │   ├── service.py        # バトル開始・行動の適用・終了処理と報酬
+│   │   ├── views.py          # 入口：利用資格の確認、出場者セット、パネル設置
+│   │   ├── battle_common.py  # 最下層：定数、戦闘状態の読み出し、一時Viewの基底
+│   │   ├── familiar_options.py    # 所有使い魔をセレクトの選択肢へ整える
+│   │   ├── entry_views.py         # 出場する使い魔の追加・入替・解除
+│   │   ├── register_views.py      # バトル使い魔の事前登録
+│   │   ├── battle_action_views.py # バトル中の行動（攻撃・スキル・降参）
+│   │   ├── matchmaking_views.py   # バトル申請・公開募集・レート
+│   │   └── battle_embeds.py       # 編成確認・ランキング・各パネルのEmbed
 │   ├── game_shared.py        # ゲーム3Cogの共通Discord処理（Cogではない）
 │   ├── xp.py                 # 比較的小さい単独Cog
 │   ├── ranking.py
@@ -97,6 +107,7 @@ RAGNA/
 | --- | --- | --- |
 | `cog.py` | Slash Command、Discordイベント、定期処理、View登録 | SQLの直接実行 |
 | `views.py` | ボタン、セレクト、ModalとDiscordへの表示 | SQLite接続の作成 |
+| `<機能>/*_views.py` | `views.py` が大きくなったときの責務ごとの分割先 | 分割元への参照（循環import） |
 | `service.py` | 複数処理をまとめる業務手順（設立、ガチャ抽選、バトル進行） | SQLの直接実行 |
 | `database/<機能>.py` | 各機能が利用できるDB操作の公開範囲 | DiscordのInteraction処理 |
 | `database/core.py` | 既存SQL実装、接続、トランザクション | Discordの画面・権限処理 |
@@ -150,7 +161,7 @@ Cog側を変更せずに済みます。
 ゲーム機能は「Discord表示」「業務手順」「戦闘計算」「データ」を分けています。
 
 ```text
-cogs/guild_battle/views.py   ボタン操作を受け取る
+cogs/guild_battle/views.py   ボタン操作を受け取る（＋責務ごとの *_views.py）
         ↓
 cogs/guild_battle/service.py 状態を読み、エンジンへ渡し、保存して投稿する
         ↓                     ↑
@@ -158,6 +169,25 @@ game/battle_engine.py        Discordを知らない戦闘計算
         ↓
 database/battle.py           状態の保存と楽観ロック
 ```
+
+画面部品は責務ごとに分かれています。参照は必ず下向きだけで、逆流はありません。
+
+```text
+views.py（入口：利用資格の確認・出場者セット・パネル設置・外部への再公開）
+   ├─→ battle_action_views.py（攻撃・スキル・降参）
+   ├─→ matchmaking_views.py  （申請・公開募集・レート）
+   ├─→ entry_views.py        （出場する使い魔の追加・入替・解除）
+   ├─→ register_views.py     （事前登録）
+   ├─→ battle_embeds.py      （編成確認・ランキング・パネルのEmbed）
+   │        ↓
+   │   familiar_options.py   （所有使い魔 → 選択肢。純粋関数）
+   └─→ battle_common.py      （定数・戦闘状態の読み出し・一時Viewの基底）
+```
+
+`cog.py`・`service.py`・テストは `views.X` で名前を引きます。移した名前も
+`views.py` 末尾の `__all__` で明示的に再公開しているため、呼び出し側は変わりません。
+`service.py` から `views` を使う箇所は関数内の遅延importのままにします
+（先頭importへ移すと循環します）。
 
 バトルで使う使い魔は、次の2段階で決まります。
 
@@ -201,6 +231,8 @@ guild_battle_entries         実際に出場する使い魔（本人が枠内で
 - SQLをCogやViewへ直接書かず、該当する `database/<機能>.py` の公開APIを使います。
 - 残高など複数の更新が一組になる処理は、必ず1つのDBトランザクションにします。
 - Discord画面部品は `views.py`、コマンドとイベントは `cog.py` に置きます。
+  `views.py` が大きくなった機能では、責務ごとに兄弟の `<用途>_views.py` へ分け、
+  `views.py` は入口と再公開を担います（`cogs/guild_battle/` が例）。
 - 複数機能で同じDiscord処理が必要な場合だけ、`utils.py` へ共通化します。
 - 1機能だけで使う複雑な計算・判定が増えた場合は、その機能内に `service.py` を追加します。
 - 新しい常設ボタンには固定の `custom_id` を付け、Cog読込時にViewを再登録します。
@@ -214,11 +246,24 @@ guild_battle_entries         実際に出場する使い魔（本人が枠内で
 今後、1ファイルが大きくなったときは行数だけで機械的に分割せず、次の境界で一領域ずつ移します。
 
 - Discordに依存しない計算・料金判定・状態遷移 → `service.py`
-- 特定の画面群だけで完結するUI → `views/<用途>.py`
+- 特定の画面群だけで完結するUI → 兄弟モジュール `<用途>_views.py`
 - SQLとトランザクション → `database/<機能>.py`
 
 移動と仕様変更を同時に行うとレビューが難しくなるため、まずテストを追加し、移動だけの変更と
 動作変更を別のコミットにします。
+
+`views.py` を分けるときは、次の点に注意します（`cogs/guild_battle/` の分割で実際に踏んだもの）。
+
+- `views.py` は**ファイルのまま**残します。ディレクトリにすると
+  `scripts/check_project.py` と `tests/test_project_structure.py` の `is_file()` 判定が落ちます。
+- 呼び出し側が `views.X` で引いている名前は、`views.py` の `__all__` へ明示的に並べます。
+  星import（`from .x import *`）はアンダースコア始まりの名前を運ばないため使いません。
+  複数モジュールから使う助っ人は、アンダースコアを外して公開名にします。
+- 常設Viewの `custom_id` は1文字も変えません。変えると既に貼ってあるボタンが無反応になり、
+  起動時ではなく利用者が押した瞬間に初めて分かります。分割の前後で一覧が一致することを確かめます。
+- `logger` は各モジュールで `logging.getLogger(__name__)` として定義します（借りません）。
+- 前方参照の型注釈があるため、全モジュールへ `from __future__ import annotations` を付けます。
+- 利用資格ゲートの検査（`tests/test_game_access.py`）の対象へ、新しいモジュールを追加します。
 
 ## データの扱い
 
