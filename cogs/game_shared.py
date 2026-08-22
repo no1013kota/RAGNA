@@ -1035,10 +1035,12 @@ def item_line(label: str, value: object) -> str:
     """「【項目】結果」の1行を作る。
 
     Embedの ``field`` は列幅が端末やモバイルで大きく変わるため使わず、
-    項目はすべて本文へこの形で並べます。
+    項目はすべて本文へこの形で並べます。書式は ``texts/common.py`` が正で、
+    ``game.battle_embed.item_line`` も同じ定数を使います（層をまたいで
+    importしないよう、関数だけを各層に置いています）。
     """
 
-    return f"【{label}】{value}"
+    return texts_common.ITEM_LINE.format(label=label, value=value)
 
 
 def format_coin(amount: int) -> str:

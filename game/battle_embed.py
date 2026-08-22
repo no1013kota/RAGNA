@@ -245,7 +245,7 @@ def thumbnail_file(familiar_id: str) -> discord.File | None:
 def item_line(label: str, value: object) -> str:
     """「【項目】結果」の1行を作る。"""
 
-    return display_texts.ITEM_LINE.format(label=label, value=value)
+    return common_texts.ITEM_LINE.format(label=label, value=value)
 
 
 def stat_with_delta(current: int, base: int) -> str:
