@@ -123,7 +123,7 @@ MESSAGE_UNAVAILABLE = game_shared.MESSAGE_UNAVAILABLE
 
 fetch_message_state = game_shared.fetch_message_state
 fetch_message = game_shared.fetch_message
-delete_message = game_shared.delete_message
+# delete_message はこのファイルの下で定義している（別名にすると上書きされる）
 
 
 async def delete_channels_by_id(

@@ -1169,8 +1169,6 @@ def build_status_embed(
             + body
         )
 
-    master = load_master_data()
-
     embed = discord.Embed(
         title=display_texts.STATUS_TITLE,
         description="\n\n".join(sections)[:4000],
